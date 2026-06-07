@@ -18,6 +18,7 @@ interface HashtagManagerProps {
     onMoveToToday: (id: string) => void;
     onAddSubtasks: (subtasks: { title: string; duration: number }[], parent: Task) => void;
     onOpenEditModal: (task: Task) => void;
+    isAiEnabled?: boolean;
 }
 
 const COLORS = ['#EF4444', '#F97316', '#F59E0B', '#84CC16', '#22C55E', '#14B8A6', '#06B6D4', '#3B82F6', '#8B5CF6', '#EC4899'];

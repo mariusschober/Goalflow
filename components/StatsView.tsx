@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { Stats, Task, HashtagConfig, TimeFrame, AccountabilityConfig, FlowState, AccountabilityPartner } from '../types';
-import { CheckIcon, ClockIcon, PrinterIcon, MailIcon, ClipboardCheckIcon, InfinityIcon, SparklesIcon, SunIcon, MoonIcon, BrainCircuit, TrophyIcon, FlameIcon, ZapIcon, ActivityIcon, PlusIcon, TrashIcon } from './Icons';
+import { CheckIcon, ClockIcon, PrinterIcon, MailIcon, ClipboardCheckIcon, InfinityIcon, SparklesIcon, SunIcon, MoonIcon, BrainCircuit, TrophyIcon, FlameIcon, ZapIcon, ActivityIcon, PlusIcon, TrashIcon, CopyIcon } from './Icons';
 import { getStartOfWeek, getStartOfMonth } from '../utils/dateUtils';
 
 interface StatsViewProps {
@@ -164,7 +164,7 @@ const StatCard: React.FC<{
                     {subValue && <p className="text-xs font-medium text-gray-500 mt-1">{subValue}</p>}
                 </div>
                 <div className={`p-3 rounded-2xl bg-opacity-10 dark:bg-opacity-20 ${color.replace('text-', 'bg-')}`}>
-                    {React.cloneElement(icon as React.ReactElement, { className: `w-6 h-6 ${color}` })}
+                    {React.cloneElement(icon as React.ReactElement<any>, { className: `w-6 h-6 ${color}` })}
                 </div>
             </div>
             
@@ -293,9 +293,57 @@ const ChronotypeChart: React.FC<{ tasks: Task[] }> = ({ tasks }) => {
 const AccountabilityCard: React.FC<{ 
     config?: AccountabilityConfig; 
     onUpdate?: (updates: Partial<AccountabilityConfig>) => void;
-}> = ({ config, onUpdate }) => {
+    allTasks?: Task[];
+}> = ({ config, onUpdate, allTasks }) => {
     const [newEmail, setNewEmail] = useState('');
     const [newFreq, setNewFreq] = useState<'daily' | 'weekly'>('daily');
+    const [copied, setCopied] = useState(false);
+
+    const handleCopyReport = () => {
+        if (!allTasks) return;
+        const today = new Date().toISOString().split('T')[0];
+        
+        // Filter tasks assigned to today or completed today
+        const todaysTasks = allTasks.filter(t => t.dateAssigned === today || (t.completedAt && new Date(t.completedAt).toISOString().split('T')[0] === today));
+        
+        const completed = todaysTasks.filter(t => t.completed);
+        const pending = todaysTasks.filter(t => !t.completed);
+        
+        let report = `## 🎯 Goalflow Progress Report (${today})\n\n`;
+        report += `Here is a summary of my progress today to keep me aligned and accountable!\n\n`;
+        
+        report += `### ✅ Completed Tasks (${completed.length})\n`;
+        if (completed.length === 0) {
+            report += `- No tasks completed yet.\n`;
+        } else {
+            completed.forEach(t => {
+                const durationText = t.actualDuration ? ` (${t.actualDuration}m spent)` : '';
+                const frogTag = t.isFrog ? ' [🐸 Frog Task]' : '';
+                report += `- **${t.title}**${durationText}${frogTag}\n`;
+            });
+        }
+        
+        report += `\n### ⏳ Active / Upcoming Tasks (${pending.length})\n`;
+        if (pending.length === 0) {
+            report += `- All active tasks for today are completed!\n`;
+        } else {
+            pending.forEach(t => {
+                const estText = t.duration ? ` (Est: ${t.duration}m)` : '';
+                const sessionText = t.session ? ` [Session: ${t.session}]` : '';
+                const frogText = t.isFrog ? ' [🐸 Frog]' : '';
+                report += `- ${t.title}${estText}${sessionText}${frogText}\n`;
+            });
+        }
+        
+        report += `\n*Sent with commitment via Circadian Goalflow* 💫`;
+        
+        navigator.clipboard.writeText(report).then(() => {
+            setCopied(true);
+            setTimeout(() => setCopied(false), 2000);
+        }).catch(err => {
+            console.error('Failed to copy report', err);
+        });
+    };
 
     const handleAddPartner = (e: React.FormEvent) => {
         e.preventDefault();
@@ -355,6 +403,16 @@ const AccountabilityCard: React.FC<{
             <p className="text-xs text-gray-500 dark:text-gray-400 mb-4 leading-relaxed">
                 External accountability increases success rates by 65%.
             </p>
+
+            {config?.enabled && allTasks && (
+                <button
+                    onClick={handleCopyReport}
+                    className="w-full py-2 mb-3 text-xs font-bold text-pink-600 hover:text-white dark:text-pink-400 dark:hover:text-white hover:bg-pink-500 dark:hover:bg-pink-500 border border-pink-200 dark:border-pink-800/60 rounded-xl transition-all flex items-center justify-center gap-1.5 focus:outline-none"
+                >
+                    <CopyIcon className="w-3.5 h-3.5" />
+                    {copied ? 'Copied Report!' : 'Copy Progress Report'}
+                </button>
+            )}
 
             <div className="flex-grow overflow-y-auto custom-scrollbar pr-1 mb-4 space-y-2 max-h-[120px]">
                 {(!config?.partners || config.partners.length === 0) && (
@@ -610,6 +668,7 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats, recentTasks = [], a
             <AccountabilityCard 
                 config={accountabilityConfig} 
                 onUpdate={onUpdateAccountability} 
+                allTasks={allTasks}
             />
 
             {/* Row 3: Breakdown */}

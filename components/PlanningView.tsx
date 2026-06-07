@@ -3,7 +3,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { Task, Session, Goal, HashtagConfig, CircadianState, FlowState, BioMetrics } from '../types';
 import { PencilIcon, RepeatIcon, CompassIcon, ArrowUpCircleIcon, PlusIcon, SunIcon, TrashIcon, AxeIcon, MoonIcon, ZapIcon, CoffeeIcon, FlameIcon, StickyNoteIcon, CalendarIcon, CheckIcon, InfinityIcon, UtensilsIcon, BrainCircuit, ActivityIcon } from './Icons';
 import { formatDuration } from '../utils/timeAndTagParser';
-import { DragDropContext, Droppable, Draggable, DropResult } from 'react-beautiful-dnd';
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import { formatDisplayDate, getTodayYYYYMMDD, getTomorrowYYYYMMDD, toYYYYMMDD } from '../utils/dateUtils';
 import { Modal } from './Modal';
 import { ExcitementPlanner } from './ExcitementPlanner';
@@ -36,6 +36,7 @@ interface PlanningViewProps {
     completeTask: (id: string, duration?: number, flowState?: FlowState, finalDescription?: string) => void;
     isAiEnabled?: boolean;
     createTask?: (task: { title: string; description?: string; dateAssigned: string, goalId?: string, isFrog?: boolean, isRepetitive?: boolean, duration?: number, isBreak?: boolean }) => void;
+    sortTodayTasksCircadian: () => void;
 }
 
 // ... (BreakCreationModal, DurationEstimatorModal, NoteEditorModal, RescheduleDropModal, HorizonTaskCard remain the same as previous)
@@ -659,7 +660,8 @@ const TimelineTaskCard = React.memo<{
 export const PlanningView: React.FC<PlanningViewProps> = ({ 
     todayTasks, upcomingTasks, allTasks, goals, setFrog, openEditModal, deleteTask, reorderTodayTasks, 
     hashtagConfigs, updateTaskPriorities, moveTaskToTopToday, onSelectHashtag, overdueTasks, markWontDo, onAddTask,
-    updateTask, onRescheduleTask, circadianState, addSubtasks, completeTask, isAiEnabled = false, createTask
+    updateTask, onRescheduleTask, circadianState, addSubtasks, completeTask, isAiEnabled = false, createTask,
+    sortTodayTasksCircadian
 }) => {
     const [isPlannerOpen, setIsPlannerOpen] = useState(false);
     const [isEstimatorOpen, setIsEstimatorOpen] = useState(false);
@@ -974,6 +976,59 @@ export const PlanningView: React.FC<PlanningViewProps> = ({
                                     {...provided.droppableProps}
                                     className={`lg:col-span-1 space-y-6 transition-all duration-300 rounded-3xl p-4 -m-4 ${snapshot.isDraggingOver ? 'bg-indigo-50 dark:bg-indigo-900/20 border-2 border-dashed border-indigo-300 dark:border-indigo-700 shadow-xl scale-[1.02]' : ''}`}
                                 >
+                                    {/* Circadian Zone Recommender / Alignment Optimizer */}
+                                    {isCircadianActive && !snapshot.isDraggingOver && (
+                                        <div className="bg-slate-900 text-white rounded-3xl p-6 border border-indigo-500/30 shadow-[0_0_20px_rgba(99,102,241,0.1)] space-y-4 mb-2 animate-fadeIn">
+                                            <div className="flex items-center gap-2 text-indigo-400">
+                                                <ActivityIcon className="w-5 h-5 text-indigo-400" />
+                                                <h4 className="text-xs font-bold uppercase tracking-widest">
+                                                    Circadian Chronon Optimizer
+                                                </h4>
+                                            </div>
+
+                                            <div className="space-y-3">
+                                                <p className="text-xs text-indigo-200/80 leading-relaxed">
+                                                    Wake time: <strong className="text-white">{circadianState.metrics.wakeTime || "07:00"}</strong> • System state: <strong className="text-white font-semibold">{circadianState.mode.toUpperCase()}</strong>
+                                                </p>
+                                                
+                                                {/* Alignment analysis list */}
+                                                <div className="text-[11px] space-y-2 border-t border-white/5 pt-3">
+                                                    {todayTasks.filter(t => t.isFrog).length > 0 && todayTasks.findIndex(t => t.isFrog) === 0 ? (
+                                                        <div className="flex items-start gap-2 text-emerald-400">
+                                                            <span className="text-sm leading-none">✅</span>
+                                                            <span className="leading-relaxed"><strong>Frog Aligned:</strong> Your primary high-willpower task is placed at the start of your peak focus zone!</span>
+                                                        </div>
+                                                    ) : todayTasks.filter(t => t.isFrog).length > 0 ? (
+                                                        <div className="flex items-start gap-2 text-amber-400">
+                                                            <span className="text-sm leading-none">⚠️</span>
+                                                            <span className="leading-relaxed"><strong>Rearrange:</strong> Frog tasks are placed lower in the stack. Move frogs to the top to complete during morning cognitive peaks.</span>
+                                                        </div>
+                                                    ) : (
+                                                        <div className="flex items-start gap-2 text-indigo-300">
+                                                            <span className="text-sm leading-none">💡</span>
+                                                            <span className="leading-relaxed"><strong>Peak Optimization:</strong> No frog task is defined for today. Mark an action as a Frog to highlight it.</span>
+                                                        </div>
+                                                    )}
+
+                                                    {todayTasks.length > 4 && todayTasks.filter(t => t.isBreak).length === 0 && (
+                                                        <div className="flex items-start gap-2 text-amber-400">
+                                                            <span className="text-sm leading-none">⚠️</span>
+                                                            <span className="leading-relaxed"><strong>Fatigue Warning:</strong> You have {todayTasks.length} tasks planned without structured breaks. Fatigue accumulates fast.</span>
+                                                        </div>
+                                                    )}
+                                                </div>
+
+                                                <button
+                                                    onClick={() => sortTodayTasksCircadian()}
+                                                    className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 focus:outline-none"
+                                                >
+                                                    <ZapIcon className="w-4 h-4 text-amber-300" />
+                                                    Auto-Align Chronology (Frogs First)
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+
                                     <h3 className={`text-xl font-bold text-gray-800 dark:text-white pl-2 transition-opacity ${snapshot.isDraggingOver ? 'opacity-0 h-0 overflow-hidden' : ''}`}>On The Horizon</h3>
                                     
                                     {snapshot.isDraggingOver && (

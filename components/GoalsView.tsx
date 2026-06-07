@@ -3,11 +3,11 @@
 
 import React, { useState, useEffect } from 'react';
 import { Goal, Habit, TrueNorthGoal, UserProgress } from '../types';
-import { PlusIcon, PencilIcon, CompassIcon, SparklesIcon, EyeIcon, ShieldIcon, TrashIcon, CheckIcon, RefreshIcon } from './Icons';
+import { PlusIcon, PencilIcon, CompassIcon, SparklesIcon, EyeIcon, ShieldIcon, TrashIcon, CheckIcon, RefreshIcon, ScaleIcon, BrainCircuit, ZapIcon } from './Icons';
 import { Modal } from './Modal';
 import { GoalForm } from './GoalForm';
 import { ExcitementPlanner } from './ExcitementPlanner';
-import { AiHabitSuggestion } from '../services/geminiService';
+import { AiHabitSuggestion, reduceImportanceWithGemini, ImportanceReductionResult } from '../services/geminiService';
 import { getTodayYYYYMMDD } from '../utils/dateUtils';
 import { TrueNorthAssessment } from './TrueNorthAssessment';
 import { ProgressBar } from './ProgressBar';
@@ -21,7 +21,7 @@ interface GoalsViewProps {
   addTask: (task: { title: string; description?: string; dateAssigned: string, goalId?: string, isFrog?: boolean, isRepetitive?: boolean, duration?: number }) => void;
   updateGoalPriorities: (updates: any) => void;
   trueNorthGoals: TrueNorthGoal[];
-  addTrueNorthGoal: (data: Omit<TrueNorthGoal, 'id' | 'createdAt'>) => void;
+  addTrueNorthGoal: (data: Omit<TrueNorthGoal, 'id' | 'createdAt'>) => string;
   updateTrueNorthGoal: (id: string, updates: Partial<TrueNorthGoal>) => void;
   deleteTrueNorthGoal: (id: string) => void;
   amalgam: string;
@@ -29,6 +29,7 @@ interface GoalsViewProps {
   userProgress: UserProgress;
   openAssessmentOnMount?: boolean;
   onAssessmentOpened?: () => void;
+  isAiEnabled?: boolean;
 }
 
 // ... (TrueNorthDetailModal, TrueNorthCard, GoalCard components remain the same as previous - including for full context return. Assuming they are preserved by instruction.)
@@ -38,8 +39,9 @@ const TrueNorthDetailModal: React.FC<{
     isOpen: boolean, 
     onClose: () => void,
     onUpdate: (id: string, data: Partial<TrueNorthGoal>) => void,
-    onDelete: (id: string) => void
-}> = ({ goal, isOpen, onClose, onUpdate, onDelete }) => {
+    onDelete: (id: string) => void,
+    isAiEnabled?: boolean
+}> = ({ goal, isOpen, onClose, onUpdate, onDelete, isAiEnabled = true }) => {
     const [isEditing, setIsEditing] = useState(false);
     const [showSafetyNet, setShowSafetyNet] = useState(false);
     
@@ -47,23 +49,58 @@ const TrueNorthDetailModal: React.FC<{
     const [vision, setVision] = useState('');
     const [sensoryDetails, setSensoryDetails] = useState('');
     const [planB, setPlanB] = useState('');
+    const [anchorHabit, setAnchorHabit] = useState('');
+    const [anchorTask, setAnchorTask] = useState('');
+    const [anchorHabitDuration, setAnchorHabitDuration] = useState(15);
+
+    // AI Advice State
+    const [advice, setAdvice] = useState<ImportanceReductionResult | null>(null);
+    const [isLoadingAdvice, setIsLoadingAdvice] = useState(false);
+    const [adviceError, setAdviceError] = useState<string | null>(null);
 
     useEffect(() => {
         if (goal) {
             setVision(goal.vision);
             setSensoryDetails(goal.sensoryDetails);
             setPlanB(goal.planB);
+            setAnchorHabit(goal.anchorHabit || '');
+            setAnchorTask(goal.anchorTask || '');
+            setAnchorHabitDuration(goal.anchorHabitDuration || 15);
             setIsEditing(false);
             setShowSafetyNet(false);
         }
     }, [goal, isOpen]);
+
+    useEffect(() => {
+        if (!isOpen) {
+            setAdvice(null);
+            setAdviceError(null);
+        }
+    }, [isOpen]);
+
+    const handleGetAdvice = async () => {
+        if (!goal) return;
+        setIsLoadingAdvice(true);
+        setAdviceError(null);
+        try {
+            const res = await reduceImportanceWithGemini(goal.vision, goal.sensoryDetails || '', goal.planB || '', goal.importance);
+            setAdvice(res);
+        } catch (err: any) {
+            setAdviceError(err?.message || "Failed to load advice.");
+        } finally {
+            setIsLoadingAdvice(false);
+        }
+    };
 
     const handleSave = () => {
         if (goal) {
             onUpdate(goal.id, {
                 vision,
                 sensoryDetails,
-                planB
+                planB,
+                anchorHabit: anchorHabit.trim() || undefined,
+                anchorTask: anchorTask.trim() || undefined,
+                anchorHabitDuration: anchorHabit.trim() ? anchorHabitDuration : undefined
             });
             setIsEditing(false);
         }
@@ -156,6 +193,77 @@ const TrueNorthDetailModal: React.FC<{
                         )}
                     </div>
 
+                    {/* Outer Intention Section */}
+                    {isEditing ? (
+                        <div className="p-6 rounded-2xl border border-gray-200 dark:border-slate-700 bg-gray-50/50 dark:bg-slate-800/30 space-y-4">
+                            <h4 className="text-gray-900 dark:text-white font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                                <ZapIcon className="w-4 h-4 text-amber-500" /> Outer Intention Physical Anchors
+                            </h4>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Dynamic Anchor Habit (Recurring)</label>
+                                <input 
+                                    value={anchorHabit}
+                                    onChange={(e) => setAnchorHabit(e.target.value)}
+                                    className="w-full bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl p-3 text-sm text-gray-955 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                    placeholder="Empty (No anchor habit)"
+                                />
+                            </div>
+                            {anchorHabit && (
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Habit Duration: <strong className="text-amber-500">{anchorHabitDuration} mins</strong></label>
+                                    <input 
+                                        type="range"
+                                        min="5"
+                                        max="120"
+                                        step="5"
+                                        value={anchorHabitDuration}
+                                        onChange={(e) => setAnchorHabitDuration(parseInt(e.target.value))}
+                                        className="w-full h-1 bg-gray-200 dark:bg-slate-700 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                                    />
+                                </div>
+                            )}
+                            <div>
+                                <label className="block text-xs font-bold text-gray-400 uppercase mb-2">First Action Step (One-off)</label>
+                                <input 
+                                    value={anchorTask}
+                                    onChange={(e) => setAnchorTask(e.target.value)}
+                                    className="w-full bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl p-3 text-sm text-gray-955 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                                    placeholder="Empty (No action milestone)"
+                                />
+                            </div>
+                        </div>
+                    ) : (
+                        (goal.anchorHabit || goal.anchorTask) && (
+                            <div className="p-6 rounded-2xl border border-amber-200 dark:border-amber-950/30 bg-amber-500/5 dark:bg-amber-950/5 space-y-4">
+                                <h4 className="text-amber-600 dark:text-amber-400 font-bold text-sm uppercase tracking-wider flex items-center gap-2">
+                                    <ZapIcon className="w-4 h-4 text-amber-500" /> Outer Intention Physical Anchors
+                                </h4>
+                                <div className="space-y-3.5">
+                                    {goal.anchorHabit && (
+                                        <div className="flex items-start gap-2.5">
+                                            <span className="text-sm mt-0.5">🔄</span>
+                                            <div>
+                                                <p className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">Daily Habit Anchor</p>
+                                                <p className="text-gray-800 dark:text-slate-200 text-sm font-medium">
+                                                    {goal.anchorHabit} <span className="text-gray-400 font-normal">({goal.anchorHabitDuration || 15} mins/day)</span>
+                                                </p>
+                                            </div>
+                                        </div>
+                                    )}
+                                    {goal.anchorTask && (
+                                        <div className="flex items-start gap-2.5">
+                                            <span className="text-sm mt-0.5">⚡</span>
+                                            <div>
+                                                <p className="text-[10px] font-bold text-gray-400 dark:text-slate-500 uppercase tracking-wider">First Milestone Step</p>
+                                                <p className="text-gray-800 dark:text-slate-200 text-sm font-medium">{goal.anchorTask}</p>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )
+                    )}
+
                     {/* Safety Net Section */}
                     <div className="border-t border-gray-100 dark:border-slate-700 pt-4">
                         {!isEditing && (
@@ -184,6 +292,77 @@ const TrueNorthDetailModal: React.FC<{
                             </div>
                         )}
                     </div>
+
+                    {/* Transurfing Importance Guardrail / Coach Widget */}
+                    {!isEditing && isAiEnabled && (
+                        <div className="border-t border-gray-100 dark:border-slate-700 pt-6 mt-6">
+                            <div className="flex items-center justify-between mb-4">
+                                <div className="flex items-center gap-2 text-rose-500">
+                                    <ScaleIcon className="w-5 h-5 text-rose-500" />
+                                    <h4 className="text-sm font-bold uppercase tracking-wider text-rose-500">
+                                        Excess Potential Guardrail
+                                    </h4>
+                                </div>
+                                <span className={`text-xs px-2.5 py-1 rounded-full font-bold ${goal.importance > 7 ? 'bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-400 border border-red-200/50' : 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950/30 dark:text-emerald-400 border border-emerald-200/50'}`}>
+                                    Importance: {goal.importance}/10
+                                </span>
+                            </div>
+
+                            <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed mb-4">
+                                Law of Importance: High target attachment breeds anxiety and mental blockages. Dissolve obsessiveness into effortless, routing, simple actions.
+                            </p>
+
+                            {!advice && !isLoadingAdvice && (
+                                <button
+                                    onClick={handleGetAdvice}
+                                    className="w-full py-2.5 bg-gradient-to-r from-rose-500 to-amber-500 hover:from-rose-600 hover:to-amber-600 text-white font-bold text-xs rounded-xl transition flex items-center justify-center gap-1.5 focus:outline-none shadow-md shadow-rose-500/10"
+                                >
+                                    <BrainCircuit className="w-4 h-4 text-white" />
+                                    De-escalate Mental Importance (AI Coach)
+                                </button>
+                            )}
+
+                            {isLoadingAdvice && (
+                                <div className="flex flex-col items-center justify-center py-4 bg-gray-50 dark:bg-slate-800/40 rounded-xl border border-dashed border-gray-200 dark:border-slate-700">
+                                    <div className="w-5 h-5 border-2 border-rose-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                    <p className="text-xs text-slate-500 font-medium">Rebalancing pendulums of desire...</p>
+                                </div>
+                            )}
+
+                            {advice && (
+                                <div className="space-y-4 bg-rose-50/40 dark:bg-rose-950/10 border border-rose-100 dark:border-rose-950/30 p-5 rounded-2xl animate-fadeIn">
+                                    <div>
+                                        <h5 className="text-xs font-bold text-rose-600 dark:text-rose-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                            <span>📥</span> Low-Pressure Reframing (Mailbox State)
+                                        </h5>
+                                        <p className="text-xs font-medium text-gray-700 dark:text-gray-300 leading-relaxed">
+                                            "{advice.reframing}"
+                                        </p>
+                                    </div>
+
+                                    <div>
+                                        <h5 className="text-xs font-bold text-amber-600 dark:text-amber-400 uppercase tracking-wider mb-1 flex items-center gap-1">
+                                            <span>⚡</span> 15-Second Attachment Dissolver
+                                        </h5>
+                                        <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+                                            {advice.importanceExercise}
+                                        </p>
+                                    </div>
+
+                                    <div className="border-t border-rose-100/50 dark:border-rose-950/30 pt-3 flex items-start gap-1.5 text-[11px] text-gray-500 dark:text-gray-400 italic">
+                                        <span>💡</span>
+                                        <span>Zeland Counsel: {advice.coachingTip}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {adviceError && (
+                                <p className="text-xs text-red-500 mt-2 font-medium">
+                                    {adviceError}
+                                </p>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         </Modal>
@@ -289,7 +468,7 @@ const GoalCard: React.FC<{ goal: Goal; onEdit: () => void; onDelete: () => void 
 
 export const GoalsView: React.FC<GoalsViewProps> = ({ 
     goals, addGoal, updateGoal, deleteGoal, addHabit, addTask, updateGoalPriorities,
-    trueNorthGoals, addTrueNorthGoal, updateTrueNorthGoal, deleteTrueNorthGoal, amalgam, updateAmalgam, userProgress, openAssessmentOnMount, onAssessmentOpened
+    trueNorthGoals, addTrueNorthGoal, updateTrueNorthGoal, deleteTrueNorthGoal, amalgam, updateAmalgam, userProgress, openAssessmentOnMount, onAssessmentOpened, isAiEnabled
 }) => {
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [isAssessmentOpen, setIsAssessmentOpen] = useState(false);
@@ -359,7 +538,28 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
     };
 
     const handleAssessmentComplete = (data: Omit<TrueNorthGoal, 'id' | 'createdAt'>) => {
-        addTrueNorthGoal(data);
+        const newGoalId = addTrueNorthGoal(data);
+        
+        if (data.anchorHabit) {
+            addHabit({
+                title: data.anchorHabit,
+                frequency: 'daily',
+                isHighPriority: true,
+                goalId: newGoalId,
+                duration: data.anchorHabitDuration || 15
+            });
+        }
+        
+        if (data.anchorTask) {
+            addTask({
+                title: data.anchorTask,
+                dateAssigned: getTodayYYYYMMDD(),
+                isFrog: true,
+                goalId: newGoalId,
+                description: `First physical milestone task for: "${data.vision}"`
+            });
+        }
+
         setIsAssessmentOpen(false);
     };
 
@@ -516,6 +716,7 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
                 isOpen={isAssessmentOpen}
                 onClose={() => setIsAssessmentOpen(false)}
                 onComplete={handleAssessmentComplete}
+                isAiEnabled={isAiEnabled}
             />
             
             {/* Detail Modal for True North */}
@@ -525,10 +726,11 @@ export const GoalsView: React.FC<GoalsViewProps> = ({
                 goal={selectedTrueNorth}
                 onUpdate={updateTrueNorthGoal}
                 onDelete={deleteTrueNorthGoal}
+                isAiEnabled={isAiEnabled}
             />
 
             <Modal isOpen={isModalOpen} onClose={closeModal} title={goalToEdit ? 'Edit Goal' : 'New Tactical Goal'}>
-                <GoalForm onSubmit={handleFormSubmit} initialData={goalToEdit} onClose={closeModal} />
+                <GoalForm onSubmit={handleFormSubmit} initialData={goalToEdit} onClose={closeModal} isAiEnabled={isAiEnabled} />
             </Modal>
 
             {isPlannerOpen && (

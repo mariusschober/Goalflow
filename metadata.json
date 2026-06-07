@@ -3,5 +3,8 @@
   "description": "Todorant is a task management system that prioritizes task completion over organization. It uses cognitive psychology, behavioral design, and willpower management principles to trick your brain into craving productivity.",
   "requestFramePermissions": [
     "geolocation"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
   ]
 }

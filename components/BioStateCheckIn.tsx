@@ -7,6 +7,7 @@ import {
 } from './Icons';
 import { CircadianMode, StimulantType, MentalState } from '../types';
 import { getSunTimes } from '../utils/sunUtils';
+import { resolveUserLocation } from '../utils/locationUtils';
 
 interface BioStateCheckInProps {
     onSubmit: (data: any, score: number, mode: CircadianMode, solar?: { sunrise?: string, sunset?: string, solarNoon?: string }) => void;
@@ -27,6 +28,7 @@ export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onCl
     // Location Fallback
     const [manualLat, setManualLat] = useState("");
     const [manualLng, setManualLng] = useState("");
+    const [locationMeta, setLocationMeta] = useState<{ source?: string; cityName?: string; countryName?: string }>({});
 
     // Calculated
     const [score, setScore] = useState(0);
@@ -36,23 +38,36 @@ export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onCl
 
     // Initial Geo Check
     useEffect(() => {
-        if ('geolocation' in navigator) {
-            navigator.geolocation.getCurrentPosition(
-                (position) => {
-                    const times = getSunTimes(new Date(), position.coords.latitude, position.coords.longitude);
-                    if (times.sunrise && times.sunset) {
-                        setSolarTimes({ 
-                            sunrise: times.sunrise, 
-                            sunset: times.sunset,
-                            solarNoon: times.solarNoon
-                        });
-                    }
-                },
-                () => setGeoError(true)
-            );
-        } else {
-            setGeoError(true);
-        }
+        let isCurrent = true;
+        resolveUserLocation(5000)
+            .then((coords) => {
+                if (!isCurrent) return;
+                setLocationMeta({
+                    source: coords.source,
+                    cityName: coords.cityName,
+                    countryName: coords.countryName
+                });
+                const times = getSunTimes(new Date(), coords.latitude, coords.longitude);
+                if (times.sunrise && times.sunset) {
+                    setSolarTimes({ 
+                        sunrise: times.sunrise, 
+                        sunset: times.sunset,
+                        solarNoon: times.solarNoon
+                    });
+                } else {
+                    setGeoError(true);
+                }
+            })
+            .catch((e) => {
+                console.error("Failed to resolve location automatically:", e);
+                if (isCurrent) {
+                    setGeoError(true);
+                }
+            });
+
+        return () => {
+            isCurrent = false;
+        };
     }, []);
 
     const next = () => setStepIndex(prev => prev + 1);

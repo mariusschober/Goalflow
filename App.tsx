@@ -102,7 +102,8 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
     submitBioCheckIn,
     resetCircadianState,
     userSettings,
-    updateUserSettings
+    updateUserSettings,
+    sortTodayTasksCircadian
   } = useGoalflow(userEmail);
 
   // Circadian Check Logic - Only active if checked in today
@@ -443,6 +444,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
                 completeTask={handleCompleteTask}
                 isAiEnabled={userSettings.enableAi}
                 createTask={addTask}
+                sortTodayTasksCircadian={sortTodayTasksCircadian}
             />
             }
             {currentView === 'habits' && 
@@ -571,6 +573,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
         onClose={() => setIsSettingsOpen(false)} 
         settings={userSettings} 
         onUpdateSettings={updateUserSettings}
+        userEmail={userEmail}
       />
 
       <SearchModal 

@@ -261,34 +261,34 @@ export const ExcitementPlanner: React.FC<ExcitementPlannerProps> = ({ items, mod
               </div>
 
               {/* THE GRID */}
-              <div className="relative w-full max-w-[400px] aspect-square select-none touch-none m-12">
+              <div className="relative w-full max-w-[280px] sm:max-w-[360px] md:max-w-[400px] aspect-square select-none touch-none my-14 mx-auto sm:my-16 md:my-20">
                    
                    {/* Axis Labels - Positioned consistently outside */}
                    {/* Top: Spark High */}
-                   <div className="absolute -top-16 left-0 right-0 text-center flex flex-col justify-end h-14 pointer-events-none">
-                       <span className="text-[10px] font-black uppercase tracking-[0.2em] text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">Electrifying / Vital</span>
-                       <span className="text-[9px] text-slate-500 font-medium mt-1">Does this light a fire in you?</span>
+                   <div className="absolute -top-12 sm:-top-16 left-0 right-0 text-center flex flex-col justify-end h-14 pointer-events-none">
+                       <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.6)]">Electrifying / Vital</span>
+                       <span className="text-[8px] sm:text-[9px] text-slate-500 font-medium mt-1">Does this light a fire in you?</span>
                    </div>
                    
                    {/* Bottom: Spark Low */}
-                   <div className="absolute -bottom-16 left-0 right-0 text-center flex flex-col justify-start h-14 pointer-events-none">
-                       <span className="text-[9px] text-slate-500 font-medium mb-1">Or put it out?</span>
-                       <span className="text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">Numbing / Dead</span>
+                   <div className="absolute -bottom-12 sm:-bottom-16 left-0 right-0 text-center flex flex-col justify-start h-14 pointer-events-none">
+                       <span className="text-[8px] sm:text-[9px] text-slate-500 font-medium mb-1">Or put it out?</span>
+                       <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-slate-600">Numbing / Dead</span>
                    </div>
                    
                    {/* Left: Drag Low */}
-                   <div className="absolute -left-16 top-0 bottom-0 flex flex-col items-end justify-center w-14 pointer-events-none">
-                       <div className="-rotate-90 flex flex-col items-center w-40 origin-center translate-x-8">
-                           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.6)]">Effortless / Flow</span>
-                           <span className="text-[9px] text-slate-500 font-medium mt-1">Muscle memory?</span>
+                   <div className="absolute -left-12 sm:-left-16 top-0 bottom-0 flex flex-col items-end justify-center w-14 pointer-events-none">
+                       <div className="-rotate-90 flex flex-col items-center w-40 origin-center translate-x-12 sm:translate-x-8">
+                           <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-cyan-400 drop-shadow-[0_0_8px_rgba(34,211,238,0.6)]">Effortless / Flow</span>
+                           <span className="text-[8px] sm:text-[9px] text-slate-500 font-medium mt-1">Muscle memory?</span>
                        </div>
                    </div>
                    
                    {/* Right: Drag High */}
-                   <div className="absolute -right-16 top-0 bottom-0 flex flex-col items-start justify-center w-14 pointer-events-none">
-                       <div className="rotate-90 flex flex-col items-center w-40 origin-center -translate-x-8">
-                           <span className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.6)]">Grueling / Heavy</span>
-                           <span className="text-[9px] text-slate-500 font-medium mt-1">Brain burn?</span>
+                   <div className="absolute -right-12 sm:-right-16 top-0 bottom-0 flex flex-col items-start justify-center w-14 pointer-events-none">
+                       <div className="rotate-90 flex flex-col items-center w-40 origin-center -translate-x-12 sm:-translate-x-8">
+                           <span className="text-[9px] sm:text-[10px] font-black uppercase tracking-[0.2em] text-red-500 drop-shadow-[0_0_8px_rgba(239,68,68,0.6)]">Grueling / Heavy</span>
+                           <span className="text-[8px] sm:text-[9px] text-slate-500 font-medium mt-1">Brain burn?</span>
                        </div>
                    </div>
 

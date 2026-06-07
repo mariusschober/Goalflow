@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Task, Goal, FlowState, HashtagConfig } from '../types';
+import { Task, Goal, FlowState, HashtagConfig, CircadianState } from '../types';
 import { useFocusTimer } from '../hooks/useFocusTimer';
 import { useTickingSound } from '../hooks/useTickingSound';
 import { CheckIcon, PlayIcon, PencilIcon, SkipIcon, BrainCircuit, Volume2Icon, VolumeXIcon, RefreshIcon, InfinityIcon, AxeIcon, PlusIcon, TrashIcon, CoffeeIcon } from './Icons';
@@ -28,6 +28,10 @@ interface CurrentViewProps {
   onRescheduleTask: (id: string, date: string) => boolean;
   onAwardXp: (amount: number, message: string, type?: 'reward' | 'milestone') => void;
   isAiEnabled?: boolean;
+  circadianState?: CircadianState;
+  isCircadianActive?: boolean;
+  onOpenBioCheckIn?: () => void;
+  onResetCircadian?: () => void;
 }
 
 const CircularTimer = React.memo<{ 
@@ -111,9 +115,9 @@ const CircularTimer = React.memo<{
     }
 
     return (
-        <div className="relative flex justify-center items-center my-8 group z-10 w-[380px] h-[380px] shrink-0">
+        <div className="relative flex justify-center items-center my-8 group z-10 w-full max-w-[280px] sm:max-w-[340px] md:max-w-[380px] aspect-square flex-shrink-0">
             
-            <svg width={size} height={size} className="transform -rotate-90 relative z-10 overflow-visible">
+            <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-full transform -rotate-90 relative z-10 overflow-visible">
                 <defs>
                     <filter id="glow-shadow" x="-50%" y="-50%" width="200%" height="200%">
                         <feDropShadow dx="0" dy="0" stdDeviation="4" floodColor={activeColor} floodOpacity="0.5" />
@@ -300,7 +304,7 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
     // Auto Next State
     const [autoNextProgress, setAutoNextProgress] = useState(0);
     const [isAutoNext, setIsAutoNext] = useState(false);
-    const autoNextAnimationRef = useRef<number>();
+    const autoNextAnimationRef = useRef<number | undefined>(undefined);
     const autoNextStartTimeRef = useRef<number>(0);
     
     // Countdown for Auto-Start Break

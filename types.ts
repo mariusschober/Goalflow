@@ -84,6 +84,9 @@ export interface TrueNorthGoal {
   sensoryDetails: string; // "Mental Blueprint" scene description
   planB: string; // Safety Net / Fallback
   importance: number; // 1-10 Scale (Attachment/Pressure)
+  anchorHabit?: string; // Phase 4 anchor habit description or title
+  anchorTask?: string; // Phase 4 anchor milestones or first task
+  anchorHabitDuration?: number; // Duration of habit in minutes (default 15)
   createdAt: number;
 }
 

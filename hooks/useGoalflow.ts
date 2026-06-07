@@ -572,11 +572,20 @@ export const useGoalflow = (userEmail: string) => {
   const deleteGoal = useCallback((id: string) => {
     setGoals(prev => prev.filter(g => g.id !== id));
     setTasks(prev => prev.map(t => t.goalId === id ? { ...t, goalId: undefined } : t));
+    setHabits(prev => prev.map(h => h.goalId === id ? { ...h, goalId: undefined } : h));
   }, []);
 
-  const addTrueNorthGoal = useCallback((data: any) => setTrueNorthGoals(prev => [{ ...data, id: `tn-${Date.now()}`, createdAt: Date.now() }, ...prev]), []);
+  const addTrueNorthGoal = useCallback((data: any) => {
+    const id = `tn-${Date.now()}`;
+    setTrueNorthGoals(prev => [{ ...data, id, createdAt: Date.now() }, ...prev]);
+    return id;
+  }, []);
   const updateTrueNorthGoal = useCallback((id: string, updates: any) => setTrueNorthGoals(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g)), []);
-  const deleteTrueNorthGoal = useCallback((id: string) => setTrueNorthGoals(prev => prev.filter(g => g.id !== id)), []);
+  const deleteTrueNorthGoal = useCallback((id: string) => {
+    setTrueNorthGoals(prev => prev.filter(g => g.id !== id));
+    setTasks(prev => prev.map(t => t.goalId === id ? { ...t, goalId: undefined } : t));
+    setHabits(prev => prev.map(h => h.goalId === id ? { ...h, goalId: undefined } : h));
+  }, []);
 
   const updateAmalgam = useCallback((text: string) => setAmalgam(text), []);
   const updateHashtagConfig = useCallback((tag: string, updates: any) => setHashtagConfigs(prev => ({ ...prev, [tag]: { ...prev[tag], ...updates } })), []);
@@ -619,6 +628,33 @@ export const useGoalflow = (userEmail: string) => {
       });
   }, []);
 
+  const sortTodayTasksCircadian = useCallback(() => {
+      setTasks(prev => {
+          const today = getTodayYYYYMMDD();
+          const todaysTasks = prev.filter(t => t && !t.completed && t.dateAssigned === today && !t.wontDo);
+          const otherTasks = prev.filter(t => t && (t.completed || t.wontDo || t.dateAssigned !== today));
+          
+          const sortedToday = [...todaysTasks].sort((a, b) => {
+              // 1. Frogs first
+              if (a.isFrog && !b.isFrog) return -1;
+              if (!a.isFrog && b.isFrog) return 1;
+              
+              // 2. Breaks last
+              if (a.isBreak && !b.isBreak) return 1;
+              if (!a.isBreak && b.isBreak) return -1;
+              
+              // 3. Priority by excitement & ROI
+              const aVal = (a.excitement || 0) * 1.5 + (a.roi || 0);
+              const bVal = (b.excitement || 0) * 1.5 + (b.roi || 0);
+              return bVal - aVal;
+          });
+          
+          const now = Date.now();
+          const reorderedToday = sortedToday.map((t, i) => ({ ...t, createdAt: now + i, session: undefined }));
+          return [...otherTasks, ...reorderedToday];
+      });
+  }, []);
+
   const uncompletedTasks = useMemo(() => tasks.filter(task => task && !task.completed && !task.wontDo), [tasks]);
   const overdueTasks = useMemo(() => {
       const today = getTodayYYYYMMDD();
@@ -640,7 +676,7 @@ export const useGoalflow = (userEmail: string) => {
     gamificationEvent, setGamificationEvent, planningWarning, setPlanningWarning,
     trackPlanVisit, rescheduleTask, awardSessionXp,
     addTask, addSubtasks, updateTask, deleteTask, markWontDo, setFrog, moveTaskToTopToday, completeTask,
-    trackBreakTime, reorderTodayTasks, updateTaskPriorities, reorderGlobalToday,
+    trackBreakTime, reorderTodayTasks, updateTaskPriorities, reorderGlobalToday, sortTodayTasksCircadian,
     addGoal, updateGoal, deleteGoal, addHabit, updateHabit, deleteHabit,
     updateHashtagConfig, updateAccountabilityConfig, updateGoalPriorities,
     addTrueNorthGoal, updateTrueNorthGoal, deleteTrueNorthGoal, updateAmalgam,
