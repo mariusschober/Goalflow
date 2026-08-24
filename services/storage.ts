@@ -1,6 +1,7 @@
 import { openDB, deleteDB, IDBPDatabase } from 'idb';
 
 const DB_NAME = 'GoalflowDB';
+const BACKUP_SCHEMA_VERSION = 2;
 
 // Define store names
 export const STORES = {
@@ -15,7 +16,43 @@ export const STORES = {
   AMALGAM: 'amalgam',
   TRACKING: 'tracking',
   CIRCADIAN: 'circadian',
-  SETTINGS: 'settings'
+  SETTINGS: 'settings',
+  SYNC: 'sync',
+  SNAPSHOTS: 'snapshots'
+};
+
+const DATA_STORES = Object.values(STORES).filter(storeName => storeName !== STORES.SNAPSHOTS && storeName !== STORES.SYNC);
+
+export interface GoalflowBackup {
+  schemaVersion: number;
+  exportedAt: string;
+  checksum: string;
+  collections: Record<string, any>;
+}
+
+const checksumCollections = async (collections: Record<string, any>): Promise<string> => {
+  const bytes = new TextEncoder().encode(JSON.stringify(collections));
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+};
+
+const isRecord = (value: unknown): value is Record<string, any> =>
+  Boolean(value && typeof value === 'object' && !Array.isArray(value));
+
+export const mergeBackupCollection = (current: unknown, incoming: unknown): unknown => {
+  if (Array.isArray(current) && Array.isArray(incoming)) {
+    if (incoming.every(item => isRecord(item) && typeof item.id === 'string')) {
+      const merged = new Map<string, unknown>();
+      current.forEach(item => {
+        if (isRecord(item) && typeof item.id === 'string') merged.set(item.id, item);
+      });
+      incoming.forEach(item => merged.set(String(item.id), item));
+      return Array.from(merged.values());
+    }
+    return incoming;
+  }
+  if (isRecord(current) && isRecord(incoming)) return { ...current, ...incoming };
+  return incoming;
 };
 
 // Global states for Disaster Recovery and Fallbacks
@@ -53,6 +90,11 @@ const readFromFallback = <T>(storeName: string, key: string): T | undefined => {
     console.warn("[Storage] Read from fallback failed:", e);
   }
   return undefined;
+};
+
+const announceLocalChange = (storeName: string, key: string, value: unknown) => {
+  if (storeName === STORES.SYNC || storeName === STORES.SNAPSHOTS) return;
+  window.dispatchEvent(new CustomEvent('goalflow:local-change', { detail: { storeName, key, value } }));
 };
 
 // Open database with dynamic schema auto-migration
@@ -119,21 +161,7 @@ const getDB = async (): Promise<IDBPDatabase | null> => {
     try {
       return await openAndMigrate();
     } catch (err) {
-      console.error("[Storage] Failed to open database normally. Initiating disaster recovery...", err);
-      
-      // 1. Delete and Reinitialize fresh
-      try {
-        console.log("[Storage] Attempting to delete potentially corrupted database:", DB_NAME);
-        await deleteDB(DB_NAME);
-        
-        // Open with clean version 1
-        return await openAndMigrate(1);
-      } catch (recreateErr) {
-        console.error("[Storage] Disaster recovery database recreation failed:", recreateErr);
-      }
-
-      // 2. Fall back to standard LocalStorage + Memory modes in case of severe blockage
-      console.warn("[Storage] Switching to robust LocalStorage + In-Memory fallback storage mode.");
+      console.error("[Storage] IndexedDB is unavailable. Preserving it untouched and using fallback storage.", err);
       useFallbackStorage = true;
       return null;
     }
@@ -203,7 +231,7 @@ export const storageService = {
     }
   },
 
-  set<T>(storeName: string, key: string, value: T): Promise<void> {
+  set<T>(storeName: string, key: string, value: T, source: 'local' | 'cloud' = 'local'): Promise<void> {
     // Proactive background backing up for resilient Disaster Recovery
     try {
       window.localStorage.setItem(`goalflow_dr_${storeName}_${key}`, JSON.stringify(value));
@@ -213,15 +241,17 @@ export const storageService = {
 
     if (useFallbackStorage) {
       writeToFallback(storeName, key, value);
+      if (source === 'local') announceLocalChange(storeName, key, value);
       return Promise.resolve();
     }
 
-    return new Promise((resolve, reject) => {
+    const write = new Promise<void>((resolve, reject) => {
       pendingWrites.push({ storeName, key, value, resolve, reject });
       if (!batchPromise) {
         batchPromise = Promise.resolve().then(flushWrites);
       }
     });
+    return write.then(() => { if (source === 'local') announceLocalChange(storeName, key, value); });
   },
 
   async delete(storeName: string, key: string): Promise<void> {
@@ -298,25 +328,35 @@ export const storageService = {
     return defaultValue;
   },
 
-  async exportBackup(userEmail: string): Promise<Record<string, any>> {
-    const backup: Record<string, any> = {};
+  async migrateUserKey(sourceKey: string, targetKey: string): Promise<void> {
+    if (!sourceKey || sourceKey === targetKey) return;
+    for (const storeName of DATA_STORES) {
+      const targetValue = await this.get(storeName, targetKey);
+      if (targetValue !== undefined) continue;
+      const sourceValue = await this.get(storeName, sourceKey);
+      if (sourceValue !== undefined) await this.set(storeName, targetKey, sourceValue, 'cloud');
+    }
+  },
+
+  async exportBackup(userEmail: string): Promise<GoalflowBackup> {
+    const collections: Record<string, any> = {};
     if (useFallbackStorage) {
-      for (const storeName of Object.values(STORES)) {
+      for (const storeName of DATA_STORES) {
         const val = readFromFallback<any>(storeName, userEmail);
         if (val !== undefined) {
-          backup[storeName] = val;
+          collections[storeName] = val;
         }
       }
-      return backup;
+      return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
     }
     try {
       const db = await getDB();
-      if (!db) return backup;
-      for (const storeName of Object.values(STORES)) {
+      if (!db) return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
+      for (const storeName of DATA_STORES) {
         try {
           const data = await db.get(storeName, userEmail);
           if (data !== undefined) {
-            backup[storeName] = data;
+            collections[storeName] = data;
           }
         } catch (err) {
           console.warn(`Error exporting store ${storeName}`, err);
@@ -325,14 +365,26 @@ export const storageService = {
     } catch (e) {
       console.warn("[Storage] Error getting db connection for export", e);
     }
-    return backup;
+    return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
   },
 
-  async importBackup(userEmail: string, backup: Record<string, any>): Promise<void> {
+  async importBackup(userEmail: string, backup: Record<string, any>, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
+    const envelope = backup as Partial<GoalflowBackup>;
+    if (envelope.schemaVersion && envelope.schemaVersion > BACKUP_SCHEMA_VERSION) throw new Error('This backup was created by a newer Goalflow version.');
+    const collections = envelope.collections || backup;
+    if (!collections || typeof collections !== 'object') throw new Error('The backup does not contain typed collections.');
+    if (envelope.checksum) {
+      const actualChecksum = await checksumCollections(collections);
+      if (actualChecksum !== envelope.checksum) throw new Error('Backup checksum validation failed. The file may be incomplete or modified.');
+    }
+    await this.createLocalSnapshot(userEmail, 'before-restore');
+
     if (useFallbackStorage) {
-      for (const storeName of Object.values(STORES)) {
-        if (backup[storeName] !== undefined) {
-          writeToFallback(storeName, userEmail, backup[storeName]);
+      for (const storeName of DATA_STORES) {
+        if (collections[storeName] !== undefined) {
+          const current = readFromFallback(storeName, userEmail);
+          const value = mode === 'merge' ? mergeBackupCollection(current, collections[storeName]) : collections[storeName];
+          writeToFallback(storeName, userEmail, value);
         }
       }
       return;
@@ -340,13 +392,16 @@ export const storageService = {
     try {
       const db = await getDB();
       if (!db) return;
-      const tx = db.transaction(Object.values(STORES), 'readwrite');
-      for (const storeName of Object.values(STORES)) {
-        if (backup[storeName] !== undefined) {
+      const tx = db.transaction(DATA_STORES, 'readwrite');
+      for (const storeName of DATA_STORES) {
+        if (mode === 'replace') await tx.objectStore(storeName).delete(userEmail);
+        if (collections[storeName] !== undefined) {
           try {
-            await tx.objectStore(storeName).put(backup[storeName], userEmail);
+            const current = mode === 'merge' ? await tx.objectStore(storeName).get(userEmail) : undefined;
+            const value = mode === 'merge' ? mergeBackupCollection(current, collections[storeName]) : collections[storeName];
+            await tx.objectStore(storeName).put(value, userEmail);
             try {
-              window.localStorage.setItem(`goalflow_dr_${storeName}_${userEmail}`, JSON.stringify(backup[storeName]));
+              window.localStorage.setItem(`goalflow_dr_${storeName}_${userEmail}`, JSON.stringify(value));
             } catch (e) {}
           } catch (err) {
             console.warn(`Error importing store ${storeName}`, err);
@@ -356,7 +411,22 @@ export const storageService = {
       await tx.done;
     } catch (e) {
       console.warn("[Storage] Database import transaction failed", e);
+      throw e;
     }
+  },
+
+  async createLocalSnapshot(userEmail: string, reason: string): Promise<void> {
+    if (useFallbackStorage) return;
+    const db = await getDB();
+    if (!db) return;
+    const backup = await this.exportBackup(userEmail);
+    const key = `${userEmail}:${Date.now()}`;
+    await db.put(STORES.SNAPSHOTS, { ...backup, reason }, key);
+    const keys = (await db.getAllKeys(STORES.SNAPSHOTS))
+      .map(String)
+      .filter(candidate => candidate.startsWith(`${userEmail}:`))
+      .sort();
+    for (const oldKey of keys.slice(0, Math.max(0, keys.length - 10))) await db.delete(STORES.SNAPSHOTS, oldKey);
   },
 
   // DIAGNOSTIC AND SELF-REPAIR APIS
@@ -409,13 +479,19 @@ export const storageService = {
     }
   },
 
-  async runSelfRepair(): Promise<{ success: boolean; message: string }> {
+  async runSelfRepair(userEmail: string): Promise<{ success: boolean; message: string }> {
     console.log("[Storage] Initiating manual self-repair of IndexedDB...");
     try {
-      // 1. Scan LocalStorage for any existing backup/proactive recovery buffers
+      const verifiedBackup = await this.exportBackup(userEmail);
+      if (verifiedBackup.checksum !== await checksumCollections(verifiedBackup.collections)) {
+        throw new Error('The pre-repair snapshot could not be verified. No database changes were made.');
+      }
+      await this.createLocalSnapshot(userEmail, 'before-repair');
+
+      // 1. Scan LocalStorage for existing recovery buffers and merge the verified live snapshot.
       const restoreData: Record<string, Record<string, any>> = {};
       
-      for (const storeName of Object.values(STORES)) {
+      for (const storeName of DATA_STORES) {
         restoreData[storeName] = {};
         try {
           for (let i = 0; i < window.localStorage.length; i++) {
@@ -438,7 +514,11 @@ export const storageService = {
         } catch (e) {
           console.warn(`[Storage] Error scanning backups for store ${storeName}`, e);
         }
+        if (verifiedBackup.collections[storeName] !== undefined) restoreData[storeName][userEmail] = verifiedBackup.collections[storeName];
       }
+
+      const verifiedRecordCount = Object.values(restoreData).reduce((total, records) => total + Object.keys(records).length, 0);
+      if (verifiedRecordCount === 0) throw new Error('No verified recovery records were found. The database was left untouched.');
 
       // 2. Tear down the current database promise & connection
       if (dbPromise) {
@@ -458,9 +538,9 @@ export const storageService = {
       dbPromise = Promise.resolve(freshDb);
 
       // 5. Populate fresh DB from the saved buffers
-      const tx = freshDb.transaction(Object.values(STORES), 'readwrite');
+      const tx = freshDb.transaction(DATA_STORES, 'readwrite');
       let restoredKeysCount = 0;
-      for (const storeName of Object.values(STORES)) {
+      for (const storeName of DATA_STORES) {
         const storeObj = restoreData[storeName];
         if (storeObj) {
           for (const [key, value] of Object.entries(storeObj)) {

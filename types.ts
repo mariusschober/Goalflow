@@ -56,6 +56,7 @@ export interface Habit {
   bestStreak: number;
   lastCompletedDate?: string; // YYYY-MM-DD
   isHighPriority: boolean;
+  beforeFrog?: boolean;
   createdAt: number;
   goalId?: string;
   duration?: number; // duration in minutes
@@ -97,6 +98,7 @@ export interface UserProgress {
 }
 
 export interface Task {
+  cloudId?: string;
   id: string;
   title: string;
   description?: string;
@@ -120,6 +122,15 @@ export interface Task {
   strikes?: number; // Overdue counter
   wontDo?: boolean; // Marked as Won't Do/Archived
   rescheduleCount?: number; // Track how many times it was pushed
+  schedulePrecision?: 'day' | 'month';
+  scheduledFor?: string;
+  scheduledTime?: string;
+  plannedOrder?: number;
+  frogFailures?: number;
+  beforeFrog?: boolean;
+  source?: 'manual' | 'habit' | 'telegram' | 'share' | 'ai' | 'migration';
+  parentTaskId?: string;
+  lifecycleStatus?: 'open' | 'completed' | 'broken_down' | 'dropped' | 'archived';
 }
 
 export interface Stats {

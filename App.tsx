@@ -1,16 +1,13 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useGoalflow } from './hooks/useGoalflow';
 import { CurrentView } from './components/CurrentView';
 import { PlanningView } from './components/PlanningView';
-import { StatsView } from './components/StatsView';
-import { GoalsView } from './components/GoalsView';
 import { DoneView } from './components/DoneView';
 import { HabitsView } from './components/HabitsView';
 import { XPDisplay } from './components/XPDisplay';
 import { Celebration } from './components/Celebration';
 import { LevelUpModal } from './components/LevelUpModal';
-import { GamificationView } from './components/GamificationView';
 import { Logo } from './components/Logo';
 import { CalendarIcon, InboxIcon, StatsIcon, PlusIcon, TrophyIcon, SearchIcon, RepeatIcon, SunIcon, MoonIcon, ShieldIcon, SettingsIcon } from './components/Icons';
 import { playCompleteSound, playFrogCompleteSound } from './utils/audioUtils';
@@ -23,23 +20,57 @@ import { DeepWorkPlayer } from './components/DeepWorkPlayer';
 import { GamificationToast } from './components/GamificationToast';
 import { BioStateCheckIn } from './components/BioStateCheckIn';
 import { getTodayYYYYMMDD } from './utils/dateUtils';
-import { SettingsModal } from './components/SettingsModal';
+import { SyncStatus } from './components/SyncStatus';
+import { startCloudSync } from './services/cloudSync';
+import { PwaLifecycle } from './components/PwaLifecycle';
+import { authenticatedFetch, supabase } from './services/authService';
 
 type View = 'current' | 'planning' | 'goals' | 'stats' | 'done' | 'habits' | 'gamification';
 type Theme = 'light' | 'dark';
 
+const GoalsView = React.lazy(() => import('./components/GoalsView').then(module => ({ default: module.GoalsView })));
+const StatsView = React.lazy(() => import('./components/StatsView').then(module => ({ default: module.StatsView })));
+const GamificationView = React.lazy(() => import('./components/GamificationView').then(module => ({ default: module.GamificationView })));
+const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
+const ViewFallback = () => <div className="flex min-h-[40vh] items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" /></div>;
+
+interface StoredDailyPlan {
+  date: string;
+  taskIds: string[];
+}
+
+const readStoredDailyPlan = (key: string): StoredDailyPlan => {
+  const value = localStorage.getItem(key);
+  if (!value) return { date: '', taskIds: [] };
+  try {
+    const parsed = JSON.parse(value) as Partial<StoredDailyPlan>;
+    if (typeof parsed.date === 'string' && Array.isArray(parsed.taskIds)) {
+      return { date: parsed.date, taskIds: parsed.taskIds.map(String) };
+    }
+  } catch {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value, taskIds: [] };
+  }
+  return { date: '', taskIds: [] };
+};
+
+const writeStoredDailyPlan = (key: string, plan: StoredDailyPlan): void =>
+  localStorage.setItem(key, JSON.stringify(plan));
+
 interface AppProps {
   userEmail: string;
+  userKey: string;
+  openAccountSetup?: boolean;
   onLogout: () => void;
 }
 
-const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
+const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false, onLogout }) => {
+  const [currentLocalDay, setCurrentLocalDay] = useState(getTodayYYYYMMDD());
   const [currentView, setCurrentView] = useState<View>('current');
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [taskToEdit, setTaskToEdit] = useState<Task | null>(null);
-  const [taskDefaults, setTaskDefaults] = useState<{ session?: Session, dateAssigned?: string }>({});
+  const [taskDefaults, setTaskDefaults] = useState<{ session?: Session, dateAssigned?: string, title?: string }>({});
   
   const [showCelebration, setShowCelebration] = useState(false);
   const [theme, setTheme] = useState<Theme>('light');
@@ -47,6 +78,12 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
   const [isBioCheckInOpen, setIsBioCheckInOpen] = useState(false);
   
   const [openAssessmentOnGoalsMount, setOpenAssessmentOnGoalsMount] = useState(false);
+  const dailyPlanStorageKey = `goalflow-daily-plan:${userKey}`;
+  const legacyDailyPlanStorageKey = `goalflow-daily-plan:${userEmail}`;
+  const [confirmedPlan, setConfirmedPlan] = useState<StoredDailyPlan>(() => {
+      const current = readStoredDailyPlan(dailyPlanStorageKey);
+      return current.date ? current : readStoredDailyPlan(legacyDailyPlanStorageKey);
+  });
   
   const {
     isLoading, // Added loading state from hook
@@ -74,6 +111,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
     moveTaskToTopToday,
     completeTask,
     reorderTodayTasks,
+    reorderGlobalToday,
     updateTaskPriorities,
     addGoal,
     updateGoal,
@@ -104,7 +142,60 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
     userSettings,
     updateUserSettings,
     sortTodayTasksCircadian
-  } = useGoalflow(userEmail);
+  } = useGoalflow(userKey, userEmail);
+  const todayPlanTaskIds = useMemo(() => todayTasks.map(task => task.id), [todayTasks]);
+
+  useEffect(() => {
+      const timer = window.setInterval(() => {
+          const localDay = getTodayYYYYMMDD();
+          setCurrentLocalDay(previous => previous === localDay ? previous : localDay);
+      }, 60_000);
+      return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => startCloudSync(userKey), [userKey]);
+
+  useEffect(() => {
+      if (openAccountSetup) setIsSettingsOpen(true);
+  }, [openAccountSetup]);
+
+  useEffect(() => {
+      const legacyPlan = localStorage.getItem(legacyDailyPlanStorageKey);
+      if (!localStorage.getItem(dailyPlanStorageKey) && legacyPlan) localStorage.setItem(dailyPlanStorageKey, legacyPlan);
+  }, [dailyPlanStorageKey, legacyDailyPlanStorageKey]);
+
+  useEffect(() => {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('view') === 'current') setCurrentView('current');
+      if (params.get('capture') === 'task' || params.get('capture') === 'share') {
+          const title = [params.get('title'), params.get('text'), params.get('url')].filter(Boolean).join(' ').trim();
+          setTaskToEdit(null);
+          setTaskDefaults({ title, dateAssigned: getTodayYYYYMMDD() });
+          setIsTaskModalOpen(true);
+          ['capture', 'title', 'text', 'url'].forEach(key => params.delete(key));
+          const remainingQuery = params.toString();
+          window.history.replaceState({}, document.title, `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}`);
+      }
+  }, []);
+
+  useEffect(() => {
+      setConfirmedPlan(readStoredDailyPlan(dailyPlanStorageKey));
+  }, [dailyPlanStorageKey]);
+
+  useEffect(() => {
+      if (!supabase || !navigator.onLine) return;
+      let active = true;
+      void authenticatedFetch(`/api/v1/current?date=${currentLocalDay}`).then(async response => {
+          if (!active || !response.ok) return;
+          const body = await response.json() as { gate?: string };
+          if (body.gate === 'ready' || body.gate === 'empty') {
+              const plan = { date: currentLocalDay, taskIds: todayPlanTaskIds };
+              writeStoredDailyPlan(dailyPlanStorageKey, plan);
+              setConfirmedPlan(plan);
+          }
+      }).catch(() => undefined);
+      return () => { active = false; };
+  }, [currentLocalDay, dailyPlanStorageKey, todayPlanTaskIds]);
 
   // Circadian Check Logic - Only active if checked in today
   const isCircadianActive = circadianState.lastCheckIn === getTodayYYYYMMDD();
@@ -149,8 +240,39 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
   };
 
   const hasOverdue = overdueTasks.length > 0;
+  const requiresMonthlyPlanning = overdueTasks.some(task => task.schedulePrecision === 'month');
+  const dailyPlanConfirmed = !hasOverdue && (todayPlanTaskIds.length === 0 || (
+      confirmedPlan.date === currentLocalDay
+      && todayPlanTaskIds.every(taskId => confirmedPlan.taskIds.includes(taskId))
+  ));
 
-  const openAddTaskModal = useCallback((overrides?: { session?: Session, dateAssigned?: string }) => {
+  const confirmDailyPlan = async () => {
+      if (hasOverdue) {
+          setCurrentView('planning');
+          return;
+      }
+      const plan = { date: currentLocalDay, taskIds: todayPlanTaskIds };
+      writeStoredDailyPlan(dailyPlanStorageKey, plan);
+      setConfirmedPlan(plan);
+      setCurrentView('current');
+      if (supabase && navigator.onLine) {
+          try {
+              const response = await authenticatedFetch('/api/v1/planning/daily/confirm', {
+                  method: 'POST', headers: { 'content-type': 'application/json' },
+                  body: JSON.stringify({ localDate: currentLocalDay, taskIds: todayTasks.map(task => task.cloudId || task.id) })
+              });
+              if (response.status === 409) {
+                  localStorage.removeItem(dailyPlanStorageKey);
+                  setConfirmedPlan({ date: '', taskIds: [] });
+                  setCurrentView('planning');
+              }
+          } catch {
+              // The local plan remains usable offline and is confirmed to the server on the next review.
+          }
+      }
+  };
+
+  const openAddTaskModal = useCallback((overrides?: { session?: Session, dateAssigned?: string, title?: string }) => {
     setTaskToEdit(null);
     setTaskDefaults(overrides || {});
     setIsTaskModalOpen(true);
@@ -226,7 +348,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
     setTaskDefaults({});
   };
 
-  const handleFormSubmit = (data: { title: string; description: string; dateAssigned: string, goalId?: string, isFrog: boolean, isRepetitive: boolean }) => {
+  const handleFormSubmit = (data: { title: string; description: string; dateAssigned: string, goalId?: string, isFrog: boolean, isRepetitive: boolean, schedulePrecision: 'day' | 'month', scheduledFor: string }) => {
     const finalData = { ...data, session: taskToEdit ? undefined : taskDefaults.session };
 
     if (taskToEdit) {
@@ -292,6 +414,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
 
   return (
     <div className="bg-gray-50 dark:bg-slate-900 min-h-screen font-sans flex flex-col transition-colors duration-200 print:bg-white relative">
+      <PwaLifecycle />
       {isBioCheckInOpen && (
           <BioStateCheckIn 
             onSubmit={(data, score, mode, solar) => {
@@ -366,11 +489,16 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
             <button onClick={() => setIsSearchOpen(true)} className="p-2 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-700 rounded-lg" title="Search (/)">
                 <SearchIcon className="w-5 h-5" />
             </button>
-            <NavItem view="current" label="Focus" hotkey="f" icon={<CalendarIcon className="w-5 h-5" />} disabled={hasOverdue} />
+            <SyncStatus userKey={userKey} />
+            <NavItem view="current" label="Current" hotkey="f" icon={<CalendarIcon className="w-5 h-5" />} disabled={hasOverdue} />
             <NavItem view="planning" label="Plan" hotkey="p" icon={<InboxIcon className="w-5 h-5" />} />
             <NavItem view="habits" label="Habits" hotkey="h" icon={<RepeatIcon className="w-5 h-5" />} disabled={hasOverdue} />
             <NavItem view="goals" label="Goals" hotkey="g" icon={<TrophyIcon className="w-5 h-5" />} disabled={hasOverdue} />
-            <NavItem view="stats" label="Stats" hotkey="s" icon={<StatsIcon className="w-5 h-5" />} active={currentView === 'stats' || currentView === 'done'} disabled={hasOverdue} />
+            <NavItem view="stats" label="Insights" hotkey="s" icon={<StatsIcon className="w-5 h-5" />} active={currentView === 'stats' || currentView === 'done'} disabled={hasOverdue} />
+            <button type="button" onClick={() => setIsSettingsOpen(true)} className="p-2 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-700 rounded-lg sm:hidden" aria-label="Open settings">
+                <SettingsIcon className="w-5 h-5" />
+            </button>
+            <button type="button" onClick={onLogout} className="px-2 py-2 text-xs font-bold text-red-600 hover:bg-red-50 rounded-lg sm:hidden" aria-label="Sign out">Sign out</button>
             <div className="border-l border-gray-200 dark:border-slate-600 h-6 mx-2 hidden md:block"></div>
             <div className="hidden md:block">
                 <XPDisplay 
@@ -381,10 +509,10 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
             
             {/* User Menu Dropdown */}
             <div className="relative group ml-2 hidden sm:block">
-                <button className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-bold cursor-pointer shadow-sm focus:outline-none">
+                <button className="w-8 h-8 rounded-full bg-indigo-600 flex items-center justify-center text-white font-bold cursor-pointer shadow-sm focus:outline-none" aria-label="Open account menu">
                     {userEmail.charAt(0).toUpperCase()}
                 </button>
-                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-800 rounded-md shadow-lg py-1 z-50 opacity-0 group-hover:opacity-100 transition-opacity invisible group-hover:visible border border-gray-100 dark:border-slate-600">
+                <div className="absolute right-0 mt-2 w-48 bg-white dark:bg-slate-800 rounded-md shadow-lg py-1 z-50 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity invisible group-hover:visible group-focus-within:visible border border-gray-100 dark:border-slate-600">
                     <div className="px-4 py-2 text-sm text-gray-700 dark:text-gray-200 truncate font-medium">{userEmail}</div>
                     <div className="border-t border-gray-100 dark:border-slate-700"></div>
                     <button 
@@ -406,6 +534,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
       </header>
       
       {currentView === 'gamification' ? (
+          <React.Suspense fallback={<ViewFallback />}>
           <GamificationView 
               userProgress={userProgress}
               trueNorthGoals={trueNorthGoals}
@@ -418,9 +547,10 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
               onAddHabitClick={handleNavigateToHabits}
               onAddGoalClick={handleNavigateToAddGoal}
           />
+          </React.Suspense>
       ) : (
         <main className="container mx-auto p-4 flex-grow relative print:p-0 print:w-full">
-            {currentView === 'planning' && 
+            {currentView === 'planning' && <>
             <PlanningView
                 todayTasks={todayTasks}
                 upcomingTasks={upcomingTasks}
@@ -446,7 +576,20 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
                 createTask={addTask}
                 sortTodayTasksCircadian={sortTodayTasksCircadian}
             />
-            }
+            <div className="sticky bottom-4 z-10 mx-auto mt-6 max-w-xl rounded-xl border border-gray-200 bg-white/95 p-4 shadow-lg backdrop-blur dark:border-slate-700 dark:bg-slate-800/95">
+                <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
+                    {requiresMonthlyPlanning ? 'Assign every current-month task to an exact day before starting today.' : hasOverdue ? 'Resolve every overdue task before starting today.' : `Confirm today's order, then leave planning and focus on one task.`}
+                </p>
+                <button
+                    type="button"
+                    onClick={confirmDailyPlan}
+                    disabled={hasOverdue}
+                    className="w-full rounded-xl bg-indigo-600 px-5 py-3 font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-gray-300 dark:disabled:bg-slate-600"
+                >
+                    {requiresMonthlyPlanning ? 'Schedule monthly tasks first' : hasOverdue ? 'Resolve overdue tasks first' : 'Start focus'}
+                </button>
+            </div>
+            </>}
             {currentView === 'habits' && 
                 <HabitsView 
                     habits={habits} 
@@ -465,6 +608,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
                 />
             }
             {currentView === 'goals' && 
+                <React.Suspense fallback={<ViewFallback />}>
                 <GoalsView 
                     goals={goals} 
                     addGoal={addGoal} 
@@ -484,8 +628,10 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
                     onAssessmentOpened={handleAssessmentOpened}
                     isAiEnabled={userSettings.enableAi}
                 />
+                </React.Suspense>
             }
             {currentView === 'stats' && 
+                <React.Suspense fallback={<ViewFallback />}>
                 <StatsView 
                     stats={stats} 
                     recentTasks={recentCompletedTasks} 
@@ -497,38 +643,39 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
                     onViewDone={() => setCurrentView('done')}
                     onSelectHashtag={setSelectedHashtag}
                 />
+                </React.Suspense>
             }
-            {currentView === 'current' &&
+            {currentView === 'current' && dailyPlanConfirmed &&
             <CurrentView
                 currentTask={currentTask}
                 goals={goals}
                 allTasks={tasks}
                 completeTask={handleCompleteTask}
                 addSubtasks={addSubtasks}
-                addTask={addTask}
                 onFrogEaten={() => {}} 
-                deprioritizeTask={(id) => { 
-                    const task = todayTasks.find(t => t.id === id);
-                    if(task) {
-                        const session = task.session || 'unassigned';
-                        const tasksInSession = todayTasks.filter(t => (t.session || 'unassigned') === session);
-                        const currentIndex = tasksInSession.findIndex(t => t.id === id);
-                        if (currentIndex !== -1) {
-                            reorderTodayTasks(id, session, currentIndex, session, tasksInSession.length - 1);
-                        }
-                    }
-                }}
+                deprioritizeTask={(id) => reorderGlobalToday(id, Math.max(0, todayTasks.length - 1))}
                 openEditModal={openEditTaskModal}
                 updateTask={updateTask}
                 hashtagConfigs={hashtagConfigs}
                 onSelectHashtag={setSelectedHashtag}
                 amalgam={amalgam}
                 trackBreakTime={trackBreakTime}
-                onRescheduleTask={rescheduleTask}
                 onAwardXp={awardSessionXp}
                 isAiEnabled={userSettings.enableAi}
             />
             }
+            {currentView === 'current' && !dailyPlanConfirmed && (
+                <section className="mx-auto mt-16 max-w-xl rounded-xl border border-gray-200 bg-white p-8 text-center shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <p className="mb-2 text-xs font-bold uppercase tracking-widest text-indigo-600 dark:text-indigo-300">{requiresMonthlyPlanning ? 'Monthly planning' : 'Daily planning'}</p>
+                    <h1 className="mb-3 text-3xl font-bold text-gray-900 dark:text-white">Plan once. Then focus.</h1>
+                    <p className="mb-6 text-gray-600 dark:text-gray-300">
+                        {requiresMonthlyPlanning ? 'Assign each current-month task to an exact day. Then review today and return to one-task focus.' : `Review overdue work and today's order. Once confirmed, Goalflow will show one task at a time.`}
+                    </p>
+                    <button type="button" onClick={() => handleSetView('planning')} className="rounded-xl bg-indigo-600 px-6 py-3 font-bold text-white transition hover:bg-indigo-700">
+                        Open today's plan
+                    </button>
+                </section>
+            )}
 
             <button 
                 onClick={() => openAddTaskModal()}
@@ -549,6 +696,7 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
             existingTasks={tasks}
             initialOverrides={taskDefaults}
             isAiEnabled={userSettings.enableAi}
+            onBreakdown={addSubtasks}
           />
       </Modal>
       
@@ -568,13 +716,18 @@ const App: React.FC<AppProps> = ({ userEmail, onLogout }) => {
           />
       )}
 
-      <SettingsModal 
-        isOpen={isSettingsOpen} 
-        onClose={() => setIsSettingsOpen(false)} 
-        settings={userSettings} 
-        onUpdateSettings={updateUserSettings}
-        userEmail={userEmail}
-      />
+      {isSettingsOpen && (
+        <React.Suspense fallback={null}>
+          <SettingsModal
+            isOpen={isSettingsOpen}
+            onClose={() => setIsSettingsOpen(false)}
+            settings={userSettings}
+            onUpdateSettings={updateUserSettings}
+            userEmail={userEmail}
+            storageKey={userKey}
+          />
+        </React.Suspense>
+      )}
 
       <SearchModal 
         isOpen={isSearchOpen} 

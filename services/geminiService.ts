@@ -1,3 +1,12 @@
+import { supabase } from './authService';
+
+const authenticatedFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
+  const session = supabase ? (await supabase.auth.getSession()).data.session : null;
+  const headers = new Headers(init.headers);
+  if (session?.access_token) headers.set('authorization', `Bearer ${session.access_token}`);
+  return fetch(input, { ...init, headers });
+};
+
 export interface AiSubtask {
   title: string;
   estimatedDuration: number;
@@ -25,7 +34,7 @@ const validationCache = new Map<string, ValidationResult>();
 
 export const breakdownTaskWithGemini = async (taskTitle: string): Promise<AiSubtask[]> => {
   try {
-    const response = await fetch("/api/gemini/breakdown", {
+    const response = await authenticatedFetch("/api/gemini/breakdown", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskTitle }),
@@ -48,7 +57,7 @@ export const breakdownTaskWithGemini = async (taskTitle: string): Promise<AiSubt
 
 export const getGoalHabitSuggestions = async (goalTitle: string, goalDescription: string): Promise<AiHabitSuggestion[]> => {
   try {
-    const response = await fetch("/api/gemini/suggestions", {
+    const response = await authenticatedFetch("/api/gemini/suggestions", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ goalTitle, goalDescription }),
@@ -72,7 +81,7 @@ export const getVisualizationPrompt = async (taskTitle: string): Promise<string>
   }
 
   try {
-    const response = await fetch("/api/gemini/visualization", {
+    const response = await authenticatedFetch("/api/gemini/visualization", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskTitle }),
@@ -110,7 +119,7 @@ export const validateTaskActionability = async (taskTitle: string): Promise<Vali
   }
 
   try {
-    const response = await fetch("/api/gemini/validate", {
+    const response = await authenticatedFetch("/api/gemini/validate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ taskTitle }),
@@ -131,7 +140,7 @@ export const validateTaskActionability = async (taskTitle: string): Promise<Vali
 
 export const reduceImportanceWithGemini = async (vision: string, sensoryDetails: string, planB: string, importance: number): Promise<ImportanceReductionResult> => {
   try {
-    const response = await fetch("/api/gemini/reduce-importance", {
+    const response = await authenticatedFetch("/api/gemini/reduce-importance", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vision, sensoryDetails, planB, importance }),
@@ -155,7 +164,7 @@ export const reduceImportanceWithGemini = async (vision: string, sensoryDetails:
 
 export const getOuterIntentionRecommendations = async (vision: string, sensoryDetails: string): Promise<OuterIntentionResult> => {
   try {
-    const response = await fetch("/api/gemini/outer-intention", {
+    const response = await authenticatedFetch("/api/gemini/outer-intention", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ vision, sensoryDetails }),

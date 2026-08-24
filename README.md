@@ -1,20 +1,57 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Goalflow
 
-# Run and deploy your AI Studio app
+Goalflow is an offline-capable productivity PWA built around one rule: plan deliberately, then execute exactly one task. Every task belongs to an exact local day or a future month. There are no projects and no unscheduled tasks.
 
-This contains everything you need to run your app locally.
+The application retains the complete Goalflow experience: Current, daily and monthly planning, habits, frogs, timer and Pomodoro flow, focus music, circadian planning, goals, True North, Reality Navigator, Transurfing, insights, subtle gamification, and provider-neutral AI workflows.
 
-View your app in AI Studio: https://ai.studio/apps/2425eb5c-9448-4e52-aa41-4379e304d662
+## Architecture
 
-## Run Locally
+- React, Vite, Tailwind, IndexedDB, and a service worker provide the installable offline PWA.
+- Express serves the PWA, authenticated APIs, Telegram webhook, synchronization, and AI proxy.
+- Supabase provides Telegram OIDC and email auth, Postgres with Row-Level Security, and private encrypted backup storage.
+- One pure scheduling domain in `src/domain/scheduling.ts` defines schedule validation, planning gates, queue precedence, skip, frog promotion, breakdown, and habit generation.
+- Telegram uses the same task and queue rules for text, voice, and command capture.
 
-**Prerequisites:**  Node.js
+## Local development
 
+Requirements: Node.js 22 and npm.
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+```bash
+npm install
+cp .env.example .env
+npm run dev
+```
+
+Use `VITE_ENABLE_LOCAL_DEMO=true` and `ENABLE_LOCAL_DEMO=true` only for local interface work. Production rejects the demo token.
+
+## Local-only Mac use
+
+Double-click `Start Goalflow.command`, or run:
+
+```bash
+npm run local
+```
+
+The local configuration binds Goalflow to `127.0.0.1`, bypasses cloud authentication, and stores application data in this browser profile's IndexedDB. Supabase, Railway, Telegram, SMTP, CAPTCHA, and hosting are not required. Use Settings > Sync & Backup to create password-protected `.goalflow-backup` files.
+
+AI is optional. To enable it, add `DEEPSEEK_API_KEY=...` to the ignored `.env.local` file and restart Goalflow. The key stays in the local server process and is never placed in the browser bundle.
+
+## Quality checks
+
+```bash
+npm run lint
+npm test
+npm run build
+npm start
+```
+
+The production server listens on `PORT` and exposes `/api/v1/health`. Client and server bundles are separated under `dist/client` and `dist/server`; production source maps are disabled.
+
+## Production setup
+
+Follow [DEPLOYMENT.md](./DEPLOYMENT.md). Apply the Supabase migrations in order, provision Telegram OIDC and the bot webhook, set every Railway secret, bootstrap the owner through the verified `mris@tuta.io` magic link, and enroll TOTP before using owner APIs.
+
+This release is a free invite beta. Entitlements grant the complete feature set and no payment code is present.
+
+For a detailed record of the production rewrite, verification status, and remaining
+launch work, see [docs/IMPLEMENTATION_HANDOFF.md](./docs/IMPLEMENTATION_HANDOFF.md).

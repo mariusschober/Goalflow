@@ -1,124 +1,55 @@
-
-import React, { useState, FormEvent } from 'react';
+import React, { useCallback, useState, type FormEvent } from 'react';
 import { Logo } from './Logo';
-import * as authService from '../services/authService';
+import { beginTelegramSignup, requestOwnerMagicLink } from '../services/authService';
+import { Turnstile } from './Turnstile';
 
-interface AuthProps {
-  onLoginSuccess: (email: string) => void;
-}
-
-export const Auth: React.FC<AuthProps> = ({ onLoginSuccess }) => {
+export const Auth: React.FC<{ activationError?: string | null }> = ({ activationError }) => {
+  const [inviteCode, setInviteCode] = useState('');
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [step, setStep] = useState<'email' | 'code'>('email');
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState(activationError || '');
+  const [pending, setPending] = useState(false);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const onCaptchaToken = useCallback((token: string) => setCaptchaToken(token), []);
 
-  const handleEmailSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsLoading(true);
-    try {
-      authService.loginWithEmail(email);
-      // For the demo, we don't send a real code, just proceed to the next step.
-      setStep('code');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'An unknown error occurred.');
-    } finally {
-      setIsLoading(false);
-    }
+  const telegram = async (event: FormEvent) => {
+    event.preventDefault(); setPending(true); setMessage('');
+    try { await beginTelegramSignup(inviteCode.trim(), captchaToken); }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'Telegram signup failed.'); setPending(false); }
   };
-
-  const handleCodeSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setIsLoading(true);
-    const success = authService.verifyCode(email, code);
-    if (success) {
-      onLoginSuccess(email);
-    } else {
-      setError('Invalid code. Please use the demo code.');
-      setIsLoading(false);
-    }
+  const emailLink = async (event: FormEvent) => {
+    event.preventDefault(); setPending(true); setMessage('');
+    try { await requestOwnerMagicLink(email.trim()); setMessage('Check your email for the secure sign-in link.'); }
+    catch (error) { setMessage(error instanceof Error ? error.message : 'The sign-in link could not be sent.'); }
+    finally { setPending(false); }
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col justify-center items-center p-4">
-        <div className="max-w-md w-full mx-auto">
-            <div className="text-center mb-8">
-                <Logo />
-            </div>
-            <div className="bg-white p-8 rounded-xl shadow-lg space-y-6">
-                {step === 'email' ? (
-                <form onSubmit={handleEmailSubmit} className="space-y-6">
-                    <div>
-                        <h2 className="text-2xl font-bold text-center text-gray-800">Welcome to Goalflow</h2>
-                        <p className="text-center text-gray-500 mt-2">Enter your email to login or create an account.</p>
-                    </div>
-                    <div>
-                        <label htmlFor="email" className="sr-only">Email address</label>
-                        <input
-                            id="email"
-                            name="email"
-                            type="email"
-                            autoComplete="email"
-                            required
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            className="appearance-none rounded-lg relative block w-full px-3 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-lg"
-                            placeholder="Email address"
-                        />
-                    </div>
-                    {error && <p className="text-red-500 text-sm">{error}</p>}
-                    <div>
-                        <button
-                            type="submit"
-                            disabled={isLoading}
-                            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-lg font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400"
-                        >
-                            {isLoading ? 'Sending...' : 'Continue'}
-                        </button>
-                    </div>
-                </form>
-                ) : (
-                <form onSubmit={handleCodeSubmit} className="space-y-6">
-                     <div>
-                        <h2 className="text-2xl font-bold text-center text-gray-800">Enter Demo Code</h2>
-                        <p className="text-center text-gray-500 mt-2">Use the demo code <strong className="text-gray-800">123456</strong> to sign in as <span className="font-medium text-gray-900">{email}</span>.</p>
-                    </div>
-                    <div>
-                        <label htmlFor="code" className="sr-only">Login Code</label>
-                        <input
-                            id="code"
-                            name="code"
-                            type="text"
-                            maxLength={6}
-                            required
-                            value={code}
-                            onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))}
-                            className="appearance-none rounded-lg relative block w-full px-3 py-3 border border-gray-300 placeholder-gray-500 text-gray-900 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent text-lg text-center tracking-[0.5em]"
-                            placeholder="______"
-                        />
-                    </div>
-                    {error && <p className="text-red-500 text-sm">{error}</p>}
-                     <div>
-                        <button
-                            type="submit"
-                            disabled={isLoading}
-                            className="group relative w-full flex justify-center py-3 px-4 border border-transparent text-lg font-medium rounded-lg text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 disabled:bg-indigo-400"
-                        >
-                            {isLoading ? 'Verifying...' : 'Login'}
-                        </button>
-                    </div>
-                    <div className="text-center">
-                        <button type="button" onClick={() => { setStep('email'); setError(null); setCode('')}} className="font-medium text-indigo-600 hover:text-indigo-500">
-                           Use a different email
-                        </button>
-                    </div>
-                </form>
-                )}
-            </div>
-        </div>
-    </div>
+    <main className="min-h-screen bg-[#F7F8FA] flex items-center justify-center p-4 font-sans">
+      <section className="w-full max-w-md bg-white border border-[#E4E7EC] rounded-xl p-8 shadow-sm">
+        <div className="mb-8"><Logo /></div>
+        <h1 className="text-3xl font-semibold text-[#111827]">Plan, then focus on one task.</h1>
+        <p className="mt-2 text-[#667085]">Goalflow is currently an invite-only beta.</p>
+
+        <form onSubmit={telegram} className="mt-8 space-y-3">
+          <label className="block text-sm font-medium text-[#344054]" htmlFor="invite">Beta invite code</label>
+          <input id="invite" required value={inviteCode} onChange={(event) => setInviteCode(event.target.value)}
+            className="w-full rounded-lg border border-[#D0D5DD] px-3 py-3 focus:outline-none focus:ring-2 focus:ring-indigo-500" />
+          <Turnstile onToken={onCaptchaToken} />
+          <button disabled={pending} className="w-full rounded-lg bg-[#4F46E5] px-4 py-3 font-medium text-white disabled:opacity-50">
+            Continue with Telegram
+          </button>
+        </form>
+
+        <details className="mt-6 border-t border-[#E4E7EC] pt-5">
+          <summary className="cursor-pointer text-sm font-medium text-[#475467]">Email recovery sign-in</summary>
+          <form onSubmit={emailLink} className="mt-4 space-y-3">
+            <input type="email" autoComplete="email" required value={email} onChange={(event) => setEmail(event.target.value)}
+              placeholder="mris@tuta.io" className="w-full rounded-lg border border-[#D0D5DD] px-3 py-3" />
+            <button disabled={pending} className="w-full rounded-lg border border-[#D0D5DD] px-4 py-3 font-medium text-[#344054]">Email a magic link</button>
+          </form>
+        </details>
+        {message && <p className="mt-4 text-sm text-[#475467]" role="status">{message}</p>}
+      </section>
+    </main>
   );
 };

@@ -92,57 +92,11 @@ export const getTimezoneApproximation = (): LocationCoords => {
 };
 
 /**
- * Attempts IP Geolocation fallback via public free APIs.
- */
-export const getIpLocation = async (): Promise<LocationCoords> => {
-  // We try freeipapi.com first as it's modern, supports CORS, has HTTPS, and is free of keys
-  try {
-    const response = await fetch('https://freeipapi.com/api/json', { signal: AbortSignal.timeout(3000) });
-    if (response.ok) {
-      const data = await response.json();
-      if (typeof data.latitude === 'number' && typeof data.longitude === 'number') {
-        return {
-          latitude: data.latitude,
-          longitude: data.longitude,
-          source: 'ip',
-          cityName: data.cityName || undefined,
-          countryName: data.countryName || undefined
-        };
-      }
-    }
-  } catch (e) {
-    console.warn('IP location fetch (freeipapi) failed or timed out:', e);
-  }
-
-  // Double fallback: ipapi.co
-  try {
-    const response = await fetch('https://ipapi.co/json/', { signal: AbortSignal.timeout(3000) });
-    if (response.ok) {
-      const data = await response.json();
-      if (typeof data.latitude === 'number' && typeof data.longitude === 'number') {
-        return {
-          latitude: data.latitude,
-          longitude: data.longitude,
-          source: 'ip',
-          cityName: data.city || undefined,
-          countryName: data.country_name || undefined
-        };
-      }
-    }
-  } catch (e) {
-    console.warn('IP location fetch (ipapi.co) failed or timed out:', e);
-  }
-
-  throw new Error('All IP geolocation endpoints failed');
-};
-
-/**
  * Consolidated location trigger:
  * 1. Tries HTML5 Geolocation with a strict 4-second timeout to avoid UI freeze/indefinite pending state.
- * 2. If blocked or timed out, falls back to IP-based search.
- * 3. If IP fails, falls back to the user's last cached location.
- * 4. Failing that, approximates location using timezone maps.
- * 5. Returns absolute static default coordinates if everything has failed.
+ * 2. If blocked or timed out, uses the last cached location.
+ * 3. Failing that, approximates location locally from the device timezone.
+ * No IP-geolocation service is contacted.
  */
 export const resolveUserLocation = async (timeoutMs: number = 4000): Promise<LocationCoords> => {
   return new Promise<LocationCoords>((resolve) => {
@@ -164,17 +118,7 @@ export const resolveUserLocation = async (timeoutMs: number = 4000): Promise<Loc
       if (resolved) return;
       resolved = true;
       
-      // Try IP based lookup
-      try {
-        const ipCoords = await getIpLocation();
-        cacheLocation(ipCoords);
-        resolve(ipCoords);
-        return;
-      } catch (err) {
-        console.warn('IP lookup also failed. Trying cache or timezone approximation.', err);
-      }
-
-      // Try reading local cached position
+      // Try reading a position previously approved by the user.
       const cached = getCachedLocation();
       if (cached) {
         resolve({ ...cached, source: 'cache' });

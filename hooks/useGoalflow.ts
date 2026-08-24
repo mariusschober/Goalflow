@@ -5,16 +5,20 @@ import { Task, Stats, Session, Goal, UserProgress, FlowState, HashtagConfig, Hab
 import { getTodayYYYYMMDD } from '../utils/dateUtils';
 import { parseTitleForExtras } from '../utils/timeAndTagParser';
 import { storageService, STORES } from '../services/storage';
+import { assertSchedule, compareQueueCandidates } from '../src/domain/scheduling';
+import { v5 as uuidv5 } from 'uuid';
+
+const HABIT_TASK_NAMESPACE = 'c3e4bcbb-9f56-4ff5-a3a8-9f7478284169';
 
 export interface UserSettings {
     enableAi: boolean;
+    penaltyMode?: 'off' | 'gentle' | 'classic';
 }
 
 const XP_PER_TASK = 10;
 const XP_PER_FROG_MULTIPLIER = 3; 
 const XP_GOAL_SYNERGY_BONUS = 15; 
 const XP_HABIT_SETUP_BONUS = 50;
-const XP_HABIT_PENALTY = 50;
 const BASE_XP_FOR_LEVEL = 100;
 
 interface DailyTracking {
@@ -25,9 +29,9 @@ interface DailyTracking {
 
 const calculateXpToNextLevel = (level: number) => level * BASE_XP_FOR_LEVEL;
 
-export const useGoalflow = (userEmail: string) => {
+export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   // Keys for DB retrieval (User scoped)
-  const USER_KEY = userEmail; 
+  const USER_KEY = userKey;
 
   // --- State Definitions ---
   const [isLoading, setIsLoading] = useState(true);
@@ -47,7 +51,8 @@ export const useGoalflow = (userEmail: string) => {
   const [circadianState, setCircadianState] = useState<CircadianState>({ 
       lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 }
   });
-  const [userSettings, setUserSettings] = useState<UserSettings>({ enableAi: false });
+  const [userSettings, setUserSettings] = useState<UserSettings>({ enableAi: false, penaltyMode: 'off' });
+  const cloudAppliedStores = useRef(new Set<string>());
 
   // Transient State
   const [justLeveledUp, setJustLeveledUp] = useState(false);
@@ -58,24 +63,42 @@ export const useGoalflow = (userEmail: string) => {
   useEffect(() => {
     const loadData = async () => {
       try {
+        await storageService.migrateUserKey(legacyUserKey, USER_KEY);
         const [
             lTasks, lGoals, lHabits, lTrueNorth, lAmalgam, lHashtags, lAllStats, lProgress, lDaily, lAccountability, lCircadian, lSettings
         ] = await Promise.all([
-            storageService.migrateFromLocalStorage<Task[]>(STORES.TASKS, USER_KEY, `goalflow_tasks_${userEmail}`, []),
-            storageService.migrateFromLocalStorage<Goal[]>(STORES.GOALS, USER_KEY, `goalflow_goals_${userEmail}`, []),
-            storageService.migrateFromLocalStorage<Habit[]>(STORES.HABITS, USER_KEY, `goalflow_habits_${userEmail}`, []),
-            storageService.migrateFromLocalStorage<TrueNorthGoal[]>(STORES.TRUE_NORTH, USER_KEY, `goalflow_truenorth_${userEmail}`, []),
-            storageService.migrateFromLocalStorage<string>(STORES.AMALGAM, USER_KEY, `goalflow_amalgam_${userEmail}`, "My world takes care of me"),
-            storageService.migrateFromLocalStorage<any>(STORES.HASHTAGS, USER_KEY, `goalflow_hashtags_${userEmail}`, {}),
-            storageService.migrateFromLocalStorage<{ [date: string]: Stats }>(STORES.STATS, USER_KEY, `goalflow_stats_${userEmail}`, {}),
-            storageService.migrateFromLocalStorage<UserProgress>(STORES.PROGRESS, USER_KEY, `goalflow_progress_${userEmail}`, { level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL }),
-            storageService.migrateFromLocalStorage<DailyTracking>(STORES.TRACKING, USER_KEY, `goalflow_tracking_${userEmail}`, { date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 }),
-            storageService.migrateFromLocalStorage<AccountabilityConfig>(STORES.ACCOUNTABILITY, USER_KEY, `goalflow_accountability_${userEmail}`, { enabled: false, partners: [], scope: 'all', targetHashtags: [] }),
-            storageService.migrateFromLocalStorage<CircadianState>(STORES.CIRCADIAN, USER_KEY, `goalflow_circadian_${userEmail}`, { lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 } }),
-            storageService.migrateFromLocalStorage<UserSettings>(STORES.SETTINGS, USER_KEY, `goalflow_settings_${userEmail}`, { enableAi: false }),
+            storageService.migrateFromLocalStorage<Task[]>(STORES.TASKS, USER_KEY, `goalflow_tasks_${legacyUserKey}`, []),
+            storageService.migrateFromLocalStorage<Goal[]>(STORES.GOALS, USER_KEY, `goalflow_goals_${legacyUserKey}`, []),
+            storageService.migrateFromLocalStorage<Habit[]>(STORES.HABITS, USER_KEY, `goalflow_habits_${legacyUserKey}`, []),
+            storageService.migrateFromLocalStorage<TrueNorthGoal[]>(STORES.TRUE_NORTH, USER_KEY, `goalflow_truenorth_${legacyUserKey}`, []),
+            storageService.migrateFromLocalStorage<string>(STORES.AMALGAM, USER_KEY, `goalflow_amalgam_${legacyUserKey}`, "My world takes care of me"),
+            storageService.migrateFromLocalStorage<any>(STORES.HASHTAGS, USER_KEY, `goalflow_hashtags_${legacyUserKey}`, {}),
+            storageService.migrateFromLocalStorage<{ [date: string]: Stats }>(STORES.STATS, USER_KEY, `goalflow_stats_${legacyUserKey}`, {}),
+            storageService.migrateFromLocalStorage<UserProgress>(STORES.PROGRESS, USER_KEY, `goalflow_progress_${legacyUserKey}`, { level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL }),
+            storageService.migrateFromLocalStorage<DailyTracking>(STORES.TRACKING, USER_KEY, `goalflow_tracking_${legacyUserKey}`, { date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 }),
+            storageService.migrateFromLocalStorage<AccountabilityConfig>(STORES.ACCOUNTABILITY, USER_KEY, `goalflow_accountability_${legacyUserKey}`, { enabled: false, partners: [], scope: 'all', targetHashtags: [] }),
+            storageService.migrateFromLocalStorage<CircadianState>(STORES.CIRCADIAN, USER_KEY, `goalflow_circadian_${legacyUserKey}`, { lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 } }),
+            storageService.migrateFromLocalStorage<UserSettings>(STORES.SETTINGS, USER_KEY, `goalflow_settings_${legacyUserKey}`, { enableAi: false, penaltyMode: 'off' }),
         ]);
 
-        setTasks(lTasks);
+        await storageService.createLocalSnapshot(USER_KEY, 'before-migration');
+        const normalizedTasks = lTasks.map(task => {
+            const migratedLoopNote = task.isRepetitive
+                ? `${task.description ? `${task.description}\n\n` : ''}This was migrated from a Loop task. Complete it consciously, then create the next occurrence or convert it to a habit.`
+                : task.description;
+            return {
+                ...task,
+                description: migratedLoopNote,
+                isRepetitive: false,
+                schedulePrecision: task.schedulePrecision || 'day',
+                scheduledFor: task.scheduledFor || task.dateAssigned,
+                plannedOrder: task.plannedOrder ?? task.createdAt,
+                frogFailures: task.frogFailures ?? task.rescheduleCount ?? 0,
+                source: task.source || 'migration',
+                lifecycleStatus: task.lifecycleStatus || (task.completed ? 'completed' : task.wontDo ? 'dropped' : 'open')
+            } as Task;
+        });
+        setTasks(normalizedTasks);
         setGoals(lGoals);
         setHabits(lHabits);
         setTrueNorthGoals(lTrueNorth);
@@ -109,7 +132,7 @@ export const useGoalflow = (userEmail: string) => {
     };
 
     loadData();
-  }, [userEmail]);
+  }, [userKey, legacyUserKey]);
 
   // --- Persistence Wrappers ---
   // Using useRef to prevent effect loops when saving, saving is triggered by state changes.
@@ -123,22 +146,52 @@ export const useGoalflow = (userEmail: string) => {
       }
   }, [USER_KEY]);
 
+  const persistLocalState = useCallback((store: string, data: any) => {
+      if (cloudAppliedStores.current.delete(store)) return;
+      void persist(store, data);
+  }, [persist]);
+
   // Watchers
-  useEffect(() => { if (!isLoading) persist(STORES.TASKS, tasks); }, [tasks, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.GOALS, goals); }, [goals, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.HABITS, habits); }, [habits, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.TRUE_NORTH, trueNorthGoals); }, [trueNorthGoals, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.AMALGAM, amalgam); }, [amalgam, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.HASHTAGS, hashtagConfigs); }, [hashtagConfigs, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.PROGRESS, userProgress); }, [userProgress, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.TRACKING, dailyTracking); }, [dailyTracking, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.ACCOUNTABILITY, accountabilityConfig); }, [accountabilityConfig, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.CIRCADIAN, circadianState); }, [circadianState, isLoading, persist]);
-  useEffect(() => { if (!isLoading) persist(STORES.SETTINGS, userSettings); }, [userSettings, isLoading, persist]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.TASKS, tasks); }, [tasks, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.GOALS, goals); }, [goals, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.HABITS, habits); }, [habits, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.TRUE_NORTH, trueNorthGoals); }, [trueNorthGoals, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.AMALGAM, amalgam); }, [amalgam, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.HASHTAGS, hashtagConfigs); }, [hashtagConfigs, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.PROGRESS, userProgress); }, [userProgress, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.TRACKING, dailyTracking); }, [dailyTracking, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.ACCOUNTABILITY, accountabilityConfig); }, [accountabilityConfig, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.CIRCADIAN, circadianState); }, [circadianState, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.SETTINGS, userSettings); }, [userSettings, isLoading, persistLocalState]);
+
+  useEffect(() => {
+      const applyCloudChange = (event: Event) => {
+          const { storeName, value } = (event as CustomEvent<{ storeName: string; value: any }>).detail;
+          cloudAppliedStores.current.add(storeName);
+          if (storeName === STORES.TASKS) setTasks(value || []);
+          else if (storeName === STORES.GOALS) setGoals(value || []);
+          else if (storeName === STORES.HABITS) setHabits(value || []);
+          else if (storeName === STORES.TRUE_NORTH) setTrueNorthGoals(value || []);
+          else if (storeName === STORES.AMALGAM) setAmalgam(value || 'My world takes care of me');
+          else if (storeName === STORES.HASHTAGS) setHashtagConfigs(value || {});
+          else if (storeName === STORES.PROGRESS) setUserProgress(value);
+          else if (storeName === STORES.TRACKING) setDailyTracking(value);
+          else if (storeName === STORES.ACCOUNTABILITY) setAccountabilityConfig(value);
+          else if (storeName === STORES.CIRCADIAN) setCircadianState(value);
+          else if (storeName === STORES.SETTINGS) setUserSettings(value);
+          else if (storeName === STORES.STATS) {
+              setAllStats(value || {});
+              setStats(value?.[getTodayYYYYMMDD()] || { tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
+          }
+      };
+      window.addEventListener('goalflow:cloud-change', applyCloudChange);
+      return () => window.removeEventListener('goalflow:cloud-change', applyCloudChange);
+  }, []);
 
   // Special Stats Persistence
   useEffect(() => {
       if (!isLoading) {
+          if (cloudAppliedStores.current.delete(STORES.STATS)) return;
           const today = getTodayYYYYMMDD();
           const updatedAllStats = { ...allStats, [today]: stats };
           // Only update if changed deeply? No, React state update is enough signal.
@@ -189,7 +242,6 @@ export const useGoalflow = (userEmail: string) => {
       
       let newTasks: Task[] = [];
       let habitsUpdated = false;
-      let xpPenalty = 0;
 
       let updatedHabits = habits.map(h => ({ ...h }));
       
@@ -203,7 +255,8 @@ export const useGoalflow = (userEmail: string) => {
           if (!habit) return; 
 
           if (habit.lastCompletedDate) {
-              const lastDate = new Date(habit.lastCompletedDate);
+              const [lastYear, lastMonth, lastDay] = habit.lastCompletedDate.split('-').map(Number);
+              const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
               const diffTime = Math.abs(todayDate.getTime() - lastDate.getTime());
               const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
               
@@ -211,7 +264,6 @@ export const useGoalflow = (userEmail: string) => {
                   if (habit.streak > 0) {
                       updatedHabits[index].streak = 0;
                       habitsUpdated = true;
-                      xpPenalty += XP_HABIT_PENALTY;
                   }
               }
           }
@@ -224,7 +276,7 @@ export const useGoalflow = (userEmail: string) => {
               const exists = tasks.some(t => t && t.habitId === habit.id && t.dateAssigned === today);
               if (!exists) {
                    const newTask: Task = {
-                      id: `habit-${habit.id}-${today}`,
+                      id: uuidv5(`${habit.id}:${today}`, HABIT_TASK_NAMESPACE),
                       title: habit.title,
                       description: "", 
                       dateAssigned: today,
@@ -236,7 +288,14 @@ export const useGoalflow = (userEmail: string) => {
                       hashtags: ['habit', ...(habit.hashtags || [])],
                       duration: habit.duration || 25,
                       strikes: 0,
-                      rescheduleCount: 0
+                      rescheduleCount: 0,
+                      schedulePrecision: 'day',
+                      scheduledFor: today,
+                      plannedOrder: 0,
+                      frogFailures: 0,
+                      beforeFrog: !!habit.beforeFrog,
+                      source: 'habit',
+                      lifecycleStatus: 'open'
                   };
                   newTasks.push(newTask);
               }
@@ -248,12 +307,6 @@ export const useGoalflow = (userEmail: string) => {
       }
       if (habitsUpdated) {
           setHabits(updatedHabits);
-      }
-      if (xpPenalty > 0) {
-          setUserProgress(prev => ({
-              ...prev,
-              xp: Math.max(0, prev.xp - XP_HABIT_PENALTY)
-          }));
       }
   }, [habits, tasks, isLoading]); 
 
@@ -274,11 +327,13 @@ export const useGoalflow = (userEmail: string) => {
   };
 
   const applyPenalty = (amount: number, message: string) => {
+      if ((userSettings.penaltyMode || 'off') === 'off') return;
+      const appliedAmount = userSettings.penaltyMode === 'gentle' ? Math.ceil(amount / 2) : amount;
       setUserProgress(prev => ({
           ...prev,
-          xp: Math.max(0, prev.xp - amount)
+          xp: Math.max(0, prev.xp - appliedAmount)
       }));
-      setGamificationEvent({ type: 'penalty', amount, message });
+      setGamificationEvent({ type: 'penalty', amount: appliedAmount, message });
   };
 
   const awardSessionXp = useCallback((amount: number, message: string, type: 'reward' | 'milestone' = 'reward') => {
@@ -306,50 +361,48 @@ export const useGoalflow = (userEmail: string) => {
 
       const today = getTodayYYYYMMDD();
       const wasToday = task.dateAssigned === today;
-      const isPushingToFuture = newDate > today;
+      const isPushingToFuture = newDate > task.dateAssigned;
 
-      let penaltyApplied = false;
-      let penaltyMsg = "";
-      let penaltyAmt = 0;
       let becomeFrog = false;
 
       setDailyTracking(prev => {
           let newPostponeCount = prev.dailyPostponeCount;
           if (wasToday && isPushingToFuture) {
               newPostponeCount++;
-              if (newPostponeCount > 2) {
-                  penaltyApplied = true;
-                  penaltyAmt += 20;
-                  penaltyMsg = "Only plan what you can act on.";
-              }
           }
           return { ...prev, dailyPostponeCount: newPostponeCount };
       });
 
-      const newRescheduleCount = (task.rescheduleCount || 0) + 1;
-      if (newRescheduleCount === 2) {
-          penaltyApplied = true;
-          penaltyAmt += 10;
-          penaltyMsg = penaltyMsg ? `${penaltyMsg} Also, re-planning costs energy.` : "Re-planning costs energy.";
-      }
-      if (newRescheduleCount >= 3) {
+      const newRescheduleCount = (task.rescheduleCount || 0) + (isPushingToFuture ? 1 : 0);
+      if (newRescheduleCount >= 2) {
           becomeFrog = true;
           setGamificationEvent({ type: 'penalty', amount: 0, message: "Task hardened into a Frog." });
       }
 
-      if (penaltyApplied) applyPenalty(penaltyAmt, penaltyMsg);
-
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, dateAssigned: newDate, session: undefined, rescheduleCount: newRescheduleCount, isFrog: becomeFrog ? true : t.isFrog } : t));
+      setTasks(prev => prev.map(t => t.id === taskId ? {
+          ...t,
+          dateAssigned: newDate,
+          schedulePrecision: 'day',
+          scheduledFor: newDate,
+          plannedOrder: 0,
+          session: undefined,
+          rescheduleCount: newRescheduleCount,
+          frogFailures: newRescheduleCount,
+          isFrog: becomeFrog ? true : t.isFrog
+      } : t));
       return true;
   };
 
   const addTask = useCallback((taskData: any) => {
-    const { title, description, dateAssigned, goalId, isFrog, isRepetitive, session, duration, isBreak } = taskData;
+    const { title, description, dateAssigned, goalId, isFrog, isRepetitive, session, duration, isBreak, schedulePrecision = 'day', scheduledFor } = taskData;
     if (!title.trim()) return;
 
     const { cleanTitle, duration: pDur, hashtags, dateAssigned: pDate, session: pSess, isFrog: pFrog, isQuickie } = parseTitleForExtras(title);
     
     const finalDate = pDate || dateAssigned || getTodayYYYYMMDD();
+    const finalSchedulePrecision: 'day' | 'month' = pDate ? 'day' : schedulePrecision;
+    const finalScheduledFor = pDate || scheduledFor || (finalSchedulePrecision === 'month' ? finalDate.slice(0, 7) : finalDate);
+    assertSchedule(finalSchedulePrecision, finalScheduledFor, getTodayYYYYMMDD());
     const finalIsFrog = !!isFrog || !!pFrog;
     const finalDuration = duration || pDur || 25; 
 
@@ -373,7 +426,7 @@ export const useGoalflow = (userEmail: string) => {
         }
 
         const newTask: Task = {
-          id: `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          id: crypto.randomUUID(),
           title: cleanTitle,
           description: description,
           dateAssigned: finalDate,
@@ -388,7 +441,14 @@ export const useGoalflow = (userEmail: string) => {
           goalId: finalGoalId,
           session: session || pSess || (finalIsFrog ? 'morning' : undefined),
           strikes: 0,
-          rescheduleCount: 0
+          rescheduleCount: 0,
+          schedulePrecision: finalSchedulePrecision,
+          scheduledFor: finalScheduledFor,
+          plannedOrder: 0,
+          frogFailures: 0,
+          beforeFrog: false,
+          source: 'manual',
+          lifecycleStatus: 'open'
         };
         return [...prev, newTask];
     });
@@ -409,11 +469,16 @@ export const useGoalflow = (userEmail: string) => {
   }, [hashtagConfigs]);
 
   const addSubtasks = useCallback((subtasks: any[], parentTask: Task) => {
-     const newTasks: Task[] = subtasks.map((st, index) => ({
-         id: `${Date.now()}-${index}-${Math.random().toString(36).substr(2, 9)}`,
+     const newTasks: Task[] = subtasks.map((st, index) => {
+       const schedulePrecision = st.schedulePrecision || parentTask.schedulePrecision || 'day';
+       const scheduledFor = st.scheduledFor || (schedulePrecision === 'month'
+           ? (parentTask.scheduledFor || parentTask.dateAssigned).slice(0, 7)
+           : st.dateAssigned || parentTask.scheduledFor || parentTask.dateAssigned);
+       return {
+         id: crypto.randomUUID(),
          title: st.title,
          duration: st.duration,
-         dateAssigned: parentTask.dateAssigned,
+         dateAssigned: schedulePrecision === 'month' ? `${scheduledFor}-01` : scheduledFor,
          session: parentTask.session,
          goalId: parentTask.goalId,
          hashtags: parentTask.hashtags,
@@ -422,13 +487,41 @@ export const useGoalflow = (userEmail: string) => {
          isQuickie: st.duration <= 2,
          createdAt: Date.now() + index,
          strikes: 0,
-         rescheduleCount: 0
-     }));
-     setTasks(prev => [...prev.filter(t => t.id !== parentTask.id), ...newTasks]);
+         rescheduleCount: 0,
+         schedulePrecision,
+         scheduledFor,
+         plannedOrder: (parentTask.plannedOrder || 0) + index,
+         frogFailures: 0,
+         beforeFrog: false,
+         source: 'manual',
+         parentTaskId: parentTask.id,
+         lifecycleStatus: 'open'
+       } as Task;
+     });
+     setTasks(prev => [
+         ...prev.map(t => t.id === parentTask.id ? {
+             ...t,
+             completed: true,
+             completedAt: Date.now(),
+             lifecycleStatus: 'broken_down' as const
+         } : t),
+         ...newTasks
+     ]);
   }, []);
 
   const updateTask = useCallback((taskId: string, updates: any) => {
     let parsedUpdates = { ...updates };
+    const existingTask = tasks.find(task => task.id === taskId);
+    if (existingTask?.isFrog) {
+        parsedUpdates.isFrog = true;
+        const nextScheduledFor = parsedUpdates.scheduledFor || parsedUpdates.dateAssigned || existingTask.scheduledFor || existingTask.dateAssigned;
+        const currentScheduledFor = existingTask.scheduledFor || existingTask.dateAssigned;
+        if (nextScheduledFor > currentScheduledFor) {
+            parsedUpdates.schedulePrecision = existingTask.schedulePrecision;
+            parsedUpdates.scheduledFor = existingTask.scheduledFor;
+            parsedUpdates.dateAssigned = existingTask.dateAssigned;
+        }
+    }
     if (updates.title) {
         const { cleanTitle, duration, hashtags } = parseTitleForExtras(updates.title);
         parsedUpdates.title = cleanTitle;
@@ -446,14 +539,13 @@ export const useGoalflow = (userEmail: string) => {
         }
     }
     setTasks(prev => prev.map(t => t.id === taskId ? { ...t, ...parsedUpdates } : t));
-  }, [hashtagConfigs]);
+  }, [hashtagConfigs, tasks]);
 
   const deleteTask = useCallback((taskId: string) => {
     setTasks(prev => {
         const task = prev.find(t => t.id === taskId);
         if (task && task.habitId) {
              setHabits(h => h.map(hb => hb.id === task.habitId ? { ...hb, streak: 0 } : hb));
-             setUserProgress(p => ({ ...p, xp: Math.max(0, p.xp - XP_HABIT_PENALTY) }));
         }
         return prev.filter(t => t.id !== taskId);
     });
@@ -464,7 +556,7 @@ export const useGoalflow = (userEmail: string) => {
   }, []);
 
   const setFrog = useCallback((taskId: string) => {
-    setTasks(prev => prev.map(t => t.id === taskId ? {...t, isFrog: !t.isFrog } : t));
+    setTasks(prev => prev.map(t => t.id === taskId ? {...t, isFrog: true } : t));
   }, []);
   
   const moveTaskToTopToday = useCallback((taskId: string) => {
@@ -533,7 +625,7 @@ export const useGoalflow = (userEmail: string) => {
       const { cleanTitle, duration, hashtags } = parseTitleForExtras(habitData.title);
       const newHabit: Habit = {
           ...habitData, title: cleanTitle, duration: habitData.duration || duration || 25, hashtags: [...(habitData.hashtags || []), ...hashtags],
-          id: `habit-${Date.now()}`, streak: 0, bestStreak: 0, createdAt: Date.now()
+          id: crypto.randomUUID(), streak: 0, bestStreak: 0, createdAt: Date.now(), beforeFrog: !!habitData.beforeFrog
       };
       setHabits(prev => [...prev, newHabit]);
       setUserProgress(prev => {
@@ -563,7 +655,7 @@ export const useGoalflow = (userEmail: string) => {
   }, []);
 
   const addGoal = useCallback((data: any) => {
-    const id = `${Date.now()}`;
+    const id = crypto.randomUUID();
     setGoals(prev => [...prev, { ...data, id, completedTasks: 0, createdAt: Date.now() }]);
     return id;
   }, []);
@@ -576,7 +668,7 @@ export const useGoalflow = (userEmail: string) => {
   }, []);
 
   const addTrueNorthGoal = useCallback((data: any) => {
-    const id = `tn-${Date.now()}`;
+    const id = crypto.randomUUID();
     setTrueNorthGoals(prev => [{ ...data, id, createdAt: Date.now() }, ...prev]);
     return id;
   }, []);
@@ -602,13 +694,12 @@ export const useGoalflow = (userEmail: string) => {
       setTasks(prev => {
           const today = getTodayYYYYMMDD();
           const todaysTasks = prev.filter(t => t && t.dateAssigned === today && !t.completed && !t.wontDo);
-          todaysTasks.sort((a, b) => a.createdAt - b.createdAt);
+          todaysTasks.sort(compareQueueCandidates);
           const taskIndex = todaysTasks.findIndex(t => t.id === taskId);
           if (taskIndex === -1) return prev;
           const [movedTask] = todaysTasks.splice(taskIndex, 1);
           todaysTasks.splice(newIndex, 0, movedTask);
-          const now = Date.now();
-          const reorderedUpdates = todaysTasks.map((t, i) => ({ ...t, createdAt: now + i, session: undefined }));
+          const reorderedUpdates = todaysTasks.map((t, i) => ({ ...t, plannedOrder: i, session: undefined }));
           const otherTasks = prev.filter(t => !t || t.dateAssigned !== today || t.completed || t.wontDo);
           return [...otherTasks, ...reorderedUpdates];
       });
@@ -623,8 +714,7 @@ export const useGoalflow = (userEmail: string) => {
           const otherTasks = prev.filter(t => t && (t.completed || t.wontDo || t.dateAssigned !== today));
           const updatedToday = todaysTasks.map(t => updates[t.id] ? { ...t, ...updates[t.id] } : t);
           updatedToday.sort((a, b) => ((b.excitement||0)*1.5 + (b.roi||0)) - ((a.excitement||0)*1.5 + (a.roi||0)));
-          const now = Date.now();
-          return [...otherTasks, ...updatedToday.map((t, i) => ({ ...t, createdAt: now + i }))];
+          return [...otherTasks, ...updatedToday.map((t, i) => ({ ...t, plannedOrder: i }))];
       });
   }, []);
 
@@ -635,9 +725,10 @@ export const useGoalflow = (userEmail: string) => {
           const otherTasks = prev.filter(t => t && (t.completed || t.wontDo || t.dateAssigned !== today));
           
           const sortedToday = [...todaysTasks].sort((a, b) => {
-              // 1. Frogs first
-              if (a.isFrog && !b.isFrog) return -1;
-              if (!a.isFrog && b.isFrog) return 1;
+              // Circadian recommendations may reorder only inside the allowed precedence group.
+              const aGroup = a.beforeFrog && a.habitId ? 0 : a.isFrog ? 1 : 2;
+              const bGroup = b.beforeFrog && b.habitId ? 0 : b.isFrog ? 1 : 2;
+              if (aGroup !== bGroup) return compareQueueCandidates(a, b);
               
               // 2. Breaks last
               if (a.isBreak && !b.isBreak) return 1;
@@ -649,8 +740,7 @@ export const useGoalflow = (userEmail: string) => {
               return bVal - aVal;
           });
           
-          const now = Date.now();
-          const reorderedToday = sortedToday.map((t, i) => ({ ...t, createdAt: now + i, session: undefined }));
+          const reorderedToday = sortedToday.map((t, i) => ({ ...t, plannedOrder: i, session: undefined }));
           return [...otherTasks, ...reorderedToday];
       });
   }, []);
@@ -658,12 +748,22 @@ export const useGoalflow = (userEmail: string) => {
   const uncompletedTasks = useMemo(() => tasks.filter(task => task && !task.completed && !task.wontDo), [tasks]);
   const overdueTasks = useMemo(() => {
       const today = getTodayYYYYMMDD();
-      return tasks.filter(t => t && !t.completed && !t.wontDo && t.dateAssigned < today);
+      const currentMonth = today.slice(0, 7);
+      return tasks.filter(t => t && !t.completed && !t.wontDo && (
+          t.schedulePrecision === 'month'
+              ? (t.scheduledFor || t.dateAssigned.slice(0, 7)) <= currentMonth
+              : t.dateAssigned < today
+      ));
   }, [tasks]);
 
   const todayStr = getTodayYYYYMMDD();
-  const todayTasks = useMemo(() => uncompletedTasks.filter(task => task.dateAssigned === todayStr).sort((a, b) => a.createdAt - b.createdAt), [uncompletedTasks, todayStr]);
-  const upcomingTasks = useMemo(() => uncompletedTasks.filter(task => task.dateAssigned > todayStr).sort((a, b) => a.dateAssigned.localeCompare(b.dateAssigned) || a.createdAt - b.createdAt), [uncompletedTasks, todayStr]);
+  const todayTasks = useMemo(() => uncompletedTasks
+      .filter(task => task.schedulePrecision !== 'month' && task.dateAssigned === todayStr)
+      .sort(compareQueueCandidates), [uncompletedTasks, todayStr]);
+  const upcomingTasks = useMemo(() => uncompletedTasks.filter(task => task.schedulePrecision === 'month'
+      ? (task.scheduledFor || task.dateAssigned.slice(0, 7)) > todayStr.slice(0, 7)
+      : task.dateAssigned > todayStr
+  ).sort((a, b) => a.dateAssigned.localeCompare(b.dateAssigned) || a.createdAt - b.createdAt), [uncompletedTasks, todayStr]);
   const recentCompletedTasks = useMemo(() => tasks.filter(t => t && t.completed).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 20), [tasks]);
   const allCompletedTasks = useMemo(() => tasks.filter(t => t && (t.completed || t.wontDo)).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)), [tasks]);
   const currentTask = useMemo(() => todayTasks.length > 0 ? todayTasks[0] : null, [todayTasks]);

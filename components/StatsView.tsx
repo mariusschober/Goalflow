@@ -65,7 +65,7 @@ const Sparkline: React.FC<{ data: number[], color: string }> = ({ data, color })
     const min = 0;
     const height = 40;
     const width = 100;
-    const step = width / (data.length - 1);
+    const step = data.length > 1 ? width / (data.length - 1) : 0;
 
     const points = data.map((val, i) => {
         const x = i * step;
@@ -647,10 +647,10 @@ export const StatsView: React.FC<StatsViewProps> = ({ stats, recentTasks = [], a
                 
                 <div className="absolute bottom-6 left-0 right-0 px-8">
                     <div className="flex gap-1 h-1.5 w-full rounded-full overflow-hidden bg-gray-100 dark:bg-slate-700">
-                        <div style={{ width: `${(flowMetrics.counts.flow / flowMetrics.ratedCount) * 100}%` }} className="bg-purple-500 h-full" title="Flow"></div>
-                        <div style={{ width: `${(flowMetrics.counts.high / flowMetrics.ratedCount) * 100}%` }} className="bg-indigo-500 h-full" title="High"></div>
-                        <div style={{ width: `${(flowMetrics.counts.good / flowMetrics.ratedCount) * 100}%` }} className="bg-blue-400 h-full" title="Good"></div>
-                        <div style={{ width: `${(flowMetrics.counts.distracted / flowMetrics.ratedCount) * 100}%` }} className="bg-red-400 h-full" title="Distracted"></div>
+                        <div style={{ width: `${(flowMetrics.counts.flow / Math.max(1, flowMetrics.ratedCount)) * 100}%` }} className="bg-purple-500 h-full" title="Flow"></div>
+                        <div style={{ width: `${(flowMetrics.counts.high / Math.max(1, flowMetrics.ratedCount)) * 100}%` }} className="bg-indigo-500 h-full" title="High"></div>
+                        <div style={{ width: `${(flowMetrics.counts.good / Math.max(1, flowMetrics.ratedCount)) * 100}%` }} className="bg-blue-400 h-full" title="Good"></div>
+                        <div style={{ width: `${(flowMetrics.counts.distracted / Math.max(1, flowMetrics.ratedCount)) * 100}%` }} className="bg-red-400 h-full" title="Distracted"></div>
                     </div>
                     <div className="flex justify-between text-[10px] text-gray-400 mt-1 w-full font-medium uppercase tracking-wider">
                         <span>Flow</span>
