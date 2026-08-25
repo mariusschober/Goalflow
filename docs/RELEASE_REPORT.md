@@ -5,9 +5,11 @@
 - Branch: `goalflow-production`
 - Starting SHA: `7fa5a17e2b8892df91c2b23c4e551b67031731db`
 - Implementation commit: `5be4328fdff311e6aeae4108ce4fea0b7a00703b`
+- Isolated test-build commits: `67a57d6959a07e91b78eedfaeecbe20731d2993c`, `f844ff29c44c2f8b505336a6665d27343ebe9b68`
 - Version: `0.1.0`
 - Date: `2026-08-25`
-- Final branch tip: the docs-only commit containing this report, immediately after the implementation commit above
+- Final executable implementation SHA: `f844ff29c44c2f8b505336a6665d27343ebe9b68`
+- Final branch tip: the docs-only commit containing this evidence report, immediately after the executable implementation above; the exact tip is recorded in the final handoff
 
 ## Product preservation
 
@@ -25,7 +27,7 @@ The review found and fixed defects in local mutation ordering, backup import ato
 | --- | ---: | ---: | ---: |
 | P0 | 0 | 0 | 0 |
 | P1 | 6 | 6 | 0 |
-| P2 | 7 | 7 | 0 |
+| P2 | 8 | 8 | 0 |
 
 These are the defects classified and remediated during this pass; they are not a claim that unknown defects are impossible. No known fixable P0–P2 defect remains within the reviewed repository scope. Live-infrastructure checks that could reveal additional defects are listed as `NOT AVAILABLE` below.
 
@@ -45,6 +47,7 @@ These are the defects classified and remediated during this pass; they are not a
 | `CI=1 npm run android:sync` | PASS |
 | `npm run verify:test-build` | PASS — test bundle contains the isolated gate; production bundle contains no `123456` |
 | `npm run android:sync:test` | PASS — isolated test web bundle synchronized into Capacitor |
+| GitHub Actions exact-tip production/test Android run `32825578193` | PASS — production and sandbox APKs built and uploaded |
 | Local Gradle tests, lint, debug APK | NOT AVAILABLE — Android SDK/Gradle distribution/JDK 21 are unavailable in this environment |
 | GitHub Actions clean-checkout web and Android gates | PASS — run `32793296539`; verify, secrets, and Android jobs all succeeded |
 | Browser E2E, screenshots, axe/accessibility runtime, install/offline browser exercise | NOT AVAILABLE — no browser executable is available |
@@ -74,13 +77,18 @@ The production client build, manifest generation, service-worker generation, ser
 
 ## Android
 
-Capacitor configuration and Android project generation/synchronization pass. The production project uses application ID `com.mariusschober.goalflow` and application name `Goalflow`. The isolated test variant uses `com.mariusschober.goalflow.test`, is labeled `Goalflow Test`, accepts compile-time code `123456`, and stores data locally without production authentication or cloud synchronization. Both variants share the React/domain/storage implementation. The final branch CI run must provide the corresponding two APK artifacts; local Gradle execution remains unavailable.
+Capacitor configuration and Android project generation/synchronization pass. The production project uses application ID `com.mariusschober.goalflow` and application name `Goalflow`. The isolated test variant uses `com.mariusschober.goalflow.test`, is labeled `Goalflow Test`, accepts compile-time code `123456`, and stores data locally without production authentication or cloud synchronization. Both variants share the React/domain/storage implementation. Exact-tip GitHub Actions run `32825578193` built both artifacts:
+
+- Production: `Goalflow-0.1.0-debug-final.apk`, SHA-256 `aca4553500fab5cc4a185ce83884aef7869cb90bc321273f0121ab5084cca3f5`
+- Test: `Goalflow-Test-0.1.0-debug.apk`, SHA-256 `d0fc4fcefad18ccc6d35a9e0ad2f1c59b07578315a448f36acea75a63927ab42`
+
+Local Gradle execution remains unavailable.
 
 Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. CI is configured to build both `app-production-debug.apk` and `app-sandbox-debug.apk`. No private signing material was added.
 
 ## Clean-room verification
 
-GitHub Actions run `32793296539` performed a fresh checkout of implementation commit `5be4328fdff311e6aeae4108ce4fea0b7a00703b`, installed from the committed lockfile, passed lint, tests, production build, dependency audit, startup/health, secret scan, Capacitor synchronization, Gradle tests, Android lint, and debug APK assembly. The docs-only release-report commit does not alter executable source; its own push-triggered verification is tracked separately.
+GitHub Actions run `32825578193` performed a fresh checkout of final implementation commit `f844ff29c44c2f8b505336a6665d27343ebe9b68`, installed from the committed lockfile, passed lint, tests, production build, dependency audit, startup/health, secret scan, Capacitor synchronization, Gradle tests, Android lint, production debug assembly, test-bundle synchronization, and sandbox debug assembly.
 
 A true shell-side fresh clone could not be created because the shell has no credentials for this private repository. The GitHub Actions clean checkout is the available clean-room execution evidence.
 
