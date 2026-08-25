@@ -38,6 +38,22 @@ const SYNCED_STORES = [
 ];
 
 const emptyMeta = (): SyncMeta => ({ cursor: 0, versions: {}, outbox: [], conflicts: [] });
+const metadataQueues = new Map<string, Promise<void>>();
+
+const withMetadataLock = async <T>(userKey: string, operation: () => Promise<T>): Promise<T> => {
+  const previous = metadataQueues.get(userKey) || Promise.resolve();
+  let release!: () => void;
+  const current = new Promise<void>(resolve => { release = resolve; });
+  metadataQueues.set(userKey, current);
+  await previous;
+  try {
+    return await operation();
+  } finally {
+    release();
+    if (metadataQueues.get(userKey) === current) metadataQueues.delete(userKey);
+  }
+};
+
 const deviceId = (): string => {
   const key = 'goalflow-device-id';
   const existing = localStorage.getItem(key);
@@ -63,7 +79,6 @@ export const startCloudSync = (userKey: string): (() => void) => {
 
   const readMeta = async (): Promise<SyncMeta> => await storageService.get<SyncMeta>(STORES.SYNC, userKey) || emptyMeta();
   const writeMeta = async (meta: SyncMeta) => storageService.set(STORES.SYNC, userKey, meta, 'cloud');
-
   const pullCanonicalTasks = async () => {
     const response = await authenticatedFetch('/api/v1/tasks');
     const body = await response.json() as { tasks?: Array<Record<string, any>>; error?: { message?: string } };
@@ -109,83 +124,87 @@ export const startCloudSync = (userKey: string): (() => void) => {
   };
 
   const enqueue = async (storeName: string, value: unknown) => {
-    const meta = await readMeta();
-    const version = (meta.versions[storeName]?.local || 0) + 1;
-    const mutation: SyncMutation = {
-      mutationId: crypto.randomUUID(), deviceId: ownDeviceId, entityType: storeName, entityId: 'singleton',
-      baseServerVersion: meta.versions[storeName]?.server ?? null, version, payload: value,
-      updatedAt: new Date().toISOString(), deletedAt: null
-    };
-    meta.versions[storeName] = { local: version, server: meta.versions[storeName]?.server ?? null };
-    meta.outbox = [...meta.outbox.filter(item => item.entityType !== storeName), mutation];
-    await writeMeta(meta);
-    emit(navigator.onLine ? 'saved-locally' : 'offline', meta);
+    await withMetadataLock(userKey, async () => {
+      const meta = await readMeta();
+      const version = (meta.versions[storeName]?.local || 0) + 1;
+      const mutation: SyncMutation = {
+        mutationId: crypto.randomUUID(), deviceId: ownDeviceId, entityType: storeName, entityId: 'singleton',
+        baseServerVersion: meta.versions[storeName]?.server ?? null, version, payload: value,
+        updatedAt: new Date().toISOString(), deletedAt: null
+      };
+      meta.versions[storeName] = { local: version, server: meta.versions[storeName]?.server ?? null };
+      meta.outbox = [...meta.outbox.filter(item => item.entityType !== storeName), mutation];
+      await writeMeta(meta);
+      emit(navigator.onLine ? 'saved-locally' : 'offline', meta);
+    });
     window.clearTimeout(timer);
     timer = window.setTimeout(() => void synchronize(), 2_000);
   };
 
   const performSync = async () => {
-    if (stopped) return;
-    const meta = await readMeta();
-    if (!navigator.onLine) { emit('offline', meta); return; }
-    emit('syncing', meta);
+    await withMetadataLock(userKey, async () => {
+      if (stopped) return;
+      const meta = await readMeta();
+      if (!navigator.onLine) { emit('offline', meta); return; }
+      emit('syncing', meta);
 
-    while (meta.outbox.length) {
-      const batch = meta.outbox.slice(0, 50);
-      const response = await authenticatedFetch('/api/v1/sync/push', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mutations: batch })
-      });
-      const body = await response.json() as { results?: Array<{ mutationId: string; accepted: boolean; serverVersion: number; record?: { payload?: unknown } }>; error?: { message?: string } };
-      if (!response.ok || !body.results) throw new Error(body.error?.message || 'Sync push failed.');
-      for (const result of body.results) {
-        const mutation = batch.find(item => item.mutationId === result.mutationId);
-        if (!mutation) continue;
-        meta.outbox = meta.outbox.filter(item => item.mutationId !== result.mutationId);
-        if (result.accepted) {
-          meta.versions[mutation.entityType] = { local: mutation.version, server: Number(result.serverVersion) };
-        } else {
-          meta.conflicts.push({
-            entityType: mutation.entityType,
-            localPayload: mutation.payload,
-            serverPayload: result.record?.payload,
-            serverVersion: Number(result.serverVersion),
-            createdAt: new Date().toISOString()
-          });
+      while (meta.outbox.length) {
+        const batch = meta.outbox.slice(0, 50);
+        const response = await authenticatedFetch('/api/v1/sync/push', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ mutations: batch })
+        });
+        const body = await response.json() as { results?: Array<{ mutationId: string; accepted: boolean; serverVersion: number; record?: { payload?: unknown } }>; error?: { message?: string } };
+        if (!response.ok || !body.results) throw new Error(body.error?.message || 'Sync push failed.');
+        for (const result of body.results) {
+          const mutation = batch.find(item => item.mutationId === result.mutationId);
+          if (!mutation) continue;
+          meta.outbox = meta.outbox.filter(item => item.mutationId !== result.mutationId);
+          if (result.accepted) {
+            meta.versions[mutation.entityType] = { local: mutation.version, server: Number(result.serverVersion) };
+          } else {
+            meta.conflicts.push({
+              entityType: mutation.entityType,
+              localPayload: mutation.payload,
+              serverPayload: result.record?.payload,
+              serverVersion: Number(result.serverVersion),
+              createdAt: new Date().toISOString()
+            });
+          }
         }
+        await writeMeta(meta);
       }
-      await writeMeta(meta);
-    }
 
-    let hasMore = true;
-    while (hasMore) {
-      const response = await authenticatedFetch(`/api/v1/sync/pull?cursor=${meta.cursor}&limit=100`);
-      const body = await response.json() as { records?: Array<{ entityType: string; serverVersion: number; version: number; deviceId?: string; payload: unknown }>; nextCursor?: number; hasMore?: boolean; error?: { message?: string } };
-      if (!response.ok || !body.records) throw new Error(body.error?.message || 'Sync pull failed.');
-      for (const record of body.records) {
-        if (!SYNCED_STORES.includes(record.entityType)) continue;
-        const pending = meta.outbox.find(item => item.entityType === record.entityType);
-        if (pending && record.deviceId !== ownDeviceId) {
-          meta.conflicts.push({ entityType: record.entityType, localPayload: pending.payload, serverPayload: record.payload, serverVersion: Number(record.serverVersion), createdAt: new Date().toISOString() });
-          continue;
+      let hasMore = true;
+      while (hasMore) {
+        const response = await authenticatedFetch(`/api/v1/sync/pull?cursor=${meta.cursor}&limit=100`);
+        const body = await response.json() as { records?: Array<{ entityType: string; serverVersion: number; version: number; deviceId?: string; payload: unknown }>; nextCursor?: number; hasMore?: boolean; error?: { message?: string } };
+        if (!response.ok || !body.records) throw new Error(body.error?.message || 'Sync pull failed.');
+        for (const record of body.records) {
+          if (!SYNCED_STORES.includes(record.entityType)) continue;
+          const pending = meta.outbox.find(item => item.entityType === record.entityType);
+          if (pending && record.deviceId !== ownDeviceId) {
+            meta.conflicts.push({ entityType: record.entityType, localPayload: pending.payload, serverPayload: record.payload, serverVersion: Number(record.serverVersion), createdAt: new Date().toISOString() });
+            continue;
+          }
+          if (Number(record.serverVersion) > (meta.versions[record.entityType]?.server ?? 0)) {
+            await storageService.set(record.entityType, userKey, record.payload, 'cloud');
+            meta.versions[record.entityType] = { local: Number(record.version), server: Number(record.serverVersion) };
+            window.dispatchEvent(new CustomEvent('goalflow:cloud-change', { detail: { storeName: record.entityType, value: record.payload } }));
+          }
         }
-        if (Number(record.serverVersion) > (meta.versions[record.entityType]?.server ?? 0)) {
-          await storageService.set(record.entityType, userKey, record.payload, 'cloud');
-          meta.versions[record.entityType] = { local: Number(record.version), server: Number(record.serverVersion) };
-          window.dispatchEvent(new CustomEvent('goalflow:cloud-change', { detail: { storeName: record.entityType, value: record.payload } }));
-        }
+        meta.cursor = Number(body.nextCursor ?? meta.cursor);
+        hasMore = Boolean(body.hasMore);
+        await writeMeta(meta);
       }
-      meta.cursor = Number(body.nextCursor ?? meta.cursor);
-      hasMore = Boolean(body.hasMore);
+
+      await pullCanonicalTasks();
+
+      meta.lastSuccessfulSync = new Date().toISOString();
       await writeMeta(meta);
-    }
-
-    await pullCanonicalTasks();
-
-    meta.lastSuccessfulSync = new Date().toISOString();
-    await writeMeta(meta);
-    const state: SyncState = meta.conflicts.length ? 'conflict' : 'synced';
-    emit(state, meta);
-    channel?.postMessage({ type: 'complete', state, lastSuccessfulSync: meta.lastSuccessfulSync, conflictCount: meta.conflicts.length });
+      const state: SyncState = meta.conflicts.length ? 'conflict' : 'synced';
+      emit(state, meta);
+      channel?.postMessage({ type: 'complete', state, lastSuccessfulSync: meta.lastSuccessfulSync, conflictCount: meta.conflicts.length });
+    });
   };
 
   const synchronize = async () => {
@@ -248,21 +267,28 @@ export const startCloudSync = (userKey: string): (() => void) => {
 };
 
 export const resolveLocalConflict = async (userKey: string, entityType: string, choice: 'local' | 'cloud'): Promise<void> => {
-  const meta = await storageService.get<SyncMeta>(STORES.SYNC, userKey);
-  const conflict = meta?.conflicts.find(item => item.entityType === entityType);
-  if (!meta || !conflict) return;
-  const response = await authenticatedFetch('/api/v1/sync/conflicts/resolve', {
-    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType })
+  await withMetadataLock(userKey, async () => {
+    const meta = await storageService.get<SyncMeta>(STORES.SYNC, userKey);
+    const conflict = meta?.conflicts.find(item => item.entityType === entityType);
+    if (!meta || !conflict) return;
+    const response = await authenticatedFetch('/api/v1/sync/conflicts/resolve', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType, choice })
+    });
+    if (!response.ok) throw new Error('The conflict could not be resolved.');
+    if (choice === 'cloud') {
+      await storageService.set(entityType, userKey, conflict.serverPayload, 'cloud');
+      window.dispatchEvent(new CustomEvent('goalflow:cloud-change', { detail: { storeName: entityType, value: conflict.serverPayload } }));
+      meta.versions[entityType] = { local: meta.versions[entityType]?.local || 1, server: conflict.serverVersion };
+    } else {
+      const version = (meta.versions[entityType]?.local || 0) + 1;
+      meta.versions[entityType] = { local: version, server: meta.versions[entityType]?.server ?? conflict.serverVersion };
+      meta.outbox = [
+        ...meta.outbox.filter(item => item.entityType !== entityType),
+        { mutationId: crypto.randomUUID(), deviceId: deviceId(), entityType, entityId: 'singleton', baseServerVersion: conflict.serverVersion, version, payload: conflict.localPayload, updatedAt: new Date().toISOString(), deletedAt: null }
+      ];
+    }
+    meta.conflicts = meta.conflicts.filter(item => item !== conflict);
+    await storageService.set(STORES.SYNC, userKey, meta, 'cloud');
+    window.dispatchEvent(new Event('online'));
   });
-  if (!response.ok) throw new Error('The conflict could not be resolved.');
-  if (choice === 'cloud') {
-    await storageService.set(entityType, userKey, conflict.serverPayload, 'cloud');
-    window.dispatchEvent(new CustomEvent('goalflow:cloud-change', { detail: { storeName: entityType, value: conflict.serverPayload } }));
-    meta.versions[entityType] = { local: meta.versions[entityType]?.local || 1, server: conflict.serverVersion };
-  } else {
-    meta.outbox.push({ mutationId: crypto.randomUUID(), deviceId: deviceId(), entityType, entityId: 'singleton', baseServerVersion: conflict.serverVersion, version: (meta.versions[entityType]?.local || 0) + 1, payload: conflict.localPayload, updatedAt: new Date().toISOString(), deletedAt: null });
-  }
-  meta.conflicts = meta.conflicts.filter(item => item !== conflict);
-  await storageService.set(STORES.SYNC, userKey, meta, 'cloud');
-  window.dispatchEvent(new Event('online'));
 };

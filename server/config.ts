@@ -5,6 +5,7 @@ const environmentSchema = z.object({
   HOST: z.string().min(1).default("0.0.0.0"),
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   APP_ORIGIN: z.string().url().default("http://localhost:3000"),
+  CORS_ORIGINS: z.string().default("https://localhost,capacitor://localhost"),
   OWNER_EMAIL: z.string().email().default("mris@tuta.io"),
   ENABLE_LOCAL_DEMO: z.enum(["true", "false"]).default("false"),
   SUPABASE_URL: z.string().url().optional(),

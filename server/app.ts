@@ -25,8 +25,29 @@ export const createApp = async (config: AppConfig) => {
   const ai = createDeepSeekProvider(config);
   const speech = createOpenAiSpeechProvider(config);
   const localOnly = config.NODE_ENV !== 'production' && config.ENABLE_LOCAL_DEMO === 'true';
+  const allowedOrigins = new Set([
+    config.APP_ORIGIN,
+    'https://localhost',
+    'capacitor://localhost',
+    ...config.CORS_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
+  ]);
 
   app.disable("x-powered-by");
+  app.use((request, response, next) => {
+    const origin = request.header('origin');
+    if (origin && allowedOrigins.has(origin)) {
+      response.setHeader('access-control-allow-origin', origin);
+      response.setHeader('access-control-allow-headers', 'authorization,content-type,x-request-id');
+      response.setHeader('access-control-allow-methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+      response.setHeader('vary', 'Origin');
+    }
+    if (request.method === 'OPTIONS') {
+      if (!origin || allowedOrigins.has(origin)) response.status(204).end();
+      else response.status(403).json({ error: { code: 'origin_not_allowed', message: 'This application origin is not allowed.' } });
+      return;
+    }
+    next();
+  });
   app.use((request, response, next) => {
     const startedAt = Date.now();
     request.requestId = request.header("x-request-id") ?? crypto.randomUUID();

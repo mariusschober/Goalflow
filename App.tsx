@@ -241,9 +241,11 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
 
   const hasOverdue = overdueTasks.length > 0;
   const requiresMonthlyPlanning = overdueTasks.some(task => task.schedulePrecision === 'month');
+  const confirmedOpenTaskIds = confirmedPlan.taskIds.filter(taskId => todayPlanTaskIds.includes(taskId));
   const dailyPlanConfirmed = !hasOverdue && (todayPlanTaskIds.length === 0 || (
       confirmedPlan.date === currentLocalDay
-      && todayPlanTaskIds.every(taskId => confirmedPlan.taskIds.includes(taskId))
+      && confirmedOpenTaskIds.length === todayPlanTaskIds.length
+      && confirmedOpenTaskIds.every((taskId, index) => taskId === todayPlanTaskIds[index])
   ));
 
   const confirmDailyPlan = async () => {

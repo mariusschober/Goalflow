@@ -5,6 +5,7 @@ import {
   breakDownTask,
   buildTodayQueue,
   createScheduledTask,
+  compareQueueCandidates,
   generateHabitInstance,
   getPlanningGate,
   rescheduleTask,
@@ -50,6 +51,13 @@ describe("schedule invariants", () => {
       "Choose a valid calendar day."
     );
   });
+
+  it("accepts leap days and rejects non-leap February 29", () => {
+    expect(() => assertSchedule("day", "2024-02-29", "2024-02-28")).not.toThrow();
+    expect(() => assertSchedule("day", "2023-02-29", "2023-03-01")).toThrowError(
+      "Choose a valid calendar day."
+    );
+  });
 });
 
 describe("Current queue", () => {
@@ -92,6 +100,29 @@ describe("Current queue", () => {
     };
     expect(getPlanningGate([{ ...first, status: "completed" }, second], "2026-07-18", plan).state).toBe("ready");
     expect(getPlanningGate([first, second, task("Added later")], "2026-07-18", plan).state).toBe("daily_planning_required");
+  });
+
+  it("requires review when the open queue order changes after confirmation", () => {
+    const first = task("First", { plannedOrder: 0 });
+    const second = task("Second", { plannedOrder: 1 });
+    const plan = {
+      localDate: "2026-07-18",
+      confirmedAt: "2026-07-18T07:00:00.000Z",
+      taskIds: [first.id, second.id]
+    };
+    expect(getPlanningGate([
+      { ...first, plannedOrder: 1 },
+      { ...second, plannedOrder: 0 }
+    ], "2026-07-18", plan).state).toBe("daily_planning_required");
+  });
+});
+
+describe("deterministic ordering", () => {
+  it("compares numeric creation timestamps numerically rather than lexicographically", () => {
+    expect(compareQueueCandidates(
+      { id: "late", isFrog: false, plannedOrder: 0, createdAt: 1_000 },
+      { id: "early", isFrog: false, plannedOrder: 0, createdAt: 900 }
+    )).toBeGreaterThan(0);
   });
 });
 

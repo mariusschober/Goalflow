@@ -23,8 +23,17 @@ export const createTelegramRouter = (
     }
     const telegramUserId = update.message?.from?.id ?? update.callback_query?.from?.id;
     const { error } = await database.from("telegram_updates").insert({ update_id: update.update_id, telegram_user_id: telegramUserId ?? null });
-    if (error?.code === "23505") { response.status(200).json({ ok: true, duplicate: true }); return; }
-    if (error) { response.status(503).json({ error: { code: "deduplication_unavailable", message: "Update could not be accepted." } }); return; }
+    if (error?.code === "23505") {
+      // Telegram may retry after a worker failure. A previously failed update
+      // is safe to reprocess; a processed update remains idempotently ignored.
+      const { data: previous, error: previousError } = await database.from("telegram_updates")
+        .select("outcome").eq("update_id", update.update_id).maybeSingle();
+      if (previousError) { response.status(503).json({ error: { code: "deduplication_unavailable", message: "Update could not be inspected." } }); return; }
+      if (previous?.outcome !== "error") { response.status(200).json({ ok: true, duplicate: true }); return; }
+      const { error: retryError } = await database.from("telegram_updates").update({ processed_at: null, outcome: "received", error_code: null }).eq("update_id", update.update_id);
+      if (retryError) { response.status(503).json({ error: { code: "deduplication_unavailable", message: "Update could not be retried." } }); return; }
+    }
+    if (error && error.code !== "23505") { response.status(503).json({ error: { code: "deduplication_unavailable", message: "Update could not be accepted." } }); return; }
     response.status(202).json({ ok: true });
     void processor(update).then(async () => {
       await database.from("telegram_updates").update({ processed_at: new Date().toISOString(), outcome: "processed" }).eq("update_id", update.update_id);

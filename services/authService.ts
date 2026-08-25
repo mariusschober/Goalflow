@@ -2,6 +2,7 @@ import { createClient, type Session } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const apiOrigin = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '');
 const configuredTelegramProvider = import.meta.env.VITE_TELEGRAM_OIDC_PROVIDER_ID || 'custom:telegram';
 export const telegramProvider = (configuredTelegramProvider.startsWith('custom:')
   ? configuredTelegramProvider
@@ -9,6 +10,13 @@ export const telegramProvider = (configuredTelegramProvider.startsWith('custom:'
 const localDemo = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_DEMO === 'true';
 
 export const isLocalDemo = (): boolean => localDemo;
+
+export const apiUrl = (input: RequestInfo | URL): RequestInfo | URL => {
+  if (!apiOrigin) return input;
+  const raw = input instanceof URL ? input.href : String(input);
+  if (/^[a-z][a-z\d+.-]*:/i.test(raw)) return input;
+  return `${apiOrigin}${raw.startsWith('/') ? raw : `/${raw}`}`;
+};
 
 export const supabase = supabaseUrl && supabaseAnonKey
   ? createClient(supabaseUrl, supabaseAnonKey, {
@@ -40,7 +48,7 @@ export const requestOwnerMagicLink = async (email: string): Promise<void> => {
 
 export const beginTelegramSignup = async (inviteCode: string, captchaToken = ''): Promise<void> => {
   if (!supabase) throw new Error('Authentication is not configured.');
-  const response = await fetch('/api/v1/auth/telegram/preflight', {
+  const response = await fetch(apiUrl('/api/v1/auth/telegram/preflight'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: inviteCode, captchaToken })
@@ -76,7 +84,7 @@ export const beginOwnerTelegramLink = async (): Promise<void> => {
 
 export const activateOwnerTelegramLink = async (session: Session): Promise<void> => {
   if (sessionStorage.getItem('goalflow_owner_telegram_link') !== 'pending') return;
-  const response = await fetch('/api/v1/account/telegram/link', {
+  const response = await fetch(apiUrl('/api/v1/account/telegram/link'), {
     method: 'POST',
     headers: { authorization: `Bearer ${session.access_token}` }
   });
@@ -91,7 +99,7 @@ export const activateOwnerTelegramLink = async (session: Session): Promise<void>
 export const activateTelegramSignup = async (session: Session): Promise<boolean> => {
   const attemptToken = sessionStorage.getItem('goalflow_telegram_attempt');
   if (!attemptToken) return !session.user.email;
-  const response = await fetch('/api/v1/auth/telegram/activate', {
+  const response = await fetch(apiUrl('/api/v1/auth/telegram/activate'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
     body: JSON.stringify({ attemptToken })
@@ -115,7 +123,7 @@ export const authenticatedFetch = async (input: RequestInfo | URL, init: Request
   if (!token) throw new Error('A signed-in session is required.');
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${token}`);
-  return fetch(input, { ...init, headers });
+  return fetch(apiUrl(input), { ...init, headers });
 };
 
 export const logout = async (): Promise<void> => {

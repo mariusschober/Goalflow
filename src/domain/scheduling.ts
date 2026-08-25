@@ -96,6 +96,7 @@ const TIME_PATTERN = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
 const isRealDay = (value: string): boolean => {
   if (!DAY_PATTERN.test(value)) return false;
   const [year, month, day] = value.split("-").map(Number);
+  if (year < 1) return false;
   const date = new Date(Date.UTC(year, month - 1, day));
   return date.getUTCFullYear() === year
     && date.getUTCMonth() === month - 1
@@ -104,6 +105,7 @@ const isRealDay = (value: string): boolean => {
 
 const isRealMonth = (value: string): boolean => {
   if (!MONTH_PATTERN.test(value)) return false;
+  if (Number(value.slice(0, 4)) < 1) return false;
   const month = Number(value.slice(5));
   return month >= 1 && month <= 12;
 };
@@ -199,8 +201,15 @@ export const compareQueueCandidates = (left: QueueCandidate, right: QueueCandida
   || optionalRank(left.plannedOrder) - optionalRank(right.plannedOrder)
   || optionalRank(left.circadianRank) - optionalRank(right.circadianRank)
   || (left.scheduledTime ?? "99:99").localeCompare(right.scheduledTime ?? "99:99")
-  || String(left.createdAt).localeCompare(String(right.createdAt))
+  || compareCreatedAt(left.createdAt, right.createdAt)
   || left.id.localeCompare(right.id);
+
+const compareCreatedAt = (left: string | number, right: string | number): number => {
+  const leftTime = typeof left === "number" ? left : Date.parse(left);
+  const rightTime = typeof right === "number" ? right : Date.parse(right);
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime)) return leftTime - rightTime;
+  return String(left).localeCompare(String(right));
+};
 
 export const compareCurrentTasks = (left: ScheduledTask, right: ScheduledTask): number =>
   compareQueueCandidates(left, right);
@@ -241,7 +250,8 @@ export const getPlanningGate = (
   const queue = buildTodayQueue(tasks, today);
   const plannedIds = queue.map((task) => task.id);
   const planMatches = dailyPlan?.localDate === today
-    && plannedIds.every((id) => dailyPlan.taskIds.includes(id));
+    && dailyPlan.taskIds.filter((id) => plannedIds.includes(id)).every((id, index) => id === plannedIds[index])
+    && dailyPlan.taskIds.filter((id) => plannedIds.includes(id)).length === plannedIds.length;
   if (overdue.length > 0 || (queue.length > 0 && !planMatches)) {
     return {
       state: "daily_planning_required",
@@ -301,7 +311,13 @@ export const rescheduleTask = (
   assertSchedule(schedule.schedulePrecision, schedule.scheduledFor, context.today, schedule.scheduledTime);
   let promotedToFrog = false;
   const result = replaceTask(tasks, taskId, (task) => {
-    const movingForward = schedule.scheduledFor > task.scheduledFor;
+    const currentSchedule = task.schedulePrecision === "month"
+      ? `${task.scheduledFor}-01`
+      : task.scheduledFor;
+    const nextSchedule = schedule.schedulePrecision === "month"
+      ? `${schedule.scheduledFor}-01`
+      : schedule.scheduledFor;
+    const movingForward = nextSchedule > currentSchedule;
     if (task.isFrog && movingForward) {
       throw new SchedulingError("frog_locked", "A frog cannot be moved forward.");
     }

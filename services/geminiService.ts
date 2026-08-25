@@ -1,10 +1,10 @@
-import { supabase } from './authService';
+import { apiUrl, supabase } from './authService';
 
 const authenticatedFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
   const session = supabase ? (await supabase.auth.getSession()).data.session : null;
   const headers = new Headers(init.headers);
   if (session?.access_token) headers.set('authorization', `Bearer ${session.access_token}`);
-  return fetch(input, { ...init, headers });
+  return fetch(apiUrl(input), { ...init, headers });
 };
 
 export interface AiSubtask {

@@ -131,6 +131,7 @@ export interface Task {
   source?: 'manual' | 'habit' | 'telegram' | 'share' | 'ai' | 'migration';
   parentTaskId?: string;
   lifecycleStatus?: 'open' | 'completed' | 'broken_down' | 'dropped' | 'archived';
+  deletedAt?: string;
 }
 
 export interface Stats {

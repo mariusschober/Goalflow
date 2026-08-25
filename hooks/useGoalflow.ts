@@ -58,6 +58,7 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   const [justLeveledUp, setJustLeveledUp] = useState(false);
   const [gamificationEvent, setGamificationEvent] = useState<GamificationEvent | null>(null);
   const [planningWarning, setPlanningWarning] = useState(false);
+  const completedTaskIds = useRef(new Set<string>());
 
   // --- Initialization (Hydration) ---
   useEffect(() => {
@@ -199,7 +200,8 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
           // But we need to keep `allStats` ref current for other logic if needed.
           // Actually, let's update `allStats` state when `stats` changes, but do it carefully.
           // Simplification: Just persist the merged object.
-          persist(STORES.STATS, updatedAllStats);
+          setAllStats(previous => previous[today] === stats ? previous : { ...previous, [today]: stats });
+          void persist(STORES.STATS, updatedAllStats);
       }
   }, [stats, isLoading, persist]); // Dep on stats updates the DB record
 
@@ -257,7 +259,7 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
           if (habit.lastCompletedDate) {
               const [lastYear, lastMonth, lastDay] = habit.lastCompletedDate.split('-').map(Number);
               const lastDate = new Date(lastYear, lastMonth - 1, lastDay);
-              const diffTime = Math.abs(todayDate.getTime() - lastDate.getTime());
+              const diffTime = todayDate.getTime() - lastDate.getTime();
               const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)); 
               
               if (habit.frequency === 'daily' && diffDays > 1) {
@@ -303,7 +305,10 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       });
 
       if (newTasks.length > 0) {
-          setTasks(prev => [...prev, ...newTasks]);
+          setTasks(prev => {
+              const existingIds = new Set(prev.map(task => task.id));
+              return [...prev, ...newTasks.filter(task => !existingIds.has(task.id))];
+          });
       }
       if (habitsUpdated) {
           setHabits(updatedHabits);
@@ -547,12 +552,21 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
         if (task && task.habitId) {
              setHabits(h => h.map(hb => hb.id === task.habitId ? { ...hb, streak: 0 } : hb));
         }
-        return prev.filter(t => t.id !== taskId);
+        // Keep a tombstone in the synced snapshot. Filtering the row locally
+        // would make a cloud reconciliation recreate it on the next reload.
+        return prev.map(t => t.id === taskId ? {
+            ...t,
+            completed: true,
+            wontDo: true,
+            lifecycleStatus: 'archived' as const,
+            deletedAt: new Date().toISOString(),
+            completedAt: t.completedAt || Date.now()
+        } : t);
     });
   }, []);
 
   const markWontDo = useCallback((taskId: string) => {
-      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: true, wontDo: true, completedAt: Date.now() } : t));
+      setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: true, wontDo: true, lifecycleStatus: 'dropped', completedAt: Date.now() } : t));
   }, []);
 
   const setFrog = useCallback((taskId: string) => {
@@ -569,11 +583,14 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   }, []);
 
   const completeTask = useCallback((taskId: string, actualDuration?: number, flowState?: FlowState, finalDescription?: string) => {
+    if (completedTaskIds.current.has(taskId)) return;
+    const task = tasks.find(t => t.id === taskId);
+    if (!task || task.completed || task.wontDo || task.deletedAt) return;
+    completedTaskIds.current.add(taskId);
     setTasks(prev => prev.map(t => t.id === taskId ? { 
-        ...t, completed: true, completedAt: Date.now(), actualDuration, flowState, description: finalDescription || t.description
+        ...t, completed: true, lifecycleStatus: 'completed', completedAt: Date.now(), actualDuration, flowState, description: finalDescription || t.description
     } : t));
 
-    const task = tasks.find(t => t.id === taskId);
     if(task) {
         setStats(prev => ({
             ...prev,
@@ -764,8 +781,8 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       ? (task.scheduledFor || task.dateAssigned.slice(0, 7)) > todayStr.slice(0, 7)
       : task.dateAssigned > todayStr
   ).sort((a, b) => a.dateAssigned.localeCompare(b.dateAssigned) || a.createdAt - b.createdAt), [uncompletedTasks, todayStr]);
-  const recentCompletedTasks = useMemo(() => tasks.filter(t => t && t.completed).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 20), [tasks]);
-  const allCompletedTasks = useMemo(() => tasks.filter(t => t && (t.completed || t.wontDo)).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)), [tasks]);
+  const recentCompletedTasks = useMemo(() => tasks.filter(t => t && t.completed && !t.deletedAt).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)).slice(0, 20), [tasks]);
+  const allCompletedTasks = useMemo(() => tasks.filter(t => t && (t.completed || t.wontDo) && !t.deletedAt).sort((a, b) => (b.completedAt || 0) - (a.completedAt || 0)), [tasks]);
   const currentTask = useMemo(() => todayTasks.length > 0 ? todayTasks[0] : null, [todayTasks]);
 
   return {

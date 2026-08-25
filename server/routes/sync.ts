@@ -128,7 +128,13 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
   router.post('/sync/conflicts/resolve', async (request, response) => {
     try {
       const database = requireDatabase(admin);
-      const input = z.object({ entityType: z.string().min(1).max(64) }).parse(request.body);
+      const input = z.object({ entityType: z.string().min(1).max(64), choice: z.enum(['local', 'cloud']) }).parse(request.body);
+      // Keeping the local version is only complete once its retry is accepted
+      // by push_sync_mutation. Leave the server conflict visible until then.
+      if (input.choice === 'local') {
+        response.status(204).end();
+        return;
+      }
       const { error } = await database.from('sync_conflicts').update({ resolved_at: new Date().toISOString() })
         .eq('user_id', request.user!.id).eq('entity_type', input.entityType).is('resolved_at', null);
       if (error) throw error;

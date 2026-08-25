@@ -50,6 +50,11 @@ const AppWrapper: React.FC = () => {
       }
       if (resolvedSession && !resolvedSession.user.email) setRecoveryEmailRequired(true);
       if (active) { setSession(resolvedSession); setIsLoading(false); }
+    }).catch((error) => {
+      if (!active) return;
+      setActivationError(error instanceof Error ? error.message : 'Authentication could not be loaded.');
+      setSession(null);
+      setIsLoading(false);
     });
     const unsubscribe = authService.onSessionChange((nextSession) => {
       if (active) { setSession(nextSession); setMfaReady(false); setIsLoading(false); }

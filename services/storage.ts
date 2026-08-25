@@ -30,10 +30,68 @@ export interface GoalflowBackup {
   collections: Record<string, any>;
 }
 
+export const validateBackupCollections = (backup: unknown): Record<string, any> => {
+  if (!isRecord(backup)) throw new Error('The backup must be a JSON object.');
+  const envelope = backup as Partial<GoalflowBackup>;
+  if (envelope.schemaVersion !== undefined
+    && (!Number.isInteger(envelope.schemaVersion) || envelope.schemaVersion < 1)) {
+    throw new Error('The backup schema version is invalid.');
+  }
+  if (envelope.schemaVersion && envelope.schemaVersion > BACKUP_SCHEMA_VERSION) {
+    throw new Error('This backup was created by a newer Goalflow version.');
+  }
+  const collections = Object.prototype.hasOwnProperty.call(envelope, 'collections')
+    ? envelope.collections
+    : backup;
+  if (!isRecord(collections)) throw new Error('The backup does not contain typed collections.');
+  if (envelope.checksum !== undefined && !/^[a-f0-9]{64}$/i.test(String(envelope.checksum))) {
+    throw new Error('Backup checksum validation failed. The file may be incomplete or modified.');
+  }
+  return collections;
+};
+
 const checksumCollections = async (collections: Record<string, any>): Promise<string> => {
   const bytes = new TextEncoder().encode(JSON.stringify(collections));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+};
+
+const recoveryKey = (storeName: string, key: string): string => `goalflow_dr_${storeName}_${key}`;
+const fallbackKey = (storeName: string, key: string): string => `goalflow_fallback_${storeName}_${key}`;
+const deletedKey = (storeName: string, key: string): string => `goalflow_dr_deleted_${storeName}_${key}`;
+
+const hasWindow = (): boolean => typeof window !== 'undefined';
+
+const clearDeletionMarker = (storeName: string, key: string): void => {
+  if (!hasWindow()) return;
+  try { window.localStorage.removeItem(deletedKey(storeName, key)); } catch (_) {}
+};
+
+const markDeleted = (storeName: string, key: string): void => {
+  if (!hasWindow()) return;
+  try { window.localStorage.setItem(deletedKey(storeName, key), '1'); } catch (_) {}
+};
+
+const isMarkedDeleted = (storeName: string, key: string): boolean => {
+  if (!hasWindow()) return false;
+  try { return window.localStorage.getItem(deletedKey(storeName, key)) === '1'; } catch (_) { return false; }
+};
+
+const readRecovery = <T>(storeName: string, key: string): { found: boolean; value?: T } => {
+  if (!hasWindow() || isMarkedDeleted(storeName, key)) return { found: isMarkedDeleted(storeName, key) };
+  try {
+    const raw = window.localStorage.getItem(recoveryKey(storeName, key));
+    if (raw !== null) return { found: true, value: JSON.parse(raw) as T };
+  } catch (_) {}
+  return { found: false };
+};
+
+const writeRecovery = (storeName: string, key: string, value: unknown): void => {
+  clearDeletionMarker(storeName, key);
+  if (!hasWindow()) return;
+  try { window.localStorage.setItem(recoveryKey(storeName, key), JSON.stringify(value)); } catch (e) {
+    console.warn("[Storage] Disaster recovery buffer write failed:", e);
+  }
 };
 
 const isRecord = (value: unknown): value is Record<string, any> =>
@@ -60,24 +118,26 @@ let useFallbackStorage = false;
 const fallbackMemoryStore: Record<string, Record<string, any>> = {};
 
 const writeToFallback = (storeName: string, key: string, value: any) => {
+  clearDeletionMarker(storeName, key);
   if (!fallbackMemoryStore[storeName]) {
     fallbackMemoryStore[storeName] = {};
   }
   fallbackMemoryStore[storeName][key] = value;
   try {
-    window.localStorage.setItem(`goalflow_fallback_${storeName}_${key}`, JSON.stringify(value));
+    window.localStorage.setItem(fallbackKey(storeName, key), JSON.stringify(value));
   } catch (e) {
     console.warn("[Storage] Fallback backup failed:", e);
   }
 };
 
 const readFromFallback = <T>(storeName: string, key: string): T | undefined => {
+  if (isMarkedDeleted(storeName, key)) return undefined;
   if (fallbackMemoryStore[storeName]?.[key] !== undefined) {
     return fallbackMemoryStore[storeName][key];
   }
   try {
-    const backup = window.localStorage.getItem(`goalflow_dr_${storeName}_${key}`) || 
-                   window.localStorage.getItem(`goalflow_fallback_${storeName}_${key}`);
+    const backup = window.localStorage.getItem(recoveryKey(storeName, key)) ||
+                   window.localStorage.getItem(fallbackKey(storeName, key));
     if (backup) {
       const parsed = JSON.parse(backup);
       if (!fallbackMemoryStore[storeName]) {
@@ -170,47 +230,35 @@ const getDB = async (): Promise<IDBPDatabase | null> => {
   return dbPromise;
 };
 
-interface PendingWrite {
-  storeName: string;
-  key: string;
-  value: any;
-  resolve: () => void;
-  reject: (err: any) => void;
-}
+// All mutating storage operations share one queue. This preserves call order
+// across IndexedDB transactions: a delete/clear issued immediately after a
+// set cannot run first and then be undone by the earlier write.
+let mutationQueue: Promise<unknown> = Promise.resolve();
 
-let pendingWrites: PendingWrite[] = [];
-let batchPromise: Promise<void> | null = null;
+const queueMutation = <T>(operation: () => Promise<T> | T): Promise<T> => {
+  const queued = mutationQueue.then(operation);
+  mutationQueue = queued.catch(() => undefined);
+  return queued;
+};
 
-const flushWrites = async () => {
-  const currentBatch = [...pendingWrites];
-  pendingWrites = [];
-  batchPromise = null;
-
-  if (currentBatch.length === 0) return;
-
+const commitValue = async (storeName: string, key: string, value: unknown): Promise<void> => {
   try {
     const db = await getDB();
     if (!db) {
-      // In fallback mode, write immediately
-      currentBatch.forEach(write => {
-        writeToFallback(write.storeName, write.key, write.value);
-        write.resolve();
-      });
+      writeToFallback(storeName, key, value);
       return;
     }
-
-    const storeNames = Array.from(new Set(currentBatch.map(w => w.storeName)));
-    const tx = db.transaction(storeNames, 'readwrite');
-    await Promise.all(
-      currentBatch.map(async (write) => {
-        await tx.objectStore(write.storeName).put(write.value, write.key);
-      })
-    );
+    const tx = db.transaction(storeName, 'readwrite');
+    await tx.objectStore(storeName).put(value, key);
     await tx.done;
-    currentBatch.forEach(w => w.resolve());
   } catch (err) {
-    console.error("Error committing batch database transaction:", err);
-    currentBatch.forEach(w => w.reject(err));
+    console.error("Error committing database transaction:", err);
+    // The recovery buffer was written before the IndexedDB transaction. Keep
+    // the successful user mutation available even when the browser rejects
+    // the transaction, and make subsequent reads use the same durable tier.
+    useFallbackStorage = true;
+    dbPromise = null;
+    writeToFallback(storeName, key, value);
   }
 };
 
@@ -219,6 +267,8 @@ export const storageService = {
     if (useFallbackStorage) {
       return readFromFallback<T>(storeName, key);
     }
+    const recovery = readRecovery<T>(storeName, key);
+    if (recovery.found) return recovery.value;
     try {
       const db = await getDB();
       if (!db) {
@@ -232,80 +282,94 @@ export const storageService = {
   },
 
   set<T>(storeName: string, key: string, value: T, source: 'local' | 'cloud' = 'local'): Promise<void> {
-    // Proactive background backing up for resilient Disaster Recovery
-    try {
-      window.localStorage.setItem(`goalflow_dr_${storeName}_${key}`, JSON.stringify(value));
-    } catch (e) {
-      console.warn("[Storage] Disaster Recovery LocalStorage backup failed:", e);
-    }
+    // Write the recovery copy before scheduling IndexedDB. If the transaction
+    // is interrupted, a reload must see the newest committed user intent.
+    writeRecovery(storeName, key, value);
 
-    if (useFallbackStorage) {
-      writeToFallback(storeName, key, value);
+    return queueMutation(async () => {
+      await commitValue(storeName, key, value);
       if (source === 'local') announceLocalChange(storeName, key, value);
-      return Promise.resolve();
-    }
-
-    const write = new Promise<void>((resolve, reject) => {
-      pendingWrites.push({ storeName, key, value, resolve, reject });
-      if (!batchPromise) {
-        batchPromise = Promise.resolve().then(flushWrites);
-      }
     });
-    return write.then(() => { if (source === 'local') announceLocalChange(storeName, key, value); });
   },
 
   async delete(storeName: string, key: string): Promise<void> {
+    markDeleted(storeName, key);
     try {
-      window.localStorage.removeItem(`goalflow_dr_${storeName}_${key}`);
-      window.localStorage.removeItem(`goalflow_fallback_${storeName}_${key}`);
+      window.localStorage.removeItem(recoveryKey(storeName, key));
+      window.localStorage.removeItem(fallbackKey(storeName, key));
     } catch (e) {}
 
     if (fallbackMemoryStore[storeName]) {
       delete fallbackMemoryStore[storeName][key];
     }
 
-    if (useFallbackStorage) {
-      return;
-    }
-
-    try {
-      const db = await getDB();
-      if (db) {
-        await db.delete(storeName, key);
+    await queueMutation(async () => {
+      // Repeat the tombstone inside the serialized operation. A preceding
+      // IndexedDB failure may have switched the store to fallback mode and
+      // recreated the value after the synchronous cleanup above.
+      markDeleted(storeName, key);
+      try {
+        window.localStorage.removeItem(recoveryKey(storeName, key));
+        window.localStorage.removeItem(fallbackKey(storeName, key));
+      } catch (_) {}
+      if (fallbackMemoryStore[storeName]) delete fallbackMemoryStore[storeName][key];
+      if (useFallbackStorage) return;
+      try {
+        const db = await getDB();
+        if (db) {
+          await db.delete(storeName, key);
+          try { window.localStorage.removeItem(deletedKey(storeName, key)); } catch (_) {}
+        }
+      } catch (err) {
+        console.error("[Storage] Failed to delete in IndexedDB.", err);
+        useFallbackStorage = true;
+        dbPromise = null;
       }
-    } catch (err) {
-      console.error("[Storage] Failed to delete in IndexedDB.", err);
-    }
+    });
   },
 
   async clear(storeName: string): Promise<void> {
-    try {
-      const keysToRemove: string[] = [];
-      for (let i = 0; i < window.localStorage.length; i++) {
-        const key = window.localStorage.key(i);
-        if (key && (key.startsWith(`goalflow_dr_${storeName}_`) || key.startsWith(`goalflow_fallback_${storeName}_`))) {
-          keysToRemove.push(key);
+    await queueMutation(async () => {
+      const db = useFallbackStorage ? null : await getDB();
+      const knownKeys = new Set<string>();
+      try {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const key = window.localStorage.key(i);
+          if (key && key.startsWith(`goalflow_dr_${storeName}_`)) {
+            knownKeys.add(key.slice(`goalflow_dr_${storeName}_`.length));
+          }
+          if (key && (key.startsWith(`goalflow_dr_${storeName}_`) || key.startsWith(`goalflow_fallback_${storeName}_`))) {
+            keysToRemove.push(key);
+          }
         }
+        if (db) {
+          for (const key of await db.getAllKeys(storeName)) knownKeys.add(String(key));
+        }
+        knownKeys.forEach(key => markDeleted(storeName, key));
+        keysToRemove.forEach(k => window.localStorage.removeItem(k));
+      } catch (e) {}
+
+      if (fallbackMemoryStore[storeName]) {
+        fallbackMemoryStore[storeName] = {};
       }
-      keysToRemove.forEach(k => window.localStorage.removeItem(k));
-    } catch (e) {}
 
-    if (fallbackMemoryStore[storeName]) {
-      fallbackMemoryStore[storeName] = {};
-    }
-
-    if (useFallbackStorage) {
-      return;
-    }
-
-    try {
-      const db = await getDB();
-      if (db) {
-        await db.clear(storeName);
+      if (useFallbackStorage) {
+        knownKeys.forEach(key => clearDeletionMarker(storeName, key));
+        return;
       }
-    } catch (err) {
-      console.error("[Storage] Failed to clear IndexedDB store:", err);
-    }
+
+      try {
+        if (db) {
+          await db.clear(storeName);
+          knownKeys.forEach(key => clearDeletionMarker(storeName, key));
+        }
+      } catch (err) {
+        console.error("[Storage] Failed to clear IndexedDB store:", err);
+        useFallbackStorage = true;
+        dbPromise = null;
+      }
+    });
   },
   
   async migrateFromLocalStorage<T>(storeName: string, key: string, lsKey: string, defaultValue: T): Promise<T> {
@@ -340,79 +404,70 @@ export const storageService = {
 
   async exportBackup(userEmail: string): Promise<GoalflowBackup> {
     const collections: Record<string, any> = {};
-    if (useFallbackStorage) {
-      for (const storeName of DATA_STORES) {
-        const val = readFromFallback<any>(storeName, userEmail);
-        if (val !== undefined) {
-          collections[storeName] = val;
-        }
-      }
-      return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
-    }
-    try {
-      const db = await getDB();
-      if (!db) return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
-      for (const storeName of DATA_STORES) {
-        try {
-          const data = await db.get(storeName, userEmail);
-          if (data !== undefined) {
-            collections[storeName] = data;
-          }
-        } catch (err) {
-          console.warn(`Error exporting store ${storeName}`, err);
-        }
-      }
-    } catch (e) {
-      console.warn("[Storage] Error getting db connection for export", e);
+    for (const storeName of DATA_STORES) {
+      const data = await storageService.get<any>(storeName, userEmail);
+      if (data !== undefined) collections[storeName] = data;
     }
     return { schemaVersion: BACKUP_SCHEMA_VERSION, exportedAt: new Date().toISOString(), checksum: await checksumCollections(collections), collections };
   },
 
   async importBackup(userEmail: string, backup: Record<string, any>, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
     const envelope = backup as Partial<GoalflowBackup>;
-    if (envelope.schemaVersion && envelope.schemaVersion > BACKUP_SCHEMA_VERSION) throw new Error('This backup was created by a newer Goalflow version.');
-    const collections = envelope.collections || backup;
-    if (!collections || typeof collections !== 'object') throw new Error('The backup does not contain typed collections.');
+    const collections = validateBackupCollections(backup);
     if (envelope.checksum) {
       const actualChecksum = await checksumCollections(collections);
       if (actualChecksum !== envelope.checksum) throw new Error('Backup checksum validation failed. The file may be incomplete or modified.');
     }
     await this.createLocalSnapshot(userEmail, 'before-restore');
 
-    if (useFallbackStorage) {
-      for (const storeName of DATA_STORES) {
-        if (collections[storeName] !== undefined) {
-          const current = readFromFallback(storeName, userEmail);
-          const value = mode === 'merge' ? mergeBackupCollection(current, collections[storeName]) : collections[storeName];
-          writeToFallback(storeName, userEmail, value);
+    await queueMutation(async () => {
+      if (useFallbackStorage) {
+        if (mode === 'replace') {
+          for (const storeName of DATA_STORES) {
+            if (fallbackMemoryStore[storeName]) delete fallbackMemoryStore[storeName][userEmail];
+            try {
+              window.localStorage.removeItem(recoveryKey(storeName, userEmail));
+              window.localStorage.removeItem(fallbackKey(storeName, userEmail));
+            } catch (_) {}
+          }
         }
+        for (const storeName of DATA_STORES) {
+          if (collections[storeName] !== undefined) {
+            const current = readFromFallback(storeName, userEmail);
+            const value = mode === 'merge' ? mergeBackupCollection(current, collections[storeName]) : collections[storeName];
+            writeToFallback(storeName, userEmail, value);
+          }
+        }
+        return;
       }
-      return;
-    }
-    try {
-      const db = await getDB();
-      if (!db) return;
-      const tx = db.transaction(DATA_STORES, 'readwrite');
-      for (const storeName of DATA_STORES) {
-        if (mode === 'replace') await tx.objectStore(storeName).delete(userEmail);
-        if (collections[storeName] !== undefined) {
-          try {
+
+      try {
+        const db = await getDB();
+        if (!db) return;
+        const tx = db.transaction(DATA_STORES, 'readwrite');
+        const committedValues: Array<{ storeName: string; value: unknown }> = [];
+        for (const storeName of DATA_STORES) {
+          if (mode === 'replace') await tx.objectStore(storeName).delete(userEmail);
+          if (collections[storeName] !== undefined) {
             const current = mode === 'merge' ? await tx.objectStore(storeName).get(userEmail) : undefined;
             const value = mode === 'merge' ? mergeBackupCollection(current, collections[storeName]) : collections[storeName];
             await tx.objectStore(storeName).put(value, userEmail);
-            try {
-              window.localStorage.setItem(`goalflow_dr_${storeName}_${userEmail}`, JSON.stringify(value));
-            } catch (e) {}
-          } catch (err) {
-            console.warn(`Error importing store ${storeName}`, err);
+            committedValues.push({ storeName, value });
           }
         }
+        await tx.done;
+        for (const storeName of DATA_STORES) {
+          if (mode === 'replace' && collections[storeName] === undefined) {
+            markDeleted(storeName, userEmail);
+            try { window.localStorage.removeItem(recoveryKey(storeName, userEmail)); } catch (_) {}
+          }
+        }
+        for (const { storeName, value } of committedValues) writeRecovery(storeName, userEmail, value);
+      } catch (e) {
+        console.warn("[Storage] Database import transaction failed", e);
+        throw e;
       }
-      await tx.done;
-    } catch (e) {
-      console.warn("[Storage] Database import transaction failed", e);
-      throw e;
-    }
+    });
   },
 
   async createLocalSnapshot(userEmail: string, reason: string): Promise<void> {

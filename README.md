@@ -42,10 +42,26 @@ AI is optional. To enable it, add `DEEPSEEK_API_KEY=...` to the ignored `.env.lo
 npm run lint
 npm test
 npm run build
-npm start
+npm run verify:server
+npm run verify:client-secrets
+npm audit --audit-level=high
+npm run verify:release
 ```
 
 The production server listens on `PORT` and exposes `/api/v1/health`. Client and server bundles are separated under `dist/client` and `dist/server`; production source maps are disabled.
+
+## Android
+
+Goalflow uses Capacitor to deliver the same React/domain/storage implementation as an Android application. Install Android Studio or the Android SDK, Java 21, and accept the SDK licenses before running:
+
+```bash
+npm run android:sync
+npm run android:test
+npm run android:lint
+npm run android:assembleDebug
+```
+
+The debug APK is produced at `android/app/build/outputs/apk/debug/app-debug.apk`. For cloud features in a packaged build, set the public API origin at build time, for example `VITE_API_ORIGIN=https://goalflow.example npm run android:sync`; local task execution remains available without a backend. Do not put credentials in `VITE_` variables. Release signing is intentionally not committed.
 
 ## Production setup
 

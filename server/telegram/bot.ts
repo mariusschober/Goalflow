@@ -215,6 +215,10 @@ export const createTelegramProcessor = (
   }
   if (command === "/move") {
     const [id, date] = parts;
+    if (!id || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      await send(config, message.chat.id, "Use <code>/move TASK_ID YYYY-MM-DD</code>.");
+      return;
+    }
     const parsed = parseTelegramCapture(`Move ${date ?? ""}`, today);
     const { error } = await database.rpc('goalflow_reschedule_task', {
       target_user_id: userId, target_task_id: id, target_local_date: today,

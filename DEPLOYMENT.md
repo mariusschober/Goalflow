@@ -4,7 +4,7 @@
 
 1. Create separate development, staging, and production projects.
 2. Disable public email signup. Configure the production Site URL and allowed redirect URLs.
-3. Apply `supabase/migrations/202607170001_foundation.sql`, then `202607180001_scheduled_execution.sql`.
+3. Apply `supabase/migrations/202607170001_foundation.sql`, then `202607180001_scheduled_execution.sql`, then every later forward-only migration such as `202608250001_reliability_hardening.sql`.
 4. Configure Telegram as a Custom OIDC provider with identifier `custom:telegram`, issuer `https://oauth.telegram.org`, PKCE enabled, scopes `openid profile telegram:bot_access`, and the provider setting `email_optional=true`. Use the callback URL shown by Supabase in BotFather's allowed URLs.
 5. Configure Resend as custom SMTP for owner magic links, recovery-email confirmation, and auth recovery.
 6. Confirm every application table has RLS enabled. The service-role key belongs only in Railway.
@@ -37,7 +37,7 @@ Set both browser-safe Supabase variables and server variables. Set Turnstile sit
 
 ## 5. Launch gates
 
-- CI passes TypeScript, unit tests, client/server builds, production startup, dependency audit, and secret scanning.
+- CI passes TypeScript, unit/property tests, client/server builds, production startup, dependency audit, client secret scanning, and the Android Gradle test/lint/debug-APK job.
 - Install and update work in Chrome and Safari; iOS safe areas and offline shell are verified.
 - Current remains unavailable until overdue work is resolved and today's order is confirmed.
 - Two devices can edit offline, reconnect, synchronize, and review a conflict without either version disappearing.
@@ -45,7 +45,22 @@ Set both browser-safe Supabase variables and server variables. Set Turnstile sit
 - Every original Goalflow module is accessible and AI consent is off by default.
 - Run an encrypted export/restore preview and a server snapshot restore drill before owner launch.
 
-## 6. Restore drill
+## 6. Reproducible release commands
+
+From a clean checkout:
+
+```bash
+npm ci
+npm run verify:release
+npm run android:sync
+npm run android:test
+npm run android:lint
+npm run android:assembleDebug
+```
+
+`verify:release` runs TypeScript, the full Vitest suite including property tests, production web/server builds, a production health check, the client secret scan, and the high-severity dependency audit. Android builds need Java 21 and a working Android SDK; the CI Android job exercises the same commands and uploads the debug APK.
+
+## 7. Restore drill
 
 Quarterly, select a recent object from the private `goalflow-backups` bucket, decrypt it offline with the separately held `BACKUP_MASTER_KEY`, verify the embedded SHA-256 checksum against `backup_metadata`, and restore into staging. Confirm tasks, habits, goals, advanced-module sync records, daily plans, and current-task order before recording the drill as successful.
 
