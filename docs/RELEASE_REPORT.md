@@ -43,7 +43,8 @@ These are the defects classified and remediated during this pass; they are not a
 | Client bundle secret scan | PASS — 27 built files scanned |
 | `npm audit --audit-level=high` | PASS — 0 vulnerabilities reported |
 | `CI=1 npm run android:sync` | PASS |
-| Gradle tests, lint, debug APK | NOT AVAILABLE — Android SDK/Gradle distribution/JDK 21 are unavailable in this environment |
+| Local Gradle tests, lint, debug APK | NOT AVAILABLE — Android SDK/Gradle distribution/JDK 21 are unavailable in this environment |
+| GitHub Actions clean-checkout web and Android gates | PASS — run `32793296539`; verify, secrets, and Android jobs all succeeded |
 | Browser E2E, screenshots, axe/accessibility runtime, install/offline browser exercise | NOT AVAILABLE — no browser executable is available |
 | Live Supabase/RLS identity tests | NOT AVAILABLE — no staging credentials/identities are available |
 | Live Telegram and AI-provider failure tests | NOT AVAILABLE — optional provider credentials are unavailable |
@@ -71,13 +72,15 @@ The production client build, manifest generation, service-worker generation, ser
 
 ## Android
 
-Capacitor configuration and Android project generation/synchronization pass. The project uses application ID `com.mariusschober.goalflow`, application name `Goalflow`, shared web/domain code, and version `0.1.0`. CI is configured to run `cap sync`, Gradle tests, lint, debug assembly, and upload `android/app/build/outputs/apk/debug/app-debug.apk`.
+Capacitor configuration and Android project generation/synchronization pass. The project uses application ID `com.mariusschober.goalflow`, application name `Goalflow`, shared web/domain code, and version `0.1.0`. GitHub Actions run `32793296539` passed `cap sync`, Gradle tests, lint, debug assembly, and artifact upload. The artifact is `Goalflow-0.1.0-debug.apk` inside the `goalflow-debug-apk` artifact; its SHA-256 is `96b37ab5d1555cf246ed624afac68c0fca1329394e75258d69a9c2694e49fbbd`.
 
 Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. No private signing material was added. A debug APK is not claimed as locally produced.
 
 ## Clean-room verification
 
-The branch update was performed through the GitHub API with a fast-forward guard from the authoritative starting SHA. A true shell-side fresh clone could not be created because the shell has no credentials for this private repository. GitHub Actions is configured to provide the clean checkout, dependency install, web verification, and Android build gates; its final run status and artifact availability must be reported from the remote run rather than assumed.
+GitHub Actions run `32793296539` performed a fresh checkout of implementation commit `5be4328fdff311e6aeae4108ce4fea0b7a00703b`, installed from the committed lockfile, passed lint, tests, production build, dependency audit, startup/health, secret scan, Capacitor synchronization, Gradle tests, Android lint, and debug APK assembly. The docs-only release-report commit does not alter executable source; its own push-triggered verification is tracked separately.
+
+A true shell-side fresh clone could not be created because the shell has no credentials for this private repository. The GitHub Actions clean checkout is the available clean-room execution evidence.
 
 ## External blockers
 
