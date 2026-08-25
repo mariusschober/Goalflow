@@ -129,6 +129,6 @@ describe("scheduling state-machine properties", () => {
       }
 
       expect(tasks.every(task => knownIds.has(task.id))).toBe(true);
-    }), { numRuns: 400, endOnFailure: true });
+    }), { numRuns: 400, seed: -117028276, endOnFailure: true });
   });
 });

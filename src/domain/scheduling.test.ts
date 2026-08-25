@@ -188,4 +188,27 @@ describe("habit instances", () => {
     expect(second.task).toBeUndefined();
     expect(second.tasks).toHaveLength(1);
   });
+
+  it("does not allow a habit instance to be moved onto another instance", () => {
+    const scheduleContext = context();
+    const first = generateHabitInstance([], {
+      id: "habit-1",
+      title: "Walk",
+      beforeFrog: false
+    }, scheduleContext);
+    const moved = rescheduleTask(first.tasks, first.task!.id, {
+      schedulePrecision: "day",
+      scheduledFor: "2026-07-19"
+    }, scheduleContext);
+    const withTodayInstance = generateHabitInstance(moved.tasks, {
+      id: "habit-1",
+      title: "Walk",
+      beforeFrog: false
+    }, scheduleContext);
+
+    expect(() => rescheduleTask(withTodayInstance.tasks, moved.task.id, {
+      schedulePrecision: "day",
+      scheduledFor: "2026-07-18"
+    }, scheduleContext)).toThrow("A habit instance already exists on that day.");
+  });
 });

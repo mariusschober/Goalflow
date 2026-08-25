@@ -80,6 +80,7 @@ export class SchedulingError extends Error {
       | "invalid_time"
       | "task_not_found"
       | "task_not_open"
+      | "duplicate_habit"
       | "frog_locked"
       | "children_required",
     message: string
@@ -311,6 +312,16 @@ export const rescheduleTask = (
   assertSchedule(schedule.schedulePrecision, schedule.scheduledFor, context.today, schedule.scheduledTime);
   let promotedToFrog = false;
   const result = replaceTask(tasks, taskId, (task) => {
+    if (task.habitId && schedule.schedulePrecision === "day") {
+      const duplicate = tasks.some((other) => other.id !== task.id
+        && isOpen(other)
+        && other.habitId === task.habitId
+        && other.schedulePrecision === "day"
+        && other.scheduledFor === schedule.scheduledFor);
+      if (duplicate) {
+        throw new SchedulingError("duplicate_habit", "A habit instance already exists on that day.");
+      }
+    }
     const currentSchedule = task.schedulePrecision === "month"
       ? `${task.scheduledFor}-01`
       : task.scheduledFor;

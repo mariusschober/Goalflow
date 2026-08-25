@@ -21,12 +21,12 @@ No intentional product-semantic changes were made. The changes preserve Current,
 
 ## Defects
 
-The review found and fixed defects in local mutation ordering, backup import atomicity and validation, sync metadata races, Current/planning determinism, local deletion reconciliation, duplicate completion handling, local-day/time-zone handling, API-origin configuration, Telegram validation, modal focus stability, and startup error recovery.
+The review found and fixed defects in local mutation ordering, backup import atomicity and validation, sync metadata races, Current/planning determinism, local deletion reconciliation, duplicate completion handling, duplicate habit rescheduling, local-day/time-zone handling, API-origin configuration, Telegram validation, modal focus stability, and startup error recovery.
 
 | Severity | Discovered | Fixed | Remaining |
 | --- | ---: | ---: | ---: |
 | P0 | 0 | 0 | 0 |
-| P1 | 6 | 6 | 0 |
+| P1 | 7 | 7 | 0 |
 | P2 | 8 | 8 | 0 |
 
 These are the defects classified and remediated during this pass; they are not a claim that unknown defects are impossible. No known fixable P0–P2 defect remains within the reviewed repository scope. Live-infrastructure checks that could reveal additional defects are listed as `NOT AVAILABLE` below.
@@ -38,8 +38,8 @@ These are the defects classified and remediated during this pass; they are not a
 | `CI=1 npm run verify:release` | PASS |
 | `npm ci --cache /tmp/goalflow-npm-cache` | PASS |
 | TypeScript compilation via `npm run lint` | PASS |
-| Unit/domain/storage tests | PASS — 6 files, 30 tests |
-| Property/state-machine test | PASS — 400 generated sequences, up to 120 operations each |
+| Unit/domain/storage tests | PASS — 6 files, 31 tests |
+| Property/state-machine test | PASS — 400 generated sequences, up to 120 operations each; preserved regression seed `-117028276` |
 | Client/server production build | PASS |
 | Production server startup and `/api/v1/health` | PASS |
 | Client bundle secret scan | PASS — 27 built files scanned |
@@ -56,7 +56,7 @@ These are the defects classified and remediated during this pass; they are not a
 
 ## Property and date/time testing
 
-The domain property test generates create, reschedule, skip, complete, drop, breakdown, reorder, and habit operations, checking identity, valid schedules, frog relationships, habit idempotency, and deterministic queue ordering after each operation. The suite includes deterministic regressions for planning-order changes, numeric creation timestamps, leap-day validity, local-day formatting across UTC/Canary/Berlin/New York/Tokyo, DST transition instants, storage rejection, interrupted import transactions, and backup round trips.
+The domain property test generates create, reschedule, skip, complete, drop, breakdown, reorder, and habit operations, checking identity, valid schedules, frog relationships, habit idempotency, and deterministic queue ordering after each operation. The suite includes deterministic regressions for planning-order changes, numeric creation timestamps, leap-day validity, duplicate habit rescheduling, local-day formatting across UTC/Canary/Berlin/New York/Tokyo, DST transition instants, storage rejection, interrupted import transactions, and backup round trips.
 
 ## Data integrity and recovery
 
