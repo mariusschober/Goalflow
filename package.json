@@ -21,9 +21,9 @@
     "build:client:test": "vite build --mode test",
     "android:sync:test": "npm run build:client:test && cap sync android",
     "android:test": "cd android && ./gradlew test",
-    "android:lint": "cd android && ./gradlew lintProductionDebug lintTestBuildDebug",
+    "android:lint": "cd android && ./gradlew lintProductionDebug lintSandboxDebug",
     "android:assembleDebug": "cd android && ./gradlew assembleProductionDebug",
-    "android:assembleTestDebug": "cd android && ./gradlew assembleTestBuildDebug",
+    "android:assembleTestDebug": "cd android && ./gradlew assembleSandboxDebug",
     "android:assembleRelease": "cd android && ./gradlew assembleProductionRelease",
     "check": "npm run lint && npm run test && npm run build"
   },

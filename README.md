@@ -71,7 +71,7 @@ npm run android:sync:test
 npm run android:assembleTestDebug
 ```
 
-The test APK is produced at `android/app/build/outputs/apk/testBuild/debug/app-testBuild-debug.apk`. It is labeled `Goalflow Test`, uses `com.mariusschober.goalflow.test`, and never enables production authentication or cloud synchronization.
+The test APK is produced at `android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk`. It is labeled `Goalflow Test`, uses `com.mariusschober.goalflow.test`, and never enables production authentication or cloud synchronization.
 
 ## Production setup
 

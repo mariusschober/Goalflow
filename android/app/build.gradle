@@ -21,7 +21,7 @@ android {
         production {
             dimension "environment"
         }
-        testBuild {
+        sandbox {
             dimension "environment"
             applicationIdSuffix ".test"
             versionNameSuffix "-test"

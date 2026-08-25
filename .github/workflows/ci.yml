@@ -75,5 +75,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: goalflow-test-debug-apk
-          path: android/app/build/outputs/apk/testBuild/debug/app-testBuild-debug.apk
+          path: android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk
           if-no-files-found: error

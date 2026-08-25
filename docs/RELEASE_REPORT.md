@@ -76,7 +76,7 @@ The production client build, manifest generation, service-worker generation, ser
 
 Capacitor configuration and Android project generation/synchronization pass. The production project uses application ID `com.mariusschober.goalflow` and application name `Goalflow`. The isolated test variant uses `com.mariusschober.goalflow.test`, is labeled `Goalflow Test`, accepts compile-time code `123456`, and stores data locally without production authentication or cloud synchronization. Both variants share the React/domain/storage implementation. The final branch CI run must provide the corresponding two APK artifacts; local Gradle execution remains unavailable.
 
-Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. CI is configured to build both `app-production-debug.apk` and `app-testBuild-debug.apk`. No private signing material was added.
+Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. CI is configured to build both `app-production-debug.apk` and `app-sandbox-debug.apk`. No private signing material was added.
 
 ## Clean-room verification
 
