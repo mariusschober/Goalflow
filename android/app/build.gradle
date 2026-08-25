@@ -16,6 +16,21 @@ android {
             ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
         }
     }
+    flavorDimensions "environment"
+    productFlavors {
+        production {
+            dimension "environment"
+        }
+        testBuild {
+            dimension "environment"
+            applicationIdSuffix ".test"
+            versionNameSuffix "-test"
+            resValue "string", "app_name", "Goalflow Test"
+            resValue "string", "title_activity_main", "Goalflow Test"
+            resValue "string", "package_name", "com.mariusschober.goalflow.test"
+            resValue "string", "custom_url_scheme", "com.mariusschober.goalflow.test"
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false

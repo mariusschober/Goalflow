@@ -8,8 +8,26 @@ export const telegramProvider = (configuredTelegramProvider.startsWith('custom:'
   ? configuredTelegramProvider
   : `custom:${configuredTelegramProvider}`) as `custom:${string}`;
 const localDemo = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_DEMO === 'true';
+const testBuild = import.meta.env.VITE_TEST_MODE === 'true';
+const testCode = import.meta.env.VITE_TEST_CODE || '';
+const testAccessStorageKey = 'goalflow-test-access';
 
-export const isLocalDemo = (): boolean => localDemo;
+export const isTestBuild = (): boolean => testBuild;
+export const isLocalDemo = (): boolean => localDemo || testBuild;
+
+export const hasTestAccess = (): boolean => testBuild
+  && typeof window !== 'undefined'
+  && window.localStorage.getItem(testAccessStorageKey) === 'granted';
+
+export const unlockTestBuild = (code: string): boolean => {
+  if (!testBuild || !testCode || code !== testCode || typeof window === 'undefined') return false;
+  window.localStorage.setItem(testAccessStorageKey, 'granted');
+  return true;
+};
+
+export const clearTestAccess = (): void => {
+  if (typeof window !== 'undefined') window.localStorage.removeItem(testAccessStorageKey);
+};
 
 export const apiUrl = (input: RequestInfo | URL): RequestInfo | URL => {
   if (!apiOrigin) return input;
@@ -113,9 +131,10 @@ export const activateTelegramSignup = async (session: Session): Promise<boolean>
   return Boolean(result.recoveryEmailRequired);
 };
 
-export const getLocalDemoUser = (): string | null => localDemo
-  ? (import.meta.env.VITE_OWNER_EMAIL || 'mris@tuta.io')
-  : null;
+export const getLocalDemoUser = (): string | null => {
+  if (testBuild) return 'test@goalflow.local';
+  return localDemo ? (import.meta.env.VITE_OWNER_EMAIL || 'mris@tuta.io') : null;
+};
 
 export const authenticatedFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
   const session = await getSession();

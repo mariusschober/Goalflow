@@ -58,7 +58,9 @@ npm run android:lint
 npm run android:assembleDebug
 ```
 
-`verify:release` runs TypeScript, the full Vitest suite including property tests, production web/server builds, a production health check, the client secret scan, and the high-severity dependency audit. Android builds need Java 21 and a working Android SDK; the CI Android job exercises the same commands and uploads the debug APK.
+`verify:release` runs TypeScript, the full Vitest suite including property tests, production web/server builds, a production health check, the client secret scan, and the high-severity dependency audit. Android builds need Java 21 and a working Android SDK; the CI Android job exercises the production and isolated test variants and uploads both debug APKs.
+
+The isolated test variant is built with `npm run android:sync:test` and `npm run android:assembleTestDebug`. It accepts only the compile-time test code `123456`, uses the application ID `com.mariusschober.goalflow.test`, stores data locally, and must never be used as a production authentication path.
 
 ## 7. Restore drill
 

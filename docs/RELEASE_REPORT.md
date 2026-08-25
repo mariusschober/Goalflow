@@ -15,7 +15,7 @@ No intentional product-semantic changes were made. The changes preserve Current,
 
 ## Audit completeness
 
-`docs/AUDIT_MANIFEST.md` accounts for 174 first-party paths: 143 executable/configuration/schema/documentation text paths and 31 binary/static assets. All relevant first-party paths are marked `REVIEWED`; unreviewed relevant files: 0. Generated Capacitor/WebView assets are intentionally reproducible build output and are not treated as hand-maintained source.
+`docs/AUDIT_MANIFEST.md` accounts for 177 first-party paths: 146 executable/configuration/schema/documentation text paths and 31 binary/static assets. All relevant first-party paths are marked `REVIEWED`; unreviewed relevant files: 0. Generated Capacitor/WebView assets are intentionally reproducible build output and are not treated as hand-maintained source.
 
 ## Defects
 
@@ -43,6 +43,8 @@ These are the defects classified and remediated during this pass; they are not a
 | Client bundle secret scan | PASS — 27 built files scanned |
 | `npm audit --audit-level=high` | PASS — 0 vulnerabilities reported |
 | `CI=1 npm run android:sync` | PASS |
+| `npm run verify:test-build` | PASS — test bundle contains the isolated gate; production bundle contains no `123456` |
+| `npm run android:sync:test` | PASS — isolated test web bundle synchronized into Capacitor |
 | Local Gradle tests, lint, debug APK | NOT AVAILABLE — Android SDK/Gradle distribution/JDK 21 are unavailable in this environment |
 | GitHub Actions clean-checkout web and Android gates | PASS — run `32793296539`; verify, secrets, and Android jobs all succeeded |
 | Browser E2E, screenshots, axe/accessibility runtime, install/offline browser exercise | NOT AVAILABLE — no browser executable is available |
@@ -72,9 +74,9 @@ The production client build, manifest generation, service-worker generation, ser
 
 ## Android
 
-Capacitor configuration and Android project generation/synchronization pass. The project uses application ID `com.mariusschober.goalflow`, application name `Goalflow`, shared web/domain code, and version `0.1.0`. GitHub Actions run `32793296539` passed `cap sync`, Gradle tests, lint, debug assembly, and artifact upload. The artifact is `Goalflow-0.1.0-debug.apk` inside the `goalflow-debug-apk` artifact; its SHA-256 is `96b37ab5d1555cf246ed624afac68c0fca1329394e75258d69a9c2694e49fbbd`.
+Capacitor configuration and Android project generation/synchronization pass. The production project uses application ID `com.mariusschober.goalflow` and application name `Goalflow`. The isolated test variant uses `com.mariusschober.goalflow.test`, is labeled `Goalflow Test`, accepts compile-time code `123456`, and stores data locally without production authentication or cloud synchronization. Both variants share the React/domain/storage implementation. The final branch CI run must provide the corresponding two APK artifacts; local Gradle execution remains unavailable.
 
-Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. No private signing material was added. A debug APK is not claimed as locally produced.
+Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. CI is configured to build both `app-production-debug.apk` and `app-testBuild-debug.apk`. No private signing material was added.
 
 ## Clean-room verification
 

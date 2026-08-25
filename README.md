@@ -46,6 +46,7 @@ npm run verify:server
 npm run verify:client-secrets
 npm audit --audit-level=high
 npm run verify:release
+npm run verify:test-build
 ```
 
 The production server listens on `PORT` and exposes `/api/v1/health`. Client and server bundles are separated under `dist/client` and `dist/server`; production source maps are disabled.
@@ -61,7 +62,16 @@ npm run android:lint
 npm run android:assembleDebug
 ```
 
-The debug APK is produced at `android/app/build/outputs/apk/debug/app-debug.apk`. For cloud features in a packaged build, set the public API origin at build time, for example `VITE_API_ORIGIN=https://goalflow.example npm run android:sync`; local task execution remains available without a backend. Do not put credentials in `VITE_` variables. Release signing is intentionally not committed.
+The production debug APK is produced at `android/app/build/outputs/apk/production/debug/app-production-debug.apk`. For cloud features in a packaged build, set the public API origin at build time, for example `VITE_API_ORIGIN=https://goalflow.example npm run android:sync`; local task execution remains available without a backend. Do not put credentials in `VITE_` variables. Release signing is intentionally not committed.
+
+To build the separate local test app, which accepts `123456` and uses a distinct Android application ID:
+
+```bash
+npm run android:sync:test
+npm run android:assembleTestDebug
+```
+
+The test APK is produced at `android/app/build/outputs/apk/testBuild/debug/app-testBuild-debug.apk`. It is labeled `Goalflow Test`, uses `com.mariusschober.goalflow.test`, and never enables production authentication or cloud synchronization.
 
 ## Production setup
 
