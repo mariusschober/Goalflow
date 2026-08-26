@@ -111,6 +111,7 @@ import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
 import androidx.compose.foundation.layout.RowScope
+import kotlinx.coroutines.launch
 
 private enum class RootDestination(val label: String) {
     CURRENT("Current"),
@@ -142,6 +143,7 @@ fun GoalflowRoot() {
     var backupAction by rememberSaveable { mutableStateOf<String?>(null) }
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
+    var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -229,12 +231,13 @@ fun GoalflowRoot() {
                         onAdd = { goalOpen = true }
                     )
                     RootDestination.SETTINGS -> SettingsScreen(
-                        signedIn = application.sessionStore.read() != null,
+                        signedIn = sessionActive,
                         canUseAuthentication = NativeConfig.canUseAuthentication,
                         canUseCloud = NativeConfig.canUseCloud,
                         onSignIn = { signInOpen = true },
                         onSignOut = {
                             application.sessionStore.clear()
+                            sessionActive = false
                             scope.launch { snackbarHostState.showSnackbar("Signed out. Local commitments stay here.") }
                         },
                         onExport = {

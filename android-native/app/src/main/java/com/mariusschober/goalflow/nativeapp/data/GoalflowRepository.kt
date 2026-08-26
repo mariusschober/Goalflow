@@ -15,7 +15,6 @@ import com.mariusschober.goalflow.nativeapp.domain.buildTodayQueue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import java.time.LocalDate
-import java.time.DayOfWeek
 import java.util.UUID
 
 class GoalflowRepository(
@@ -211,7 +210,7 @@ class GoalflowRepository(
         assertSchedule(SchedulePrecision.DAY, localDate, LocalDate.now().toString(), null)
         val date = LocalDate.parse(localDate)
         val allowed = habit.frequency == HabitFrequency.DAILY.name ||
-            date.dayOfWeek.value in habit.specificDays
+            date.dayOfWeek.value in habit.specificDays.split(",").mapNotNull(String::toIntOrNull)
         if (!allowed) return null
         val result = database.withTransaction {
             val existing = tasks.getAll().firstOrNull {
@@ -301,7 +300,7 @@ class GoalflowRepository(
     }
 
     suspend fun applyRemoteTaskSnapshot(payload: String) {
-        val remoteTasks = GoalflowJson.parseTasks(payload)
+        val remoteTasks = GoalflowJson.parseTasks(payload, strict = true)
         database.withTransaction {
             tasks.deleteAll()
             tasks.insertAll(remoteTasks.map(::toEntity))
@@ -310,7 +309,7 @@ class GoalflowRepository(
     }
 
     suspend fun applyRemoteGoalSnapshot(payload: String) {
-        val remoteGoals = GoalflowJson.parseGoals(payload)
+        val remoteGoals = GoalflowJson.parseGoals(payload, strict = true)
         database.withTransaction {
             goals.deleteAll()
             goals.insertAll(remoteGoals.map(::toEntity))
