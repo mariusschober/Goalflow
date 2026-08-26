@@ -5,6 +5,8 @@ import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.domain.TaskSource
 import com.mariusschober.goalflow.nativeapp.domain.TaskStatus
+import com.mariusschober.goalflow.nativeapp.domain.isRealLocalDay
+import com.mariusschober.goalflow.nativeapp.domain.isRealLocalMonth
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
@@ -62,22 +64,40 @@ object GoalflowJson {
         }
     }
 
-    fun parseTasks(payload: String): List<GoalflowTask> {
+    fun parseTasks(payload: String, strict: Boolean = false): List<GoalflowTask> {
         val array = JSONArray(payload)
         return buildList(array.length()) {
             for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
+                val item = array.optJSONObject(index) ?: if (strict) {
+                    throw IllegalArgumentException("Task payload contains a non-object record.")
+                } else continue
                 val id = item.optString("id").trim()
                 val title = item.optString("title").trim()
-                if (id.isBlank() || title.isBlank()) continue
+                if (id.isBlank() || title.isBlank()) {
+                    if (strict) throw IllegalArgumentException("Task payload contains an invalid record.")
+                    continue
+                }
                 val precision = when (item.optString("schedulePrecision").lowercase()) {
                     "month" -> SchedulePrecision.MONTH
                     else -> SchedulePrecision.DAY
                 }
-                val schedule = item.optString("scheduledFor").ifBlank {
+                val rawSchedule = item.optString("scheduledFor").ifBlank {
                     item.optString("dateAssigned")
                 }
-                if (schedule.isBlank()) continue
+                val schedule = if (precision == SchedulePrecision.MONTH) rawSchedule.take(7) else rawSchedule.take(10)
+                if (schedule.isBlank()) {
+                    if (strict) throw IllegalArgumentException("Task payload contains an unscheduled record.")
+                    continue
+                }
+                val validSchedule = if (precision == SchedulePrecision.DAY) {
+                    isRealLocalDay(schedule)
+                } else {
+                    isRealLocalMonth(schedule)
+                }
+                if (!validSchedule) {
+                    if (strict) throw IllegalArgumentException("Task payload contains an invalid schedule.")
+                    continue
+                }
                 val status = when {
                     item.optString("lifecycleStatus").lowercase() == "broken_down" -> TaskStatus.BROKEN_DOWN
                     item.optString("lifecycleStatus").lowercase() == "archived" -> TaskStatus.ARCHIVED
@@ -112,14 +132,19 @@ object GoalflowJson {
         }
     }
 
-    fun parseGoals(payload: String): List<GoalflowGoal> {
+    fun parseGoals(payload: String, strict: Boolean = false): List<GoalflowGoal> {
         val array = JSONArray(payload)
         return buildList(array.length()) {
             for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
+                val item = array.optJSONObject(index) ?: if (strict) {
+                    throw IllegalArgumentException("Goal payload contains a non-object record.")
+                } else continue
                 val id = item.optString("id").trim()
                 val name = item.optString("name").trim()
-                if (id.isBlank() || name.isBlank()) continue
+                if (id.isBlank() || name.isBlank()) {
+                    if (strict) throw IllegalArgumentException("Goal payload contains an invalid record.")
+                    continue
+                }
                 add(
                     GoalflowGoal(
                         id = id,
