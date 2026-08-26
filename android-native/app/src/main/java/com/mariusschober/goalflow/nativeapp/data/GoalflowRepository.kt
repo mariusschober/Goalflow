@@ -2,6 +2,7 @@ package com.mariusschober.goalflow.nativeapp.data
 
 import androidx.room.withTransaction
 import com.mariusschober.goalflow.nativeapp.domain.DailyPlan
+import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
@@ -86,6 +87,63 @@ class GoalflowRepository(
             true
         }
         if (changed) onMutation()
+    }
+
+    /** Explicitly closes an open commitment without pretending it was completed. */
+    suspend fun dropTask(id: String) {
+        val changed = database.withTransaction {
+            val task = tasks.getAll().firstOrNull { it.id == id }
+                ?: throw SchedulingException("Task not found.")
+            if (task.status != TaskStatus.OPEN.name) return@withTransaction false
+            tasks.update(
+                task.copy(
+                    status = TaskStatus.DROPPED.name,
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+            enqueueSnapshotInTransaction("tasks", GoalflowJson.tasksPayload(tasks.getAll().map(::toDomain)).toString())
+            true
+        }
+        if (changed) onMutation()
+    }
+
+    /** Closes the parent and creates every next action atomically. */
+    suspend fun breakDownTask(id: String, children: List<BreakdownChild>) {
+        if (children.isEmpty()) throw SchedulingException("Add at least one scheduled next action.")
+        if (children.size > 50) throw SchedulingException("A breakdown can contain at most 50 actions.")
+        val today = LocalDate.now().toString()
+        database.withTransaction {
+            val parent = tasks.getAll().firstOrNull { it.id == id }
+                ?: throw SchedulingException("Task not found.")
+            if (parent.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be broken down.")
+            val now = System.currentTimeMillis()
+            val created = children.mapIndexed { index, child ->
+                val title = child.title.trim()
+                if (title.isBlank()) throw SchedulingException("Each next action needs a title.")
+                assertSchedule(child.schedulePrecision, child.scheduledFor, today, child.scheduledTime)
+                GoalflowTask(
+                    id = UUID.randomUUID().toString(),
+                    title = title,
+                    notes = child.notes.trim(),
+                    schedulePrecision = child.schedulePrecision,
+                    scheduledFor = child.scheduledFor,
+                    scheduledTime = child.scheduledTime,
+                    plannedOrder = parent.plannedOrder + index,
+                    status = TaskStatus.OPEN,
+                    isFrog = false,
+                    beforeFrog = false,
+                    source = TaskSource.MANUAL,
+                    goalId = parent.goalId,
+                    parentTaskId = parent.id,
+                    createdAt = now,
+                    updatedAt = now
+                )
+            }
+            tasks.update(parent.copy(status = TaskStatus.BROKEN_DOWN.name, updatedAt = now))
+            tasks.insertAll(created.map(::toEntity))
+            enqueueSnapshotInTransaction("tasks", GoalflowJson.tasksPayload(tasks.getAll().map(::toDomain)).toString())
+        }
+        onMutation()
     }
 
     suspend fun rescheduleTask(id: String, scheduledFor: String) {

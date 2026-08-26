@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
@@ -89,6 +90,7 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
     fun completeTask(task: GoalflowTask) {
         if (!completing.add(task.id)) return
         viewModelScope.launch {
+            clearError()
             runCatching { repository.completeTask(task.id) }
                 .onSuccess { _notice.value = "Done. Keep going." }
                 .onFailure { failure -> _error.value = failure.message ?: "The task could not be completed." }
@@ -96,8 +98,30 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
         }
     }
 
+    fun dropTask(task: GoalflowTask) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.dropTask(task.id) }
+                .onSuccess { _notice.value = "Commitment dropped explicitly" }
+                .onFailure { failure -> _error.value = failure.message ?: "The commitment could not be dropped." }
+        }
+    }
+
+    fun breakDownTask(task: GoalflowTask, children: List<BreakdownChild>, onComplete: () -> Unit) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.breakDownTask(task.id, children) }
+                .onSuccess {
+                    _notice.value = "Broken down into next actions"
+                    onComplete()
+                }
+                .onFailure { failure -> _error.value = failure.message ?: "The commitment could not be broken down." }
+        }
+    }
+
     fun rescheduleTask(task: GoalflowTask, scheduledFor: String) {
         viewModelScope.launch {
+            clearError()
             runCatching { repository.rescheduleTask(task.id, scheduledFor) }
                 .onSuccess { _notice.value = "Day saved locally" }
                 .onFailure { failure -> _error.value = failure.message ?: "The task could not be rescheduled." }
@@ -106,6 +130,7 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
 
     fun moveTask(localDate: String, taskId: String, direction: Int) {
         viewModelScope.launch {
+            clearError()
             val queue = com.mariusschober.goalflow.nativeapp.domain.buildTodayQueue(tasks.value, localDate)
             val currentIndex = queue.indexOfFirst { it.id == taskId }
             val targetIndex = currentIndex + direction
@@ -121,6 +146,7 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
 
     fun confirmPlan(localDate: String, orderedIds: List<String>) {
         viewModelScope.launch {
+            clearError()
             runCatching { repository.confirmPlan(localDate, orderedIds) }
                 .onSuccess { _notice.value = "Plan confirmed" }
                 .onFailure { failure -> _error.value = failure.message ?: "The plan changed. Review it again." }

@@ -67,6 +67,7 @@ import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -93,11 +94,15 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mariusschober.goalflow.nativeapp.GoalflowApplication
 import com.mariusschober.goalflow.nativeapp.R
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
+import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.data.BackupFormatException
@@ -144,9 +149,21 @@ fun GoalflowRoot() {
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
     var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
+    var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                sessionActive = application.sessionStore.read() != null
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -209,6 +226,11 @@ fun GoalflowRoot() {
                         onComplete = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.completeTask(task)
+                        },
+                        onBreakDown = { breakdownTask = it },
+                        onDrop = { task ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            goalflowViewModel.dropTask(task)
                         }
                     )
                     RootDestination.PLANNING -> PlanningScreen(
@@ -224,7 +246,11 @@ fun GoalflowRoot() {
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.confirmPlan(date, ids)
                         },
-                        onScheduleMonthTask = { datePickerForTask = it }
+                        onScheduleMonthTask = { datePickerForTask = it },
+                        onReschedule = { task, date -> goalflowViewModel.rescheduleTask(task, date) },
+                        onComplete = { task -> goalflowViewModel.completeTask(task) },
+                        onBreakDown = { breakdownTask = it },
+                        onDrop = { task -> goalflowViewModel.dropTask(task) }
                     )
                     RootDestination.GOALS -> GoalsScreen(
                         goals = goals,
@@ -294,6 +320,24 @@ fun GoalflowRoot() {
             onConfirm = { date ->
                 goalflowViewModel.rescheduleTask(task, date)
                 datePickerForTask = null
+            }
+        )
+    }
+
+    breakdownTask?.let { task ->
+        BreakdownDialog(
+            task = task,
+            error = error,
+            onDismiss = {
+                goalflowViewModel.clearError()
+                breakdownTask = null
+            },
+            onConfirm = { titles ->
+                val todayForChildren = today
+                goalflowViewModel.breakDownTask(
+                    task,
+                    titles.map { title -> BreakdownChild(title = title, scheduledFor = todayForChildren) }
+                ) { breakdownTask = null }
             }
         )
     }
@@ -390,7 +434,9 @@ private fun CurrentScreen(
     currentTask: GoalflowTask?,
     onCapture: () -> Unit,
     onPlanning: () -> Unit,
-    onComplete: (GoalflowTask) -> Unit
+    onComplete: (GoalflowTask) -> Unit,
+    onBreakDown: (GoalflowTask) -> Unit,
+    onDrop: (GoalflowTask) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -425,7 +471,7 @@ private fun CurrentScreen(
                     onClick = onPlanning
                 )
                 is PlanningGate.Ready -> currentTask?.let { task ->
-                    CurrentTaskCard(task, gate.queue.size, onComplete)
+                    CurrentTaskCard(task, gate.queue.size, onComplete, onBreakDown, onDrop)
                 }
             }
         }
@@ -503,9 +549,10 @@ private fun PlanningRequiredCard(title: String, body: String, onClick: () -> Uni
 private fun CurrentTaskCard(
     task: GoalflowTask,
     remaining: Int,
-    onComplete: (GoalflowTask) -> Unit
+    onComplete: (GoalflowTask) -> Unit,
+    onBreakDown: (GoalflowTask) -> Unit,
+    onDrop: (GoalflowTask) -> Unit
 ) {
-    var completing by remember(task.id) { mutableStateOf(false) }
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (task.isFrog) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
@@ -535,12 +582,8 @@ private fun CurrentTaskCard(
             }
             Button(
                 onClick = {
-                    if (!completing) {
-                        completing = true
-                        onComplete(task)
-                    }
+                    onComplete(task)
                 },
-                enabled = !completing,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(58.dp)
@@ -550,6 +593,10 @@ private fun CurrentTaskCard(
                 Icon(Icons.Rounded.Check, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Complete")
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                TextButton(onClick = { onBreakDown(task) }) { Text("Break down") }
+                TextButton(onClick = { onDrop(task) }) { Text("Drop explicitly") }
             }
         }
     }
@@ -563,12 +610,19 @@ private fun PlanningScreen(
     onCapture: () -> Unit,
     onMove: (String, String, Int) -> Unit,
     onConfirm: (String, List<String>) -> Unit,
-    onScheduleMonthTask: (GoalflowTask) -> Unit
+    onScheduleMonthTask: (GoalflowTask) -> Unit,
+    onReschedule: (GoalflowTask, String) -> Unit,
+    onComplete: (GoalflowTask) -> Unit,
+    onBreakDown: (GoalflowTask) -> Unit,
+    onDrop: (GoalflowTask) -> Unit
 ) {
     val queue = (gate as? PlanningGate.DailyPlanningRequired)?.taskIds
         ?.mapNotNull { id -> tasks.find { it.id == id } }
         ?: (gate as? PlanningGate.Ready)?.queue.orEmpty()
     val monthlyTasks = (gate as? PlanningGate.MonthlyPlanningRequired)?.taskIds
+        ?.mapNotNull { id -> tasks.find { it.id == id } }
+        .orEmpty()
+    val overdueTasks = (gate as? PlanningGate.DailyPlanningRequired)?.overdueTaskIds
         ?.mapNotNull { id -> tasks.find { it.id == id } }
         .orEmpty()
 
@@ -598,33 +652,53 @@ private fun PlanningScreen(
             items(monthlyTasks, key = { it.id }) { task ->
                 MonthTaskRow(task, onScheduleMonthTask)
             }
-        } else if (queue.isNotEmpty()) {
-            item {
-                PlanningHeaderCard(
-                    title = if (gate is PlanningGate.Ready) "Today's order is confirmed" else "Decide the order",
-                    body = if (gate is PlanningGate.Ready) "Current will show one task at a time, beginning with this order." else "Move the commitments into the order you are willing to execute."
-                )
-            }
-            items(queue, key = { it.id }) { task ->
-                PlannedTaskRow(
-                    task = task,
-                    isFirst = queue.firstOrNull()?.id == task.id,
-                    isLast = queue.lastOrNull()?.id == task.id,
-                    onMove = { direction -> onMove(today, task.id, direction) }
-                )
-            }
-            if (gate is PlanningGate.DailyPlanningRequired) {
+        } else {
+            if (overdueTasks.isNotEmpty()) {
                 item {
-                    Button(
-                        onClick = { onConfirm(today, queue.map { it.id }) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(56.dp)
-                    ) { Text("Confirm this order") }
+                    PlanningHeaderCard(
+                        title = "Resolve overdue commitments",
+                        body = "Nothing disappears because it became inconvenient. Move ordinary work to today, complete it, break it down, or drop it explicitly."
+                    )
+                }
+                items(overdueTasks, key = { it.id }) { task ->
+                    OverdueTaskRow(
+                        task = task,
+                        today = today,
+                        onReschedule = onReschedule,
+                        onComplete = onComplete,
+                        onBreakDown = onBreakDown,
+                        onDrop = onDrop
+                    )
                 }
             }
-        } else {
-            item { EmptyPlanning(onCapture) }
+            if (queue.isNotEmpty()) {
+                item {
+                    PlanningHeaderCard(
+                        title = if (gate is PlanningGate.Ready) "Today's order is confirmed" else "Decide the order",
+                        body = if (gate is PlanningGate.Ready) "Current will show one task at a time, beginning with this order." else "Move the commitments into the order you are willing to execute."
+                    )
+                }
+                items(queue, key = { it.id }) { task ->
+                    PlannedTaskRow(
+                        task = task,
+                        isFirst = queue.firstOrNull()?.id == task.id,
+                        isLast = queue.lastOrNull()?.id == task.id,
+                        onMove = { direction -> onMove(today, task.id, direction) }
+                    )
+                }
+                if (gate is PlanningGate.DailyPlanningRequired) {
+                    item {
+                        Button(
+                            onClick = { onConfirm(today, queue.map { it.id }) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(56.dp)
+                        ) { Text("Confirm this order") }
+                    }
+                }
+            } else if (overdueTasks.isEmpty()) {
+                item { EmptyPlanning(onCapture) }
+            }
         }
     }
 }
@@ -635,6 +709,52 @@ private fun PlanningHeaderCard(title: String, body: String) {
         Column(modifier = Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
             Text(body, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+        }
+    }
+}
+
+@Composable
+private fun OverdueTaskRow(
+    task: GoalflowTask,
+    today: String,
+    onReschedule: (GoalflowTask, String) -> Unit,
+    onComplete: (GoalflowTask) -> Unit,
+    onBreakDown: (GoalflowTask) -> Unit,
+    onDrop: (GoalflowTask) -> Unit
+) {
+    Card(shape = RoundedCornerShape(20.dp)) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (task.isFrog) {
+                    Icon(Icons.Rounded.Flag, contentDescription = "Frog", tint = MaterialTheme.colorScheme.secondary)
+                    Text("FROG", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
+                } else {
+                    Text("OVERDUE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.weight(1f))
+                Text(task.scheduledFor, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (task.isFrog) {
+                Text(
+                    "This frog cannot be moved forward. Complete it, break it down, or drop it explicitly.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                OutlinedButton(
+                    onClick = { onReschedule(task, today) },
+                    modifier = Modifier.fillMaxWidth().height(50.dp)
+                ) { Text("Move to today") }
+            }
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                TextButton(onClick = { onComplete(task) }) { Text("Complete") }
+                TextButton(onClick = { onBreakDown(task) }) { Text("Break down") }
+                TextButton(onClick = { onDrop(task) }) { Text("Drop") }
+            }
         }
     }
 }
@@ -1012,6 +1132,58 @@ private fun GoalSheet(error: String?, onDismiss: () -> Unit, onSave: (String, St
             Button(onClick = { onSave(name, description) }, enabled = name.isNotBlank(), modifier = Modifier.fillMaxWidth().height(56.dp)) { Text("Save goal") }
         }
     }
+}
+
+@Composable
+private fun BreakdownDialog(
+    task: GoalflowTask,
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit
+) {
+    var titles by rememberSaveable(task.id) { mutableStateOf(listOf("")) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Break down commitment") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Close “${task.title}” by naming the next executable actions. Each one is scheduled for today.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                titles.forEachIndexed { index, title ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = title,
+                            onValueChange = { value ->
+                                titles = titles.toMutableList().also { it[index] = value }
+                            },
+                            modifier = Modifier.weight(1f),
+                            label = { Text("Next action ${index + 1}") },
+                            singleLine = true,
+                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Next)
+                        )
+                        if (titles.size > 1) {
+                            TextButton(onClick = { titles = titles.filterIndexed { itemIndex, _ -> itemIndex != index } }) {
+                                Text("Remove")
+                            }
+                        }
+                    }
+                }
+                if (titles.size < 5) {
+                    TextButton(onClick = { titles = titles + "" }) { Text("Add another action") }
+                }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onConfirm(titles.map(String::trim).filter(String::isNotBlank)) },
+                enabled = titles.any { it.isNotBlank() }
+            ) { Text("Create next actions") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

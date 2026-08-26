@@ -69,6 +69,14 @@ data class DailyPlan(
     val taskIds: List<String>
 )
 
+data class BreakdownChild(
+    val title: String,
+    val notes: String = "",
+    val schedulePrecision: SchedulePrecision = SchedulePrecision.DAY,
+    val scheduledFor: String,
+    val scheduledTime: String? = null
+)
+
 sealed interface PlanningGate {
     data object Empty : PlanningGate
     data class MonthlyPlanningRequired(val month: String, val taskIds: List<String>) : PlanningGate
