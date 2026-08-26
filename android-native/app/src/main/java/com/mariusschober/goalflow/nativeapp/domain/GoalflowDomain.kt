@@ -1,0 +1,175 @@
+package com.mariusschober.goalflow.nativeapp.domain
+
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.YearMonth
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
+
+enum class SchedulePrecision { DAY, MONTH }
+
+enum class TaskStatus { OPEN, COMPLETED, BROKEN_DOWN, DROPPED, ARCHIVED }
+
+enum class TaskSource { MANUAL, HABIT, TELEGRAM, SHARE, AI, MIGRATION }
+
+data class GoalflowTask(
+    val id: String,
+    val title: String,
+    val notes: String = "",
+    val schedulePrecision: SchedulePrecision,
+    val scheduledFor: String,
+    val scheduledTime: String? = null,
+    val plannedOrder: Int = 0,
+    val status: TaskStatus = TaskStatus.OPEN,
+    val isFrog: Boolean = false,
+    val beforeFrog: Boolean = false,
+    val frogFailures: Int = 0,
+    val source: TaskSource = TaskSource.MANUAL,
+    val goalId: String? = null,
+    val parentTaskId: String? = null,
+    val habitId: String? = null,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val completedAt: Long? = null,
+    val deletedAt: Long? = null
+)
+
+data class GoalflowGoal(
+    val id: String,
+    val name: String,
+    val description: String = "",
+    val deadline: String? = null,
+    val completedTasks: Int = 0,
+    val color: String = "#315C4B",
+    val createdAt: Long,
+    val excitement: Int? = null,
+    val roi: Int? = null
+)
+
+data class DailyPlan(
+    val localDate: String,
+    val confirmedAt: Long,
+    val taskIds: List<String>
+)
+
+sealed interface PlanningGate {
+    data object Empty : PlanningGate
+    data class MonthlyPlanningRequired(val month: String, val taskIds: List<String>) : PlanningGate
+    data class DailyPlanningRequired(
+        val localDate: String,
+        val overdueTaskIds: List<String>,
+        val taskIds: List<String>
+    ) : PlanningGate
+    data class Ready(val queue: List<GoalflowTask>) : PlanningGate
+}
+
+class SchedulingException(message: String) : IllegalArgumentException(message)
+
+private val dayFormatter = DateTimeFormatter.ISO_LOCAL_DATE
+private val monthFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
+private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
+
+fun isRealLocalDay(value: String): Boolean = try {
+    LocalDate.parse(value, dayFormatter)
+    true
+} catch (_: DateTimeParseException) {
+    false
+}
+
+fun isRealLocalMonth(value: String): Boolean = try {
+    YearMonth.parse(value, monthFormatter)
+    true
+} catch (_: DateTimeParseException) {
+    false
+}
+
+fun assertSchedule(
+    precision: SchedulePrecision,
+    scheduledFor: String,
+    today: String,
+    scheduledTime: String?
+) {
+    if (!isRealLocalDay(today)) throw SchedulingException("The local day is invalid.")
+    if (scheduledTime != null) {
+        try {
+            LocalTime.parse(scheduledTime, timeFormatter)
+        } catch (_: DateTimeParseException) {
+            throw SchedulingException("Time must use HH:mm.")
+        }
+    }
+    when (precision) {
+        SchedulePrecision.DAY -> if (!isRealLocalDay(scheduledFor)) {
+            throw SchedulingException("Choose a valid calendar day.")
+        }
+        SchedulePrecision.MONTH -> {
+            if (!isRealLocalMonth(scheduledFor)) throw SchedulingException("Choose a valid month.")
+            if (scheduledFor <= today.substring(0, 7)) {
+                throw SchedulingException("The current or a past month needs an exact day.")
+            }
+            if (scheduledTime != null) throw SchedulingException("A time needs an exact day.")
+        }
+    }
+}
+
+private fun groupRank(task: GoalflowTask): Int = when {
+    task.beforeFrog && task.habitId != null -> 0
+    task.isFrog -> 1
+    else -> 2
+}
+
+private fun compareCreatedAt(left: Long, right: Long): Int = left.compareTo(right)
+
+val goalflowTaskComparator = Comparator<GoalflowTask> { left, right ->
+    val group = groupRank(left).compareTo(groupRank(right))
+    if (group != 0) return@Comparator group
+    val order = left.plannedOrder.compareTo(right.plannedOrder)
+    if (order != 0) return@Comparator order
+    val time = (left.scheduledTime ?: "99:99").compareTo(right.scheduledTime ?: "99:99")
+    if (time != 0) return@Comparator time
+    val created = compareCreatedAt(left.createdAt, right.createdAt)
+    if (created != 0) return@Comparator created
+    left.id.compareTo(right.id)
+}
+
+fun buildTodayQueue(tasks: List<GoalflowTask>, today: String): List<GoalflowTask> = tasks
+    .filter {
+        it.status == TaskStatus.OPEN &&
+            it.deletedAt == null &&
+            it.schedulePrecision == SchedulePrecision.DAY &&
+            it.scheduledFor == today
+    }
+    .sortedWith(goalflowTaskComparator)
+
+fun planningGate(
+    tasks: List<GoalflowTask>,
+    today: String,
+    plan: DailyPlan?
+): PlanningGate {
+    val currentMonth = today.substring(0, 7)
+    val monthly = tasks.filter {
+        it.status == TaskStatus.OPEN &&
+            it.deletedAt == null &&
+            it.schedulePrecision == SchedulePrecision.MONTH &&
+            it.scheduledFor <= currentMonth
+    }
+    if (monthly.isNotEmpty()) return PlanningGate.MonthlyPlanningRequired(
+        month = currentMonth,
+        taskIds = monthly.map { it.id }
+    )
+
+    val overdue = tasks.filter {
+        it.status == TaskStatus.OPEN &&
+            it.deletedAt == null &&
+            it.schedulePrecision == SchedulePrecision.DAY &&
+            it.scheduledFor < today
+    }
+    val queue = buildTodayQueue(tasks, today)
+    val queueIds = queue.map { it.id }
+    val planIds = plan?.takeIf { it.localDate == today }?.taskIds.orEmpty()
+        .filter { queueIds.contains(it) }
+    val matches = planIds.size == queueIds.size && planIds == queueIds
+    if (overdue.isNotEmpty() || (queue.isNotEmpty() && !matches)) {
+        return PlanningGate.DailyPlanningRequired(today, overdue.map { it.id }, queueIds)
+    }
+    return if (queue.isEmpty()) PlanningGate.Empty else PlanningGate.Ready(queue)
+}

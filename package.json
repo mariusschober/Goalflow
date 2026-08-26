@@ -25,7 +25,12 @@
     "android:assembleDebug": "cd android && ./gradlew assembleProductionDebug",
     "android:assembleTestDebug": "cd android && ./gradlew assembleSandboxDebug",
     "android:assembleRelease": "cd android && ./gradlew assembleProductionRelease",
-    "check": "npm run lint && npm run test && npm run build"
+    "check": "npm run lint && npm run test && npm run build",
+    "native:android:test": "cd android-native && ./gradlew test",
+    "native:android:lint": "cd android-native && ./gradlew lint",
+    "native:android:assembleDebug": "cd android-native && ./gradlew assembleDebug",
+    "native:android:assembleRelease": "cd android-native && ./gradlew assembleRelease",
+    "native:android:check": "npm run native:android:test && npm run native:android:lint && npm run native:android:assembleDebug"
   },
   "dependencies": {
     "@capacitor/android": "^7.6.8",

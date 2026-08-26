@@ -1,0 +1,7 @@
+<resources>
+    <color name="goalflow_background">#F8F7F3</color>
+    <color name="goalflow_dark_background">#121412</color>
+    <color name="goalflow_yellow">#E2B93B</color>
+    <color name="goalflow_green">#315C4B</color>
+    <color name="goalflow_ink">#1F2421</color>
+</resources>
