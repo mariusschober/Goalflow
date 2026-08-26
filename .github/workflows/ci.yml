@@ -106,6 +106,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: goalflow-native-debug-apk
-          path: android-native/app/build/outputs/apk/dev/debug/app-dev-debug.apk
+          path: android-native/app/build/outputs/apk/debug/app-dev-debug.apk
           if-no-files-found: error
 
