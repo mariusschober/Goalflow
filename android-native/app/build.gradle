@@ -85,6 +85,9 @@ dependencies {
     debugImplementation "androidx.compose.ui:ui-tooling"
 
     testImplementation "junit:junit:4.13.2"
+    // Android's platform org.json methods are stubs in JVM unit tests.
+    // Keep production on the platform API while giving backup tests a real implementation.
+    testImplementation "org.json:json:20240303"
     testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0"
     androidTestImplementation platform("androidx.compose:compose-bom:2024.12.01")
     androidTestImplementation "androidx.test.ext:junit:1.2.1"

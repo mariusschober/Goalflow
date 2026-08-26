@@ -13,6 +13,7 @@ class GoalflowDomainTest {
         order: Int = 0,
         frog: Boolean = false,
         beforeFrog: Boolean = false,
+        habitId: String? = null,
         status: TaskStatus = TaskStatus.OPEN,
         precision: SchedulePrecision = SchedulePrecision.DAY
     ) = GoalflowTask(
@@ -24,6 +25,7 @@ class GoalflowDomainTest {
         status = status,
         isFrog = frog,
         beforeFrog = beforeFrog,
+        habitId = habitId,
         createdAt = id.hashCode().toLong(),
         updatedAt = id.hashCode().toLong()
     )
@@ -34,7 +36,7 @@ class GoalflowDomainTest {
             listOf(
                 task("later", order = 0),
                 task("frog", order = 9, frog = true),
-                task("before", order = 10, beforeFrog = true, frog = true),
+                task("before", order = 10, beforeFrog = true, habitId = "anchor"),
                 task("done", status = TaskStatus.COMPLETED),
                 task("other-day", day = "2026-08-27")
             ),
