@@ -28,8 +28,9 @@ From the repository root:
 ./android-native/gradlew -p android-native assembleRelease
 ```
 
-The native wrapper delegates to the repository’s checked-in Android wrapper so
-there is one Gradle distribution configuration to maintain. The debug package
+The native project carries the same checked-in Gradle wrapper distribution
+configuration as the existing Android target so a clean checkout does not
+depend on a developer-installed Gradle binary. The debug package
 uses the safe application id `com.mariusschober.goalflow.dev`; the release
 package uses `com.mariusschober.goalflow` and has no private signing material
 in the repository.

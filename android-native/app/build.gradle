@@ -5,6 +5,16 @@ plugins {
     id "org.jetbrains.kotlin.plugin.compose"
 }
 
+kotlin {
+    jvmToolchain(21)
+}
+
+def goalflowBuildConfig = { propertyName ->
+    (project.findProperty(propertyName) ?: "").toString()
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+}
+
 android {
     namespace "com.mariusschober.goalflow.nativeapp"
     compileSdk 35
@@ -26,7 +36,9 @@ android {
         versionName "0.2.0-native"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary true }
-        buildConfigField "String", "API_ORIGIN", "\"${project.findProperty('goalflowApiOrigin') ?: ''}\""
+        buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
+        buildConfigField "String", "SUPABASE_URL", "\"${goalflowBuildConfig('goalflowSupabaseUrl')}\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${goalflowBuildConfig('goalflowSupabaseAnonKey')}\""
     }
 
     buildTypes {

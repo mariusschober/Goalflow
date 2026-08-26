@@ -1,5 +1,9 @@
 package com.mariusschober.goalflow.nativeapp.ui
 
+import android.net.Uri
+import android.view.HapticFeedbackConstants
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +43,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Divider
@@ -66,6 +71,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -76,12 +82,14 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -92,6 +100,9 @@ import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
+import com.mariusschober.goalflow.nativeapp.data.BackupFormatException
+import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
+import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -111,6 +122,9 @@ private enum class RootDestination(val label: String) {
 @Composable
 fun GoalflowRoot() {
     val application = LocalContext.current.applicationContext as GoalflowApplication
+    val context = LocalContext.current
+    val localView = LocalView.current
+    val scope = rememberCoroutineScope()
     val goalflowViewModel: GoalflowViewModel = viewModel(
         factory = GoalflowViewModelFactory(application.repository)
     )
@@ -125,7 +139,42 @@ fun GoalflowRoot() {
     var captureOpen by rememberSaveable { mutableStateOf(false) }
     var goalOpen by rememberSaveable { mutableStateOf(false) }
     var datePickerForTask by remember { mutableStateOf<GoalflowTask?>(null) }
+    var backupAction by rememberSaveable { mutableStateOf<String?>(null) }
+    var backupError by rememberSaveable { mutableStateOf<String?>(null) }
+    var signInOpen by rememberSaveable { mutableStateOf(false) }
+    var pendingExportPassword by remember { mutableStateOf<String?>(null) }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
+
+    val exportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        val password = pendingExportPassword
+        pendingExportPassword = null
+        if (uri != null && password != null) {
+            scope.launch {
+                try {
+                    val backup = application.repository.exportBackup(password)
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        stream.write(backup.toByteArray(Charsets.UTF_8))
+                    } ?: throw IllegalStateException("The backup file could not be opened.")
+                    snackbarHostState.showSnackbar("Encrypted backup exported")
+                } catch (error: Exception) {
+                    snackbarHostState.showSnackbar(error.message ?: "Backup export failed")
+                }
+            }
+        }
+    }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            pendingImportUri = uri
+            backupError = null
+            backupAction = "import"
+        }
+    }
 
     LaunchedEffect(notice) {
         notice?.let {
@@ -155,22 +204,47 @@ fun GoalflowRoot() {
                         currentTask = currentTask,
                         onCapture = { captureOpen = true },
                         onPlanning = { destination = RootDestination.PLANNING },
-                        onComplete = goalflowViewModel::completeTask
+                        onComplete = { task ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            goalflowViewModel.completeTask(task)
+                        }
                     )
                     RootDestination.PLANNING -> PlanningScreen(
                         today = today,
                         gate = gate,
                         tasks = tasks,
                         onCapture = { captureOpen = true },
-                        onMove = goalflowViewModel::moveTask,
-                        onConfirm = goalflowViewModel::confirmPlan,
+                        onMove = { date, taskId, direction ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            goalflowViewModel.moveTask(date, taskId, direction)
+                        },
+                        onConfirm = { date, ids ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            goalflowViewModel.confirmPlan(date, ids)
+                        },
                         onScheduleMonthTask = { datePickerForTask = it }
                     )
                     RootDestination.GOALS -> GoalsScreen(
                         goals = goals,
                         onAdd = { goalOpen = true }
                     )
-                    RootDestination.SETTINGS -> SettingsScreen()
+                    RootDestination.SETTINGS -> SettingsScreen(
+                        signedIn = application.sessionStore.read() != null,
+                        canUseAuthentication = NativeConfig.canUseAuthentication,
+                        canUseCloud = NativeConfig.canUseCloud,
+                        onSignIn = { signInOpen = true },
+                        onSignOut = {
+                            application.sessionStore.clear()
+                            scope.launch { snackbarHostState.showSnackbar("Signed out. Local commitments stay here.") }
+                        },
+                        onExport = {
+                            backupError = null
+                            backupAction = "export"
+                        },
+                        onImport = {
+                            importLauncher.launch(arrayOf("application/json", "text/plain"))
+                        }
+                    )
                 }
             }
         }
@@ -217,6 +291,67 @@ fun GoalflowRoot() {
             onConfirm = { date ->
                 goalflowViewModel.rescheduleTask(task, date)
                 datePickerForTask = null
+            }
+        )
+    }
+
+    if (backupAction == "export" || backupAction == "import") {
+        BackupPasswordDialog(
+            action = backupAction!!,
+            error = backupError,
+            onDismiss = {
+                backupAction = null
+                backupError = null
+                pendingImportUri = null
+            },
+            onConfirm = { password ->
+                if (password.length < 12) {
+                    backupError = "Use at least 12 characters."
+                } else if (backupAction == "export") {
+                    backupAction = null
+                    pendingExportPassword = password
+                    exportLauncher.launch("Goalflow-backup.json")
+                } else {
+                    val uri = pendingImportUri
+                    if (uri == null) {
+                        backupError = "Choose a backup file first."
+                    } else {
+                        backupAction = null
+                        scope.launch {
+                            runCatching {
+                                val contents = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                                    ?: throw IllegalStateException("The backup file could not be opened.")
+                                application.repository.restoreBackup(contents, password)
+                            }.onSuccess {
+                                pendingImportUri = null
+                                snackbarHostState.showSnackbar("Backup restored safely")
+                            }.onFailure {
+                                backupError = it.message ?: "Backup restore failed"
+                                backupAction = "import"
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    if (signInOpen) {
+        SignInDialog(
+            error = backupError,
+            onDismiss = {
+                signInOpen = false
+                backupError = null
+            },
+            onConfirm = { email ->
+                scope.launch {
+                    runCatching { NativeAuthClient(application.sessionStore).requestMagicLink(email) }
+                        .onSuccess {
+                            signInOpen = false
+                            snackbarHostState.showSnackbar("Sign-in link sent")
+                        }
+                        .onFailure { backupError = it.message ?: "Sign-in failed" }
+                }
             }
         )
     }
@@ -367,6 +502,7 @@ private fun CurrentTaskCard(
     remaining: Int,
     onComplete: (GoalflowTask) -> Unit
 ) {
+    var completing by remember(task.id) { mutableStateOf(false) }
     Card(
         colors = CardDefaults.cardColors(
             containerColor = if (task.isFrog) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
@@ -395,7 +531,13 @@ private fun CurrentTaskCard(
                 Text(task.notes, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Button(
-                onClick = { onComplete(task) },
+                onClick = {
+                    if (!completing) {
+                        completing = true
+                        onComplete(task)
+                    }
+                },
+                enabled = !completing,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(58.dp)
@@ -596,7 +738,15 @@ private fun GoalRow(goal: GoalflowGoal) {
 }
 
 @Composable
-private fun SettingsScreen() {
+private fun SettingsScreen(
+    signedIn: Boolean,
+    canUseAuthentication: Boolean,
+    canUseCloud: Boolean,
+    onSignIn: () -> Unit,
+    onSignOut: () -> Unit,
+    onExport: () -> Unit,
+    onImport: () -> Unit
+) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
@@ -612,8 +762,30 @@ private fun SettingsScreen() {
         item {
             SettingsCard(
                 title = "Cloud sync",
-                body = "Optional. The native client is prepared for authenticated sync without making execution depend on it."
+                body = when {
+                    signedIn && canUseCloud -> "Connected. Local actions stay immediate; queued changes sync when the network returns."
+                    canUseCloud -> "Optional. Sign in to sync across devices. Local execution never waits for it."
+                    else -> "Not configured in this build. Local execution is complete without a backend."
+                },
+                actionLabel = when {
+                    signedIn -> "Sign out"
+                    canUseAuthentication -> "Sign in"
+                    else -> null
+                },
+                onAction = if (signedIn) onSignOut else onSignIn
             )
+        }
+        item {
+            SettingsCard(
+                title = "Backup and recovery",
+                body = "Export an encrypted copy or restore one atomically. A wrong password or damaged file leaves current data untouched.",
+                actionLabel = "Export backup",
+                onAction = onExport
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Text("Import backup")
+            }
         }
         item {
             SettingsCard(
@@ -625,13 +797,89 @@ private fun SettingsScreen() {
 }
 
 @Composable
-private fun SettingsCard(title: String, body: String) {
+private fun SettingsCard(title: String, body: String, actionLabel: String? = null, onAction: (() -> Unit)? = null) {
     Card(shape = RoundedCornerShape(22.dp)) {
         Column(modifier = Modifier.fillMaxWidth().padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(title, style = MaterialTheme.typography.titleLarge)
             Text(body, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (actionLabel != null && onAction != null) {
+                TextButton(onClick = onAction) { Text(actionLabel) }
+            }
         }
     }
+}
+
+@Composable
+private fun BackupPasswordDialog(
+    action: String,
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var password by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (action == "export") "Protect backup" else "Unlock backup") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    if (action == "export") "Use a password you can recover later. Goalflow cannot reset it."
+                    else "The restore is validated before it changes local data.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Backup password") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Password)
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(password) }, enabled = password.isNotBlank()) {
+                Text(if (action == "export") "Continue" else "Restore")
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun SignInDialog(
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    var email by rememberSaveable { mutableStateOf("") }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Sign in to sync") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("Goalflow will send a magic link. Your local commitments stay available either way.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Email") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Done
+                    )
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(email) }, enabled = email.isNotBlank()) { Text("Send link") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -697,7 +945,12 @@ private fun CaptureSheet(
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 PrecisionButton("Exact day", precision == SchedulePrecision.DAY) { precision = SchedulePrecision.DAY }
-                PrecisionButton("Future month", precision == SchedulePrecision.MONTH) { precision = SchedulePrecision.MONTH }
+                PrecisionButton("Future month", precision == SchedulePrecision.MONTH) {
+                    precision = SchedulePrecision.MONTH
+                    if (selectedDate.substring(0, 7) <= YearMonth.now().toString()) {
+                        selectedDate = YearMonth.now().plusMonths(1).atDay(1).toString()
+                    }
+                }
             }
             OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Icon(Icons.Rounded.DateRange, contentDescription = null)

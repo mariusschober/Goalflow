@@ -12,6 +12,8 @@ enum class TaskStatus { OPEN, COMPLETED, BROKEN_DOWN, DROPPED, ARCHIVED }
 
 enum class TaskSource { MANUAL, HABIT, TELEGRAM, SHARE, AI, MIGRATION }
 
+enum class HabitFrequency { DAILY, SPECIFIC_DAYS }
+
 data class GoalflowTask(
     val id: String,
     val title: String,
@@ -44,6 +46,21 @@ data class GoalflowGoal(
     val createdAt: Long,
     val excitement: Int? = null,
     val roi: Int? = null
+)
+
+data class GoalflowHabit(
+    val id: String,
+    val title: String,
+    val frequency: HabitFrequency = HabitFrequency.DAILY,
+    val specificDays: Set<Int> = emptySet(),
+    val streak: Int = 0,
+    val bestStreak: Int = 0,
+    val lastCompletedDate: String? = null,
+    val isHighPriority: Boolean = false,
+    val beforeFrog: Boolean = false,
+    val duration: Int? = null,
+    val goalId: String? = null,
+    val createdAt: Long
 )
 
 data class DailyPlan(
