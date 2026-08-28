@@ -14,9 +14,9 @@ private val Context.goalflowUiDataStore by preferencesDataStore(name = "goalflow
 
 /** Durable, non-product UI preferences. Product state remains in Room. */
 class GoalflowPreferences(private val context: Context) {
-    val capturePromptSeen: Flow<Boolean> = context.goalflowUiDataStore.data
+    val capturePromptSeen: Flow<Boolean?> = context.goalflowUiDataStore.data
         .catch { emit(emptyPreferences()) }
-        .map { preferences -> preferences[CAPTURE_PROMPT_SEEN] ?: false }
+        .map { preferences -> preferences[CAPTURE_PROMPT_SEEN] }
         .distinctUntilChanged()
 
     val sandboxAccessGranted: Flow<Boolean> = context.goalflowUiDataStore.data

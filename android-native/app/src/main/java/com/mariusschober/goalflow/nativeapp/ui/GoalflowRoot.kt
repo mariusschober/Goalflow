@@ -136,7 +136,6 @@ import androidx.compose.foundation.layout.RowScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.map
 
 private enum class RootDestination(val label: String) {
     CURRENT("Current"),
@@ -184,9 +183,9 @@ fun GoalflowRoot(
     val conflicts by goalflowViewModel.conflicts.collectAsStateWithLifecycle()
     val undoTaskId by goalflowViewModel.undoTaskId.collectAsStateWithLifecycle()
     val reorderUndo by goalflowViewModel.reorderUndo.collectAsStateWithLifecycle()
-    val capturePromptSeen by application.preferences.capturePromptSeen
-        .map { seen -> seen as Boolean? }
-        .collectAsStateWithLifecycle(initialValue = null)
+    val capturePromptSeen by application.preferences.capturePromptSeen.collectAsStateWithLifecycle(
+        initialValue = null
+    )
     val sandboxAccessGranted by application.preferences.sandboxAccessGranted.collectAsStateWithLifecycle(
         initialValue = !NativeConfig.isSandboxBuild
     )
@@ -315,6 +314,19 @@ fun GoalflowRoot(
         }
     }
 
+    // Operations from Current/Planning do not have an inline form error
+    // surface. Keep failures visible without leaving a stale error in a
+    // later capture or editor sheet.
+    val errorSurfaceOpen = captureOpen || circadianOpen || editTask != null ||
+        breakdownTask != null || backupAction != null || signInOpen || focusTask != null
+    LaunchedEffect(error, errorSurfaceOpen) {
+        val message = error
+        if (message != null && !errorSurfaceOpen) {
+            snackbarHostState.showSnackbar(message)
+            goalflowViewModel.clearError()
+        }
+    }
+
     LaunchedEffect(undoTaskId) {
         val taskId = undoTaskId ?: return@LaunchedEffect
         val result = snackbarHostState.showSnackbar(
@@ -369,8 +381,9 @@ fun GoalflowRoot(
                             focusTask = it
                         },
                         onComplete = { task ->
-                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                            goalflowViewModel.completeTask(task)
+                            goalflowViewModel.completeTask(task) {
+                                localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            }
                         },
                         onBreakDown = { breakdownTask = it },
                         onEdit = { editTask = it },
@@ -395,8 +408,9 @@ fun GoalflowRoot(
                         onScheduleMonthTask = { datePickerForTask = it },
                         onReschedule = { task, date -> goalflowViewModel.rescheduleTask(task, date) },
                         onComplete = { task ->
-                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                            goalflowViewModel.completeTask(task)
+                            goalflowViewModel.completeTask(task) {
+                                localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            }
                         },
                         onBreakDown = { breakdownTask = it },
                         onDrop = { task -> goalflowViewModel.dropTask(task) },
@@ -595,13 +609,17 @@ fun GoalflowRoot(
             startedAtMillis = focusStartedAt
                 ?: application.focusSessionStore.read()?.startedAtMillis
                 ?: System.currentTimeMillis(),
+            error = error,
             onDismiss = { focusTask = null },
             onComplete = { actualDuration, flowState ->
-                localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                application.focusSessionStore.clear()
-                focusTask = null
-                focusStartedAt = null
-                goalflowViewModel.completeTask(task, actualDuration, flowState)
+                goalflowViewModel.completeTask(task, actualDuration, flowState) {
+                    // Keep the timer anchor until the task transaction has
+                    // succeeded. A storage failure must remain recoverable.
+                    application.focusSessionStore.clear()
+                    focusTask = null
+                    focusStartedAt = null
+                    localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                }
             }
         )
     }
@@ -987,6 +1005,7 @@ private fun CircadianStatusCard(
 private fun FocusTimerSheet(
     task: GoalflowTask,
     startedAtMillis: Long,
+    error: String?,
     onDismiss: () -> Unit,
     onComplete: (actualDurationMinutes: Int, flowState: String?) -> Unit
 ) {
@@ -994,6 +1013,7 @@ private fun FocusTimerSheet(
     val startedAt = rememberSaveable(task.id, startedAtMillis) { startedAtMillis }
     var now by remember(task.id) { mutableStateOf(System.currentTimeMillis()) }
     var flowState by rememberSaveable(task.id) { mutableStateOf("") }
+    var completing by rememberSaveable(task.id) { mutableStateOf(false) }
     val plannedMinutes = runCatching {
         org.json.JSONObject(task.extraJson).optInt("duration", 25)
     }.getOrDefault(25).coerceIn(1, 1_440)
@@ -1008,6 +1028,10 @@ private fun FocusTimerSheet(
             now = System.currentTimeMillis()
             delay(1_000L)
         }
+    }
+
+    LaunchedEffect(error) {
+        if (error != null) completing = false
     }
 
     ModalBottomSheet(
@@ -1056,15 +1080,20 @@ private fun FocusTimerSheet(
                     }
                 }
             }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(
                 onClick = {
-                    onComplete(ceil(elapsedSeconds / 60.0).toInt().coerceAtLeast(1), flowState.takeIf(String::isNotBlank))
+                    if (!completing) {
+                        completing = true
+                        onComplete(ceil(elapsedSeconds / 60.0).toInt().coerceAtLeast(1), flowState.takeIf(String::isNotBlank))
+                    }
                 },
+                enabled = !completing,
                 modifier = Modifier.fillMaxWidth().height(58.dp)
             ) {
                 Icon(Icons.Rounded.Check, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
-                Text("Complete commitment")
+                Text(if (completing) "Saving…" else "Complete commitment")
             }
             TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Keep working") }
         }
