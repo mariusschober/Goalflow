@@ -55,6 +55,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.NavigationBar
@@ -125,7 +126,10 @@ import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import kotlin.math.ceil
 import androidx.compose.foundation.layout.RowScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.map
 
@@ -182,6 +186,7 @@ fun GoalflowRoot() {
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
     var circadianOpen by rememberSaveable { mutableStateOf(false) }
+    var focusTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
@@ -289,6 +294,7 @@ fun GoalflowRoot() {
                         onPlanning = { destination = RootDestination.PLANNING },
                         onCheckIn = { circadianOpen = true },
                         onResetCircadian = goalflowViewModel::resetCircadian,
+                        onFocus = { focusTask = it },
                         onComplete = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.completeTask(task)
@@ -499,6 +505,17 @@ fun GoalflowRoot() {
         )
     }
 
+    focusTask?.let { task ->
+        FocusTimerSheet(
+            task = task,
+            onDismiss = { focusTask = null },
+            onComplete = { actualDuration, flowState ->
+                localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                goalflowViewModel.completeTask(task, actualDuration, flowState) { focusTask = null }
+            }
+        )
+    }
+
     editTask?.let { task ->
         NativeTaskEditorSheet(
             task = task,
@@ -647,6 +664,7 @@ private fun CurrentScreen(
     onPlanning: () -> Unit,
     onCheckIn: () -> Unit,
     onResetCircadian: () -> Unit,
+    onFocus: (GoalflowTask) -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
@@ -693,7 +711,7 @@ private fun CurrentScreen(
                     onClick = onPlanning
                 )
                 is PlanningGate.Ready -> currentTask?.let { task ->
-                    CurrentTaskCard(task, gate.queue.size, onComplete, onBreakDown, onEdit, onDrop)
+                    CurrentTaskCard(task, gate.queue.size, onFocus, onComplete, onBreakDown, onEdit, onDrop)
                 }
             }
         }
@@ -757,6 +775,93 @@ private fun CircadianStatusCard(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun FocusTimerSheet(
+    task: GoalflowTask,
+    onDismiss: () -> Unit,
+    onComplete: (actualDurationMinutes: Int, flowState: String?) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val startedAt = rememberSaveable(task.id) { System.currentTimeMillis() }
+    var now by remember(task.id) { mutableStateOf(System.currentTimeMillis()) }
+    var flowState by rememberSaveable(task.id) { mutableStateOf("") }
+    val plannedMinutes = runCatching {
+        org.json.JSONObject(task.extraJson).optInt("duration", 25)
+    }.getOrDefault(25).coerceIn(1, 1_440)
+    val elapsedSeconds = ((now - startedAt) / 1_000L).coerceAtLeast(0L)
+    val plannedSeconds = plannedMinutes * 60L
+    val progress = (elapsedSeconds.toFloat() / plannedSeconds.toFloat()).coerceIn(0f, 1f)
+    val minutes = elapsedSeconds / 60L
+    val seconds = elapsedSeconds % 60L
+
+    LaunchedEffect(task.id, startedAt) {
+        while (isActive) {
+            now = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.imePadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text("Focus", style = MaterialTheme.typography.headlineMedium)
+            Text(task.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(
+                String.format(Locale.ROOT, "%02d:%02d", minutes, seconds),
+                style = MaterialTheme.typography.displayMedium,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center
+            )
+            LinearProgressIndicator(
+                progress = progress,
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                if (elapsedSeconds >= plannedSeconds) "Planned focus reached. Finish when the commitment is truly done."
+                else "$plannedMinutes minute target · keep the next action small and visible.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("How did the session feel?", style = MaterialTheme.typography.labelLarge)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                listOf("distracted" to "Distracted", "good" to "Good", "flow" to "Flow").forEach { (value, label) ->
+                    if (flowState == value) {
+                        Button(onClick = { flowState = value }, modifier = Modifier.weight(1f)) { Text(label) }
+                    } else {
+                        OutlinedButton(onClick = { flowState = value }, modifier = Modifier.weight(1f)) { Text(label) }
+                    }
+                }
+            }
+            Button(
+                onClick = {
+                    onComplete(ceil(elapsedSeconds / 60.0).toInt().coerceAtLeast(1), flowState.takeIf(String::isNotBlank))
+                },
+                modifier = Modifier.fillMaxWidth().height(58.dp)
+            ) {
+                Icon(Icons.Rounded.Check, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Complete commitment")
+            }
+            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Keep working") }
+        }
+    }
+}
+
 @Composable
 private fun EmptyCurrent(onCapture: () -> Unit) {
     Card(
@@ -815,6 +920,7 @@ private fun PlanningRequiredCard(title: String, body: String, onClick: () -> Uni
 private fun CurrentTaskCard(
     task: GoalflowTask,
     remaining: Int,
+    onFocus: (GoalflowTask) -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
@@ -851,6 +957,11 @@ private fun CurrentTaskCard(
                 Icon(Icons.Rounded.MoreHoriz, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Adjust commitment")
+            }
+            OutlinedButton(onClick = { onFocus(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Icon(Icons.Rounded.Timeline, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Start focus session")
             }
             Button(
                 onClick = {

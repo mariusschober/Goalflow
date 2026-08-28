@@ -179,13 +179,17 @@ class GoalflowViewModel(
         task: GoalflowTask,
         actualDuration: Int? = null,
         flowState: String? = null,
-        finalDescription: String? = null
+        finalDescription: String? = null,
+        onComplete: () -> Unit = {}
     ) {
         if (!completing.add(task.id)) return
         viewModelScope.launch {
             clearError()
             runCatching { repository.completeTask(task.id, actualDuration, flowState, finalDescription) }
-                .onSuccess { _undoTaskId.value = task.id }
+                .onSuccess {
+                    _undoTaskId.value = task.id
+                    onComplete()
+                }
                 .onFailure { failure -> _error.value = failure.message ?: "The task could not be completed." }
             completing.remove(task.id)
         }
