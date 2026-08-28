@@ -7,6 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -93,6 +94,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.input.pointer.consume
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -174,6 +177,7 @@ fun GoalflowRoot() {
     val error by goalflowViewModel.error.collectAsStateWithLifecycle()
     val conflicts by goalflowViewModel.conflicts.collectAsStateWithLifecycle()
     val undoTaskId by goalflowViewModel.undoTaskId.collectAsStateWithLifecycle()
+    val reorderUndo by goalflowViewModel.reorderUndo.collectAsStateWithLifecycle()
     val capturePromptSeen by application.preferences.capturePromptSeen
         .map { seen -> seen as Boolean? }
         .collectAsStateWithLifecycle(initialValue = null)
@@ -268,6 +272,18 @@ fun GoalflowRoot() {
         )
         if (result == SnackbarResult.ActionPerformed) goalflowViewModel.undoCompletion(taskId)
         goalflowViewModel.clearUndo()
+    }
+
+    LaunchedEffect(reorderUndo) {
+        val change = reorderUndo ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Order updated locally",
+            actionLabel = "Undo",
+            withDismissAction = true,
+            duration = SnackbarDuration.Short
+        )
+        if (result == SnackbarResult.ActionPerformed) goalflowViewModel.undoReorder(change)
+        goalflowViewModel.clearReorderUndo()
     }
 
     GoalflowTheme {
@@ -1152,7 +1168,46 @@ private fun PlannedTaskRow(
     onMove: (Int) -> Unit,
     onEdit: () -> Unit
 ) {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    val localView = LocalView.current
+    var dragging by remember(task.id) { mutableStateOf(false) }
+    var dragDistance by remember(task.id) { mutableStateOf(0f) }
+    Card(
+        modifier = Modifier.pointerInput(task.id) {
+            detectDragGesturesAfterLongPress(
+                onDragStart = {
+                    dragging = true
+                    dragDistance = 0f
+                    localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                },
+                onDragCancel = {
+                    dragging = false
+                    dragDistance = 0f
+                },
+                onDragEnd = {
+                    dragging = false
+                    dragDistance = 0f
+                },
+                onDrag = { change, dragAmount ->
+                    change.consume()
+                    dragDistance += dragAmount.y
+                    while (dragDistance >= 48f) {
+                        onMove(1)
+                        dragDistance -= 48f
+                    }
+                    while (dragDistance <= -48f) {
+                        onMove(-1)
+                        dragDistance += 48f
+                    }
+                }
+            )
+        },
+        border = if (dragging) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        colors = CardDefaults.cardColors(
+            containerColor = if (dragging) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(20.dp)
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()

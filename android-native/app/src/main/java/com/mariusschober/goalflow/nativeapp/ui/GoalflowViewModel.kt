@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.NativeReorderResult
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
@@ -34,6 +35,9 @@ class GoalflowViewModel(
     private val repository: GoalflowRepository,
     private val syncEngine: NativeSyncEngine
 ) : ViewModel() {
+    private val _reorderUndo = MutableStateFlow<NativeReorderResult?>(null)
+    val reorderUndo: StateFlow<NativeReorderResult?> = _reorderUndo.asStateFlow()
+
     private val _today = MutableStateFlow(LocalDate.now().toString())
     val today: StateFlow<String> = _today.asStateFlow()
 
@@ -242,24 +246,41 @@ class GoalflowViewModel(
     fun moveTask(localDate: String, taskId: String, direction: Int) {
         viewModelScope.launch {
             clearError()
-            val queue = com.mariusschober.goalflow.nativeapp.domain.buildTodayQueue(tasks.value, localDate)
-            val currentIndex = queue.indexOfFirst { it.id == taskId }
-            val targetIndex = currentIndex + direction
-            if (currentIndex < 0 || targetIndex !in queue.indices) return@launch
-            val ordered = queue.map { it.id }.toMutableList()
-            val moved = ordered.removeAt(currentIndex)
-            ordered.add(targetIndex, moved)
-            runCatching { repository.reorderToday(localDate, ordered) }
-                .onSuccess { _notice.value = "Order saved locally" }
+            runCatching { repository.moveToday(localDate, taskId, direction) }
+                .onSuccess { result ->
+                    if (result != null) {
+                        if (_reorderUndo.value?.let { it.previousIds == result.previousIds } != true) {
+                            _reorderUndo.value = result
+                        }
+                    }
+                }
                 .onFailure { failure -> _error.value = failure.message ?: "The order could not be saved." }
         }
     }
+
+    fun undoReorder(result: NativeReorderResult) {
+        viewModelScope.launch {
+            clearError()
+            runCatching {
+                repository.reorderToday(result.localDate, result.previousIds)
+                if (result.hadConfirmedPlan) repository.confirmPlan(result.localDate, result.previousIds)
+            }.onSuccess {
+                _reorderUndo.value = null
+                _notice.value = "Previous order restored locally"
+            }.onFailure { failure -> _error.value = failure.message ?: "The previous order could not be restored safely." }
+        }
+    }
+
+    fun clearReorderUndo() { _reorderUndo.value = null }
 
     fun confirmPlan(localDate: String, orderedIds: List<String>) {
         viewModelScope.launch {
             clearError()
             runCatching { repository.confirmPlan(localDate, orderedIds) }
-                .onSuccess { _notice.value = "Plan confirmed" }
+                .onSuccess {
+                    _reorderUndo.value = null
+                    _notice.value = "Plan confirmed"
+                }
                 .onFailure { failure -> _error.value = failure.message ?: "The plan changed. Review it again." }
         }
     }

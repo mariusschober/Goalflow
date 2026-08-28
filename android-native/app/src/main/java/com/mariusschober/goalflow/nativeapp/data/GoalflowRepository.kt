@@ -60,6 +60,13 @@ data class NativeRemoteRecord(
     val deletedAt: String?
 )
 
+data class NativeReorderResult(
+    val localDate: String,
+    val previousIds: List<String>,
+    val orderedIds: List<String>,
+    val hadConfirmedPlan: Boolean
+)
+
 /** Web-owned collections retained losslessly until a native editor exists. */
 val NATIVE_RAW_COLLECTION_TYPES = setOf(
     "stats", "progress", "hashtags", "accountability", "truenorth", "amalgam",
@@ -514,6 +521,44 @@ class GoalflowRepository(
             }
         }
         onMutation()
+    }
+
+    /** Moves one item using the latest Room state, avoiding stale UI reorder races. */
+    suspend fun moveToday(localDate: String, taskId: String, direction: Int): NativeReorderResult? {
+        require(direction == -1 || direction == 1) { "A task can move only one position at a time." }
+        val result = database.withTransaction {
+            val queue = buildTodayQueue(tasks.getAll().map(::toDomain), localDate)
+            val currentIndex = queue.indexOfFirst { it.id == taskId }
+            val targetIndex = currentIndex + direction
+            if (currentIndex < 0 || targetIndex !in queue.indices) return@withTransaction null
+            val previousIds = queue.map { it.id }
+            val orderedIds = previousIds.toMutableList().apply {
+                val moved = removeAt(currentIndex)
+                add(targetIndex, moved)
+            }
+            val byId = tasks.getAll().associateBy { it.id }
+            val now = System.currentTimeMillis()
+            val updated = orderedIds.mapIndexed { index, id ->
+                byId.getValue(id).copy(plannedOrder = index, updatedAt = now)
+            }
+            tasks.updateAll(updated)
+            updated.forEach { task ->
+                enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(toDomain(task)).toString())
+            }
+            val previousPlan = plans.get(localDate)
+            plans.delete(localDate)
+            if (previousPlan != null) {
+                enqueueRecordInTransaction(
+                    "daily_plans",
+                    localDate,
+                    GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
+                    Instant.now().toString()
+                )
+            }
+            NativeReorderResult(localDate, previousIds, orderedIds, previousPlan != null)
+        }
+        if (result != null) onMutation()
+        return result
     }
 
     suspend fun confirmPlan(localDate: String, orderedIds: List<String>) {

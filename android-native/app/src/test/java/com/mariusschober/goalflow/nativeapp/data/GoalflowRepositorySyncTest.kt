@@ -223,6 +223,27 @@ class GoalflowRepositorySyncTest {
         assertEquals(original, database.rawCollectionDao().get("circadian")?.payload)
     }
 
+    @Test
+    fun `room-backed move uses the latest order and invalidates a confirmed plan`() = runTest {
+        val today = LocalDate.now().toString()
+        val first = repository.createTask("First", "", SchedulePrecision.DAY, today, null, false)
+        val second = repository.createTask("Second", "", SchedulePrecision.DAY, today, null, false)
+        repository.confirmPlan(today, listOf(first.id, second.id))
+
+        val moved = repository.moveToday(today, second.id, -1)
+        val movedAgain = repository.moveToday(today, second.id, 1)
+
+        assertEquals(listOf(first.id, second.id), moved?.previousIds)
+        assertEquals(listOf(second.id, first.id), moved?.orderedIds)
+        assertTrue(moved?.hadConfirmedPlan == true)
+        assertEquals(listOf(second.id, first.id), movedAgain?.previousIds)
+        assertEquals(null, database.dailyPlanDao().get(today))
+        assertEquals(listOf(second.id, first.id), database.taskDao().getAll()
+            .filter { it.scheduledFor == today }
+            .sortedBy { it.plannedOrder }
+            .map { it.id })
+    }
+
     private fun uuidV5(name: String): String {
         val namespace = UUID.fromString("c3e4bcbb-9f56-4ff5-a3a8-9f7478284169")
         val namespaceBytes = ByteBuffer.allocate(16)
