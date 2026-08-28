@@ -19,13 +19,25 @@ class GoalflowPreferences(private val context: Context) {
         .map { preferences -> preferences[CAPTURE_PROMPT_SEEN] ?: false }
         .distinctUntilChanged()
 
+    val sandboxAccessGranted: Flow<Boolean> = context.goalflowUiDataStore.data
+        .catch { emit(emptyPreferences()) }
+        .map { preferences -> preferences[SANDBOX_ACCESS_GRANTED] ?: false }
+        .distinctUntilChanged()
+
     suspend fun markCapturePromptSeen() {
         context.goalflowUiDataStore.edit { preferences ->
             preferences[CAPTURE_PROMPT_SEEN] = true
         }
     }
 
+    suspend fun markSandboxAccessGranted() {
+        context.goalflowUiDataStore.edit { preferences ->
+            preferences[SANDBOX_ACCESS_GRANTED] = true
+        }
+    }
+
     private companion object {
         val CAPTURE_PROMPT_SEEN = booleanPreferencesKey("capture_prompt_seen")
+        val SANDBOX_ACCESS_GRANTED = booleanPreferencesKey("sandbox_access_granted")
     }
 }

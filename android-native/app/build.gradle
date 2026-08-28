@@ -39,6 +39,23 @@ android {
         buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
         buildConfigField "String", "SUPABASE_URL", "\"${goalflowBuildConfig('goalflowSupabaseUrl')}\""
         buildConfigField "String", "SUPABASE_ANON_KEY", "\"${goalflowBuildConfig('goalflowSupabaseAnonKey')}\""
+        buildConfigField "boolean", "SANDBOX_BUILD", "false"
+        buildConfigField "String", "TEST_ACCESS_CODE", "\"\""
+    }
+
+    flavorDimensions += "environment"
+
+    productFlavors {
+        production {
+            dimension "environment"
+        }
+        sandbox {
+            dimension "environment"
+            applicationIdSuffix ".sandbox"
+            versionNameSuffix "-sandbox"
+            buildConfigField "boolean", "SANDBOX_BUILD", "true"
+            buildConfigField "String", "TEST_ACCESS_CODE", "\"123456\""
+        }
     }
 
     buildTypes {

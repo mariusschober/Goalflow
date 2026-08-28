@@ -131,11 +131,18 @@ jobs:
       - run: chmod +x android-native/gradlew
       - run: ./android-native/gradlew -p android-native test
       - run: ./android-native/gradlew -p android-native lint
-      - run: ./android-native/gradlew -p android-native assembleDebug
-      - run: ./android-native/gradlew -p android-native assembleRelease
-      - name: Upload native debug APK
+      - run: ./android-native/gradlew -p android-native assembleProductionDebug
+      - run: ./android-native/gradlew -p android-native assembleProductionRelease
+      - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Upload native production debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: goalflow-native-debug-apk
-          path: android-native/app/build/outputs/apk/debug/*.apk
+          name: goalflow-native-production-debug-apk
+          path: android-native/app/build/outputs/apk/production/debug/*.apk
+          if-no-files-found: error
+      - name: Upload native sandbox debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: goalflow-native-sandbox-debug-apk
+          path: android-native/app/build/outputs/apk/sandbox/debug/*.apk
           if-no-files-found: error

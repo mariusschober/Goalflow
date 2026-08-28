@@ -180,6 +180,21 @@ fun GoalflowRoot() {
     val capturePromptSeen by application.preferences.capturePromptSeen
         .map { seen -> seen as Boolean? }
         .collectAsStateWithLifecycle(initialValue = null)
+    val sandboxAccessGranted by application.preferences.sandboxAccessGranted.collectAsStateWithLifecycle(
+        initialValue = !NativeConfig.isSandboxBuild
+    )
+
+    if (NativeConfig.isSandboxBuild && !sandboxAccessGranted) {
+        GoalflowTheme {
+            GoalflowSandboxGate(
+                onGranted = {
+                    scope.launch { application.preferences.markSandboxAccessGranted() }
+                }
+            )
+        }
+        return
+    }
+
     var destination by rememberSaveable { mutableStateOf(RootDestination.CURRENT) }
     var captureOpen by rememberSaveable { mutableStateOf(false) }
     var capturePromptLoaded by rememberSaveable { mutableStateOf(false) }
@@ -641,6 +656,83 @@ fun GoalflowRoot() {
                 }
             }
         )
+    }
+}
+
+@Composable
+private fun GoalflowSandboxGate(onGranted: () -> Unit) {
+    var code by rememberSaveable { mutableStateOf("") }
+    var error by rememberSaveable { mutableStateOf<String?>(null) }
+    var checking by rememberSaveable { mutableStateOf(false) }
+    val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+
+    LaunchedEffect(Unit) {
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
+    fun submit() {
+        if (checking) return
+        checking = true
+        if (code == NativeConfig.sandboxAccessCode) {
+            onGranted()
+        } else {
+            checking = false
+            error = "That test code is not valid."
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .safeDrawingPadding()
+                .imePadding()
+                .padding(28.dp),
+            verticalArrangement = Arrangement.Center,
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Icon(
+                Icons.Rounded.TaskAlt,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(58.dp)
+            )
+            Spacer(Modifier.height(20.dp))
+            Text("Goalflow Test", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "This is the isolated native test build. Enter the test code to continue.",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(24.dp))
+            OutlinedTextField(
+                value = code,
+                onValueChange = { code = it.filter(Char::isDigit).take(12); error = null },
+                modifier = Modifier.fillMaxWidth().focusRequester(focusRequester),
+                label = { Text("Test code") },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done
+                ),
+                keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = { submit() }),
+                isError = error != null
+            )
+            error?.let {
+                Spacer(Modifier.height(8.dp))
+                Text(it, color = MaterialTheme.colorScheme.error)
+            }
+            Spacer(Modifier.height(16.dp))
+            Button(
+                onClick = ::submit,
+                enabled = code.isNotBlank() && !checking,
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            ) { Text("Enter test app") }
+        }
     }
 }
 
