@@ -59,7 +59,14 @@ class GoalflowBackupTest {
         )
         val restored = GoalflowBackup.decrypt(GoalflowBackup.encrypt(payload, PASSWORD), PASSWORD)
 
-        assertEquals(payload, restored)
+        assertEquals("tasks roundtrip", payload.tasks, restored.tasks)
+        assertEquals("goals roundtrip", payload.goals, restored.goals)
+        assertEquals("plans roundtrip", payload.plans, restored.plans)
+        assertEquals("habits roundtrip", payload.habits, restored.habits)
+        assertEquals("outbox roundtrip", payload.outbox, restored.outbox)
+        assertEquals("sync metadata roundtrip", payload.syncMeta, restored.syncMeta)
+        assertEquals("conflicts roundtrip", payload.conflicts, restored.conflicts)
+        assertEquals("raw collections roundtrip", payload.rawCollections, restored.rawCollections)
     }
 
     @Test
