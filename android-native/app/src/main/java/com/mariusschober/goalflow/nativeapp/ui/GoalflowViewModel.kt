@@ -8,6 +8,7 @@ import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowCircadianState
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowProgress
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowStats
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
@@ -66,6 +67,12 @@ class GoalflowViewModel(
         GoalflowProgress()
     )
 
+    val circadian: StateFlow<GoalflowCircadianState> = repository.circadianStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        GoalflowCircadianState()
+    )
+
     val trueNorth: StateFlow<List<GoalflowTrueNorth>> = repository.trueNorthStream.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
@@ -99,6 +106,9 @@ class GoalflowViewModel(
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
+
+    private val _undoTaskId = MutableStateFlow<String?>(null)
+    val undoTaskId: StateFlow<String?> = _undoTaskId.asStateFlow()
 
     private val completing = mutableSetOf<String>()
 
@@ -165,16 +175,35 @@ class GoalflowViewModel(
         }
     }
 
-    fun completeTask(task: GoalflowTask) {
+    fun completeTask(
+        task: GoalflowTask,
+        actualDuration: Int? = null,
+        flowState: String? = null,
+        finalDescription: String? = null
+    ) {
         if (!completing.add(task.id)) return
         viewModelScope.launch {
             clearError()
-            runCatching { repository.completeTask(task.id) }
-                .onSuccess { _notice.value = "Done. Keep going." }
+            runCatching { repository.completeTask(task.id, actualDuration, flowState, finalDescription) }
+                .onSuccess { _undoTaskId.value = task.id }
                 .onFailure { failure -> _error.value = failure.message ?: "The task could not be completed." }
             completing.remove(task.id)
         }
     }
+
+    fun undoCompletion(taskId: String) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.undoCompletion(taskId) }
+                .onSuccess {
+                    _undoTaskId.value = null
+                    _notice.value = "Completion undone locally"
+                }
+                .onFailure { failure -> _error.value = failure.message ?: "The completion could not be undone safely." }
+        }
+    }
+
+    fun clearUndo() { _undoTaskId.value = null }
 
     fun dropTask(task: GoalflowTask) {
         viewModelScope.launch {
@@ -333,6 +362,27 @@ class GoalflowViewModel(
             runCatching { repository.updateAmalgam(text) }
                 .onSuccess { _notice.value = "Background thought saved locally" }
                 .onFailure { failure -> _error.value = failure.message ?: "The background thought could not be saved." }
+        }
+    }
+
+    fun updateCircadian(state: GoalflowCircadianState, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.updateCircadian(state) }
+                .onSuccess {
+                    _notice.value = "Daily rhythm saved locally"
+                    onComplete()
+                }
+                .onFailure { failure -> _error.value = failure.message ?: "The daily rhythm could not be saved." }
+        }
+    }
+
+    fun resetCircadian() {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.resetCircadian() }
+                .onSuccess { _notice.value = "Daily rhythm reset locally" }
+                .onFailure { failure -> _error.value = failure.message ?: "The daily rhythm could not be reset." }
         }
     }
 

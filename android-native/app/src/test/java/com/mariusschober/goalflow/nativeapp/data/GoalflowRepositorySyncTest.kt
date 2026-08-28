@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.domain.HabitFrequency
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowCircadianState
 import kotlinx.coroutines.test.runTest
 import org.json.JSONArray
 import org.junit.After
@@ -131,6 +132,95 @@ class GoalflowRepositorySyncTest {
         assertEquals("COMPLETED", database.taskDao().get(task.id)?.status)
         assertEquals("not-json", database.rawCollectionDao().get("stats")?.payload)
         assertEquals(60, org.json.JSONObject(database.rawCollectionDao().get("progress")!!.payload).getInt("xp"))
+    }
+
+    @Test
+    fun `completion undo restores task and linked projections atomically`() = runTest {
+        val goal = repository.createGoal("Undoable direction", "")
+        val habit = repository.createHabit("Undoable habit", goalId = goal.id)
+        val task = repository.generateHabitInstance(habit.id, LocalDate.now().toString())
+            ?: error("A daily habit should generate an instance")
+
+        repository.completeTask(task.id, actualDuration = 12, flowState = "flow")
+        repository.undoCompletion(task.id)
+
+        assertEquals("OPEN", database.taskDao().get(task.id)?.status)
+        assertEquals(null, database.taskDao().get(task.id)?.completedAt)
+        assertEquals(0, database.goalDao().get(goal.id)?.completedTasks)
+        assertEquals(0, database.habitDao().get(habit.id)?.streak)
+        assertEquals(null, database.habitDao().get(habit.id)?.lastCompletedDate)
+        assertEquals(null, database.rawCollectionDao().get("stats"))
+        val progress = org.json.JSONObject(database.rawCollectionDao().get("progress")!!.payload)
+        assertEquals(1, progress.getInt("level"))
+        assertEquals(50, progress.getInt("xp"))
+        assertTrue(!org.json.JSONObject(database.taskDao().get(task.id)!!.extraJson).has("__goalflowCompletionUndo"))
+    }
+
+    @Test
+    fun `circadian check in preserves state and records today's stats atomically`() = runTest {
+        repository.updateCircadian(
+            GoalflowCircadianState(
+                lastCheckIn = LocalDate.now().toString(),
+                score = 90,
+                mode = "apex",
+                sunriseTime = "06:12",
+                sunsetTime = "20:31",
+                solarNoonTime = "13:21",
+                sunrise = true,
+                sleepHours = 8,
+                energy = 9,
+                clarity = 8,
+                interest = 7,
+                wakeTime = "07:00",
+                eatingWindow = 10,
+                firstMealTime = "08:00"
+            )
+        )
+
+        val circadian = org.json.JSONObject(database.rawCollectionDao().get("circadian")!!.payload)
+        assertEquals("apex", circadian.getString("mode"))
+        assertEquals("07:00", circadian.getJSONObject("metrics").getString("wakeTime"))
+        val stats = org.json.JSONObject(database.rawCollectionDao().get("stats")!!.payload)
+            .getJSONObject(LocalDate.now().toString())
+        assertEquals(90, stats.getInt("circadianScore"))
+        assertEquals(true, stats.getJSONObject("bioLog").getBoolean("sunrise"))
+
+        repository.resetCircadian()
+        assertEquals("", org.json.JSONObject(database.rawCollectionDao().get("circadian")!!.payload).getString("lastCheckIn"))
+    }
+
+    @Test
+    fun `invalid circadian input leaves the existing record untouched`() = runTest {
+        val original = """
+            {"lastCheckIn":"2026-08-28","score":70,"mode":"maintenance","metrics":{"energy":7,"custom":"keep"}}
+        """.trimIndent()
+        database.rawCollectionDao().insert(
+            RawCollectionEntity(
+                entityType = "circadian",
+                payload = original,
+                updatedAt = Instant.now().toString(),
+                deletedAt = null
+            )
+        )
+
+        try {
+            repository.updateCircadian(
+                GoalflowCircadianState(
+                    lastCheckIn = LocalDate.now().toString(),
+                    score = 70,
+                    mode = "maintenance",
+                    energy = 7,
+                    clarity = 7,
+                    interest = 7,
+                    wakeTime = "25:90"
+                )
+            )
+            fail("Invalid clock input must be rejected")
+        } catch (_: IllegalArgumentException) {
+            // The record remains authoritative.
+        }
+
+        assertEquals(original, database.rawCollectionDao().get("circadian")?.payload)
     }
 
     private fun uuidV5(name: String): String {

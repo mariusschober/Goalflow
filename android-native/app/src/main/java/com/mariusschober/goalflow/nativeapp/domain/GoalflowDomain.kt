@@ -83,6 +83,23 @@ data class GoalflowProgress(
     val xpToNextLevel: Int = 100
 )
 
+data class GoalflowCircadianState(
+    val lastCheckIn: String = "",
+    val score: Int = 0,
+    val mode: String = "maintenance",
+    val sunriseTime: String? = null,
+    val sunsetTime: String? = null,
+    val solarNoonTime: String? = null,
+    val sunrise: Boolean = false,
+    val sleepHours: Int = 8,
+    val energy: Int = 5,
+    val clarity: Int = 5,
+    val interest: Int = 5,
+    val wakeTime: String? = null,
+    val eatingWindow: Int? = null,
+    val firstMealTime: String? = null
+)
+
 data class GoalflowTrueNorth(
     val id: String,
     val vision: String,

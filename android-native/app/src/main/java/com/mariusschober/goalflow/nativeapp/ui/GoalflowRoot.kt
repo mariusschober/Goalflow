@@ -22,6 +22,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -62,6 +64,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarResult
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -104,6 +109,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mariusschober.goalflow.nativeapp.GoalflowApplication
 import com.mariusschober.goalflow.nativeapp.R
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowCircadianState
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
@@ -121,6 +127,7 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import androidx.compose.foundation.layout.RowScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.map
 
 private enum class RootDestination(val label: String) {
     CURRENT("Current"),
@@ -139,17 +146,12 @@ private val primaryDestinations = listOf(
     RootDestination.SETTINGS
 )
 
-private const val CAPTURE_PROMPT_SEEN = "capture_prompt_seen"
-
 @Composable
 fun GoalflowRoot() {
     val application = LocalContext.current.applicationContext as GoalflowApplication
     val context = LocalContext.current
     val localView = LocalView.current
     val scope = rememberCoroutineScope()
-    val uiPreferences = remember {
-        application.getSharedPreferences("goalflow-native-ui", android.content.Context.MODE_PRIVATE)
-    }
     val goalflowViewModel: GoalflowViewModel = viewModel(
         factory = GoalflowViewModelFactory(application.repository, application.syncEngine)
     )
@@ -158,6 +160,7 @@ fun GoalflowRoot() {
     val habits by goalflowViewModel.habits.collectAsStateWithLifecycle()
     val stats by goalflowViewModel.stats.collectAsStateWithLifecycle()
     val progress by goalflowViewModel.progress.collectAsStateWithLifecycle()
+    val circadian by goalflowViewModel.circadian.collectAsStateWithLifecycle()
     val trueNorth by goalflowViewModel.trueNorth.collectAsStateWithLifecycle()
     val amalgam by goalflowViewModel.amalgam.collectAsStateWithLifecycle()
     val today by goalflowViewModel.today.collectAsStateWithLifecycle()
@@ -166,15 +169,19 @@ fun GoalflowRoot() {
     val notice by goalflowViewModel.notice.collectAsStateWithLifecycle()
     val error by goalflowViewModel.error.collectAsStateWithLifecycle()
     val conflicts by goalflowViewModel.conflicts.collectAsStateWithLifecycle()
+    val undoTaskId by goalflowViewModel.undoTaskId.collectAsStateWithLifecycle()
+    val capturePromptSeen by application.preferences.capturePromptSeen
+        .map { seen -> seen as Boolean? }
+        .collectAsStateWithLifecycle(initialValue = null)
     var destination by rememberSaveable { mutableStateOf(RootDestination.CURRENT) }
-    var captureOpen by rememberSaveable {
-        mutableStateOf(!uiPreferences.getBoolean(CAPTURE_PROMPT_SEEN, false))
-    }
+    var captureOpen by rememberSaveable { mutableStateOf(false) }
+    var capturePromptLoaded by rememberSaveable { mutableStateOf(false) }
     var datePickerForTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var editTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var backupAction by rememberSaveable { mutableStateOf<String?>(null) }
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
+    var circadianOpen by rememberSaveable { mutableStateOf(false) }
     var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
@@ -183,8 +190,15 @@ fun GoalflowRoot() {
     val lifecycleOwner = LocalLifecycleOwner.current
 
     fun closeCapture() {
-        uiPreferences.edit().putBoolean(CAPTURE_PROMPT_SEEN, true).apply()
+        scope.launch { application.preferences.markCapturePromptSeen() }
         captureOpen = false
+    }
+
+    LaunchedEffect(capturePromptSeen) {
+        if (!capturePromptLoaded && capturePromptSeen != null) {
+            captureOpen = capturePromptSeen == false
+            capturePromptLoaded = true
+        }
     }
 
     DisposableEffect(lifecycleOwner) {
@@ -197,8 +211,9 @@ fun GoalflowRoot() {
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    BackHandler(enabled = destination == RootDestination.INSIGHTS) {
-        destination = RootDestination.GOALS
+    BackHandler(enabled = destination != RootDestination.CURRENT && !captureOpen && editTask == null &&
+        datePickerForTask == null && breakdownTask == null && backupAction == null && !signInOpen) {
+        destination = if (destination == RootDestination.INSIGHTS) RootDestination.GOALS else RootDestination.CURRENT
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -238,6 +253,18 @@ fun GoalflowRoot() {
         }
     }
 
+    LaunchedEffect(undoTaskId) {
+        val taskId = undoTaskId ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = "Done. Keep going.",
+            actionLabel = "Undo",
+            withDismissAction = true,
+            duration = SnackbarDuration.Short
+        )
+        if (result == SnackbarResult.ActionPerformed) goalflowViewModel.undoCompletion(taskId)
+        goalflowViewModel.clearUndo()
+    }
+
     GoalflowTheme {
         Scaffold(
             modifier = Modifier.fillMaxSize(),
@@ -257,8 +284,11 @@ fun GoalflowRoot() {
                         today = today,
                         gate = gate,
                         currentTask = currentTask,
+                        circadian = circadian,
                         onCapture = { captureOpen = true },
                         onPlanning = { destination = RootDestination.PLANNING },
+                        onCheckIn = { circadianOpen = true },
+                        onResetCircadian = goalflowViewModel::resetCircadian,
                         onComplete = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.completeTask(task)
@@ -455,6 +485,20 @@ fun GoalflowRoot() {
         )
     }
 
+    if (circadianOpen) {
+        CircadianCheckInSheet(
+            initial = circadian,
+            error = error,
+            onDismiss = {
+                goalflowViewModel.clearError()
+                circadianOpen = false
+            },
+            onSave = { state ->
+                goalflowViewModel.updateCircadian(state) { circadianOpen = false }
+            }
+        )
+    }
+
     editTask?.let { task ->
         NativeTaskEditorSheet(
             task = task,
@@ -598,8 +642,11 @@ private fun CurrentScreen(
     today: String,
     gate: PlanningGate,
     currentTask: GoalflowTask?,
+    circadian: GoalflowCircadianState,
     onCapture: () -> Unit,
     onPlanning: () -> Unit,
+    onCheckIn: () -> Unit,
+    onResetCircadian: () -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
@@ -619,6 +666,14 @@ private fun CurrentScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+        }
+        item {
+            CircadianStatusCard(
+                today = today,
+                state = circadian,
+                onCheckIn = onCheckIn,
+                onReset = onResetCircadian
+            )
         }
         item {
             when (gate) {
@@ -653,6 +708,50 @@ private fun CurrentScreen(
                 Icon(Icons.Rounded.Add, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Capture commitment")
+            }
+        }
+    }
+}
+
+@Composable
+private fun CircadianStatusCard(
+    today: String,
+    state: GoalflowCircadianState,
+    onCheckIn: () -> Unit,
+    onReset: () -> Unit
+) {
+    val active = state.lastCheckIn == today
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (active) MaterialTheme.colorScheme.tertiaryContainer
+            else MaterialTheme.colorScheme.surfaceVariant
+        ),
+        shape = RoundedCornerShape(22.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    if (active) "${state.mode.replaceFirstChar { it.uppercase(Locale.getDefault()) }} rhythm · ${state.score}%"
+                    else "Daily rhythm",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    if (active) "Your plan can follow the energy you checked in with."
+                    else "A 30-second check-in can tune today's plan.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (active) {
+                TextButton(onClick = onCheckIn) { Text("Update") }
+                TextButton(onClick = onReset) { Text("Reset") }
+            } else {
+                Button(onClick = onCheckIn) { Text("Check in") }
             }
         }
     }
@@ -1309,6 +1408,173 @@ private fun CaptureSheet(
             onDismiss = { showDatePicker = false },
             onConfirm = { date -> selectedDate = date; showDatePicker = false }
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun CircadianCheckInSheet(
+    initial: GoalflowCircadianState,
+    error: String?,
+    onDismiss: () -> Unit,
+    onSave: (GoalflowCircadianState) -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val today = LocalDate.now().toString()
+    var wakeTime by rememberSaveable { mutableStateOf(initial.wakeTime ?: "07:00") }
+    var firstMealTime by rememberSaveable { mutableStateOf(initial.firstMealTime ?: "08:00") }
+    var morningLight by rememberSaveable { mutableStateOf(initial.sunrise) }
+    var eatingWindow by rememberSaveable { mutableStateOf((initial.eatingWindow ?: 10).toFloat()) }
+    var sleepHours by rememberSaveable { mutableStateOf(initial.sleepHours.coerceIn(0, 24).toFloat()) }
+    var currentState by rememberSaveable { mutableStateOf(initial.energy.coerceIn(1, 10).toFloat()) }
+    var saving by rememberSaveable { mutableStateOf(false) }
+
+    LaunchedEffect(error) {
+        if (error != null) saving = false
+    }
+
+    fun score(): Int {
+        val windowScore = when {
+            eatingWindow <= 10f -> 30
+            eatingWindow <= 12f -> 20
+            else -> 10
+        }
+        return ((if (morningLight) 30 else 0) + windowScore + currentState.toInt() * 4).coerceIn(0, 100)
+    }
+
+    fun modeFor(score: Int): String = when {
+        score < 50 -> "recovery"
+        score >= 80 -> "apex"
+        else -> "maintenance"
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        modifier = Modifier.imePadding()
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 24.dp)
+                .padding(bottom = 24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
+        ) {
+            Text("Daily rhythm", style = MaterialTheme.typography.headlineMedium)
+            Text(
+                "A quick check-in tunes the order around the person who has to do it. It is saved locally first.",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = wakeTime,
+                onValueChange = { wakeTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Wake time (HH:mm)") },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Next
+                )
+            )
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Checkbox(checked = morningLight, onCheckedChange = { morningLight = it })
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Morning light", fontWeight = FontWeight.SemiBold)
+                    Text(
+                        "Bright light within two hours of waking",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+            Text("Eating window: ${eatingWindow.toInt()} hours", fontWeight = FontWeight.SemiBold)
+            Slider(
+                value = eatingWindow,
+                onValueChange = { eatingWindow = it },
+                valueRange = 6f..16f,
+                steps = 9,
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = firstMealTime,
+                onValueChange = { firstMealTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("First meal (HH:mm)") },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = KeyboardType.Ascii,
+                    imeAction = ImeAction.Next
+                )
+            )
+            Text("Sleep: ${sleepHours.toInt()} hours", fontWeight = FontWeight.SemiBold)
+            Slider(
+                value = sleepHours,
+                onValueChange = { sleepHours = it },
+                valueRange = 0f..12f,
+                steps = 11,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text("Current energy and clarity: ${currentState.toInt()}/10", fontWeight = FontWeight.SemiBold)
+            Slider(
+                value = currentState,
+                onValueChange = { currentState = it },
+                valueRange = 1f..10f,
+                steps = 8,
+                modifier = Modifier.fillMaxWidth()
+            )
+            val calculatedScore = score()
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                shape = RoundedCornerShape(18.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Today's mode", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            modeFor(calculatedScore).replaceFirstChar { it.titlecase(Locale.ROOT) },
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Text("$calculatedScore%", style = MaterialTheme.typography.headlineMedium)
+                }
+            }
+            error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            Button(
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        val calculatedScore = score()
+                        onSave(
+                            GoalflowCircadianState(
+                                lastCheckIn = today,
+                                score = calculatedScore,
+                                mode = modeFor(calculatedScore),
+                                sunriseTime = initial.sunriseTime,
+                                sunsetTime = initial.sunsetTime,
+                                solarNoonTime = initial.solarNoonTime,
+                                sunrise = morningLight,
+                                sleepHours = sleepHours.toInt(),
+                                energy = currentState.toInt(),
+                                clarity = currentState.toInt(),
+                                interest = initial.interest.coerceIn(1, 10),
+                                wakeTime = wakeTime.trim(),
+                                eatingWindow = eatingWindow.toInt(),
+                                firstMealTime = firstMealTime.trim()
+                            )
+                        )
+                    }
+                },
+                enabled = !saving,
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            ) { Text(if (saving) "Saving…" else "Save today's rhythm") }
+        }
     }
 }
 
