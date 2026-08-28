@@ -53,7 +53,24 @@ The production server listens on `PORT` and exposes `/api/v1/health`. Client and
 
 ## Android
 
-Goalflow uses Capacitor to deliver the same React/domain/storage implementation as an Android application. Install Android Studio or the Android SDK, Java 21, and accept the SDK licenses before running:
+Goalflow has a native Kotlin/Compose client in `android-native/` and retains
+the Capacitor target in `android/` as a compatibility delivery. The native
+client is the recommended Android experience: it uses Room, native Compose
+surfaces, Android lifecycle handling, and a durable local outbox. Install
+Android Studio or the Android SDK, Java 21, and accept the SDK licenses before
+running:
+
+```bash
+./android-native/gradlew -p android-native test
+./android-native/gradlew -p android-native lint
+./android-native/gradlew -p android-native assembleProductionDebug
+```
+
+The native production debug APK is produced under
+`android-native/app/build/outputs/apk/production/debug/`. The native release
+variant is unsigned unless signing is supplied outside the repository.
+
+For the existing Capacitor target, run:
 
 ```bash
 npm run android:sync
@@ -72,6 +89,16 @@ npm run android:assembleTestDebug
 ```
 
 The test APK is produced at `android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk`. It is labeled `Goalflow Test`, uses `com.mariusschober.goalflow.test`, and never enables production authentication or cloud synchronization.
+
+The separate native sandbox test app is built with:
+
+```bash
+./android-native/gradlew -p android-native assembleSandboxDebug
+```
+
+It is labeled `Goalflow Test`, uses
+`com.mariusschober.goalflow.sandbox.dev`, and accepts the isolated entry code
+`123456`. Native and Capacitor test packages are separate installations.
 
 ## Production setup
 

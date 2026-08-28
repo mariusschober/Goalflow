@@ -1,6 +1,6 @@
 # Goalflow Production Rewrite Handoff
 
-Last updated: August 25, 2026
+Last updated: August 28, 2026
 
 This branch takes Goalflow from the original AI Studio prototype to a free,
 invitation-only, local-first PWA. It preserves the complete product experience
@@ -41,6 +41,12 @@ code with production-oriented foundations.
   builds, startup checks, dependency audit, and secret scanning.
 - Local-only Mac launcher for private use without Supabase, Telegram, SMTP,
   CAPTCHA, or hosted infrastructure.
+- Native Android client under `android-native/` using Kotlin, Jetpack Compose,
+  Room, DataStore, WorkManager, and Keystore-backed session storage. The native
+  surface keeps Current, Planning, capture, completion, focus, breakdown,
+  habits, Goals, True North, Insights, circadian check-in, backup/restore,
+  optional sign-in, and conflict choices local-first. The existing Capacitor
+  target remains available separately.
 
 ## Product and UX decisions
 
@@ -82,7 +88,10 @@ must not contain server credentials.
 7. Verify install/update, mobile safe areas, keyboard navigation, VoiceOver,
    reduced motion, and contrast in Safari and Chrome on real devices.
 8. Confirm SomaFM availability and licensing for the intended beta audience.
-9. Operate the owner account for seven stable days before issuing beta codes.
+9. Run native APKs on supported Android versions and complete lifecycle,
+   keyboard, TalkBack, reduced-motion, offline process-death, and screenshot
+   checks on an emulator/device.
+10. Operate the owner account for seven stable days before issuing beta codes.
 
 Detailed provisioning and recovery steps are in [DEPLOYMENT.md](../DEPLOYMENT.md)
 and security boundaries are summarized in [SECURITY.md](../SECURITY.md).

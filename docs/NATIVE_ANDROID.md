@@ -1,50 +1,97 @@
 # Native Android client
 
-Goalflow now has a native Android delivery target under `android-native/`.
-It is a Kotlin + Jetpack Compose application backed by Room. The target is a
-single-product client: it keeps the existing Goalflow vocabulary and execution
-rules while giving Android its own fast, lifecycle-safe UI instead of placing
-the web app inside a WebView.
+Goalflow has two Android delivery targets:
 
-## UX contracts
+- `android-native/` is the native Kotlin + Jetpack Compose client described by
+  the Android UX plan. It uses Room for product state, DataStore for UI
+  preferences, WorkManager for optional synchronization, and Android Keystore
+  for the cloud session.
+- `android/` remains the existing Capacitor/WebView compatibility target. It is
+  kept independently so the web/PWA delivery path is not coupled to native
+  client changes.
 
-- Current shows one dominant next action after the daily planning gate is satisfied.
-- Planning is the only place where today’s order is changed or confirmed.
-- Frogs remain first-class commitments and cannot be moved forward.
-- A monthly commitment must be converted to an exact local day before execution.
-- Task and goal mutations commit to the local Room database before any optional
-  cloud work; a temporary network failure cannot block local execution.
-- Capture opens as a focused bottom sheet and supports the Android keyboard and
-  back gesture without losing the draft.
+The native client does not use a WebView for its main experience. It preserves
+the existing Goalflow vocabulary and rules: Current executes one deterministic
+commitment, Planning confirms the order, monthly work needs an exact day,
+frogs retain their anti-avoidance constraints, and local actions do not wait
+for cloud services.
 
-## Local development
+## Native surface
 
-From the repository root:
+The current native client includes:
+
+- cold/warm launch into local state and first-run capture;
+- capture from the launcher shortcut and Android text-share intent;
+- exact-day and future-month scheduling with native date picking;
+- Current, focus timing, completion, undo, breakdown, explicit drop, and
+  completion recovery after reload/process death;
+- Planning with overdue/month conversion, move buttons, long-press reorder,
+  local undo, and the explicit daily-plan gate;
+- task editing, frogs, habits, Goals, True North, background thought, Insights,
+  circadian check-in, encrypted backup/restore, sign-in, and sync conflict
+  choices.
+
+AI and Telegram remain optional web/server capabilities. Native Room preserves
+web-owned collections it does not edit, so using the native client does not
+silently discard those records.
+
+## Build variants
+
+| Variant | Application ID | Label | Purpose |
+| --- | --- | --- | --- |
+| `productionDebug` | `com.mariusschober.goalflow.dev` | Goalflow | Local/debug production-auth path |
+| `productionRelease` | `com.mariusschober.goalflow` | Goalflow | Unsigned release assembly |
+| `sandboxDebug` | `com.mariusschober.goalflow.sandbox.dev` | Goalflow Test | Isolated local test build; entry code `123456` |
+
+The sandbox gate is compile-time flavor configuration. It is not present in
+the production flavor, and sandbox data is isolated by the separate package
+identity. No production credential or fake hosted account is required for
+local use.
+
+## Local commands
+
+From the repository root, with Java 21 and an Android SDK installed:
 
 ```bash
 ./android-native/gradlew -p android-native test
 ./android-native/gradlew -p android-native lint
-./android-native/gradlew -p android-native assembleDebug
-./android-native/gradlew -p android-native assembleRelease
+./android-native/gradlew -p android-native assembleProductionDebug
+./android-native/gradlew -p android-native assembleProductionRelease
+./android-native/gradlew -p android-native assembleSandboxDebug
 ```
 
-The native project carries the same checked-in Gradle wrapper distribution
-configuration as the existing Android target so a clean checkout does not
-depend on a developer-installed Gradle binary. The debug package
-uses the safe application id `com.mariusschober.goalflow.dev`; the release
-package uses `com.mariusschober.goalflow` and has no private signing material
-in the repository.
+The installable native debug APKs are produced at:
 
-## Verification
+```text
+android-native/app/build/outputs/apk/production/debug/
+android-native/app/build/outputs/apk/sandbox/debug/
+```
 
-The `native-android` GitHub Actions job runs native unit tests, Android lint,
-debug assembly, and an unsigned release assembly. It uploads the debug APK as
-`goalflow-native-debug-apk`. Emulator and device tests remain separate from
-the build gate and must be reported as unavailable when no Android runtime is
-provided.
+The native Gradle wrapper, JVM 21 alignment, Room migrations, and test-only
+JSON runtime are committed. Production release signing material is not.
 
-The native client shares the product’s conceptual model and local-first
-guarantees, but its Room schema is intentionally versioned independently from
-the browser IndexedDB schema. Cloud session handoff, sync reconciliation, and
-backup interchange must use explicit adapters; no fake account or admin
-bypass is permitted in the native build.
+## Reliability boundaries
+
+Product state is written to Room before synchronization is scheduled. The
+outbox is durable and causally ordered; WorkManager retries network work, but
+the UI never waits for it. Push acknowledgements and pull cursors are accepted
+only after exact payload/version checks. Conflicts retain both sides until the
+user chooses explicitly.
+
+Encrypted backups use the Goalflow AES-256-GCM/PBKDF2 envelope. Decryption,
+schema, checksum, identity, and outbox-dependency validation happen before a
+replace restore transaction. A failed restore leaves the current database
+untouched.
+
+## CI and unavailable runtime checks
+
+The `native-android` GitHub Actions job runs the native unit suite, lint,
+production debug/release assembly, sandbox debug assembly, and uploads both
+native debug APKs from a clean checkout. The separate `android` job continues
+to run Capacitor sync, wrapper tests/lint, and wrapper APK assembly.
+
+Emulator/device lifecycle tests, screenshot tests, TalkBack runtime checks,
+Macrobenchmark, and offline process-death execution require an Android runtime
+and are reported as `NOT AVAILABLE` when no emulator/device is provided. A
+successful compile or APK assembly is not presented as evidence for those
+runtime behaviors.

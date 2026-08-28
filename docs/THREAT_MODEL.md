@@ -1,6 +1,6 @@
 # Goalflow Threat Model
 
-Scope: first-party web/PWA client, Capacitor Android delivery, Express API, Supabase/Postgres, browser backup/restore, synchronization, AI proxy, speech proxy, and Telegram integration.
+Scope: first-party web/PWA client, native Kotlin/Compose Android client, Capacitor Android delivery, Express API, Supabase/Postgres, browser/native backup and restore, synchronization, AI proxy, speech proxy, and Telegram integration.
 
 ## Assets
 
@@ -13,12 +13,13 @@ Scope: first-party web/PWA client, Capacitor Android delivery, Express API, Supa
 ## Trust boundaries
 
 1. Browser JavaScript and IndexedDB/localStorage.
-2. Capacitor Android WebView and its packaged web assets.
-3. Express API and its process environment.
-4. Supabase Auth, Postgres, Storage, RLS, and service-role API.
-5. Telegram OIDC, Bot API, webhook, and file download endpoints.
-6. AI and speech providers.
-7. CI/build artifacts and deployment hosting.
+2. Native Android Compose client, Room database, DataStore, Keystore, and WorkManager.
+3. Capacitor Android WebView and its packaged web assets.
+4. Express API and its process environment.
+5. Supabase Auth, Postgres, Storage, RLS, and service-role API.
+6. Telegram OIDC, Bot API, webhook, and file download endpoints.
+7. AI and speech providers.
+8. CI/build artifacts and deployment hosting.
 
 The browser and Android bundle are hostile-readable environments. Only browser-safe Supabase URL/anonymous key, public provider identifiers, and optional API origin may enter them. Service-role, backup, bot, AI, speech, Turnstile, and webhook secrets remain server-only.
 
@@ -27,7 +28,7 @@ The browser and Android bundle are hostile-readable environments. Only browser-s
 | Threat | First-party control / verification |
 | --- | --- |
 | Stored XSS in task, goal, or Telegram text | React escaping; `react-markdown` is not used for untrusted HTML; Telegram output uses explicit HTML escaping. Search and build-output review performed. |
-| URL injection or open redirect | No user-controlled navigation target is trusted; external audio is fixed to Telegram/approved providers; auth redirects use the current app origin. |
+| URL injection or open redirect | No user-controlled navigation target is trusted; external audio is fixed to Telegram/approved providers; browser auth redirects use the current app origin and native auth uses the fixed `goalflow://auth/callback` scheme. |
 | CSRF / cross-origin API use | Bearer-token API; explicit CORS allow-list; OPTIONS rejects unknown origins; no cookie-authenticated mutation endpoints. |
 | IDOR / cross-user task access | Server queries scope by `request.user.id`; privileged RPCs receive the authenticated user id; RLS policies scope rows by `auth.uid()`. Adversarial policy inspection is recorded below. |
 | Privilege escalation / owner endpoints | Owner role checked server-side; owner routes are behind authentication and AAL2 enforcement; invite creation/revocation is owner-scoped. |
@@ -41,6 +42,7 @@ The browser and Android bundle are hostile-readable environments. Only browser-s
 | AI prompt abuse / provider leakage | Bounded request schemas, quotas, circuit breaker, provider timeouts, response schemas, and server-only provider keys. Logs contain route/latency/category, not prompts or responses. |
 | Dependency vulnerability | `npm audit --audit-level=high` is a release gate; lockfile is committed and reviewed with dependency tooling. |
 | Privacy leakage in logs | HTTP logs contain request metadata and user id only; AI logs contain metadata; backup failures log categories, not plaintext. |
+| Native local-data exposure or session theft | Native task data remains in the private app sandbox; sessions use Android Keystore-backed storage; no server secret or provider key is packaged in the native client. The custom auth scheme is fixed but device-level deep-link interception still requires an emulator/device security pass. |
 
 ## RLS review
 
@@ -57,6 +59,7 @@ The environment used for this release did not provide two authenticated Supabase
 - Client API calls support an explicit `VITE_API_ORIGIN` for Android without embedding a development host or credential.
 - Telegram `/move` rejects missing/invalid dates instead of silently choosing a different day.
 - Month-only database scheduling uses the user profile timezone through a forward-only migration.
+- Native Room persistence uses explicit schema migrations, an encrypted Goalflow backup bridge, durable outbox state, retryable WorkManager sync, and dark/light system-bar resources without a WebView main experience.
 
 ## Residual external verification
 

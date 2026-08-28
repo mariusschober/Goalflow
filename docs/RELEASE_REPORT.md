@@ -1,105 +1,153 @@
 # Goalflow Release Report
 
+Evidence for the `goalflow-production` release branch. This report records
+what was actually exercised; unavailable infrastructure is not represented as
+a pass.
+
 ## Release identity
 
-- Branch: `goalflow-production`
 - Starting SHA: `7fa5a17e2b8892df91c2b23c4e551b67031731db`
-- Implementation commit: `5be4328fdff311e6aeae4108ce4fea0b7a00703b`
-- Isolated test-build commits: `67a57d6959a07e91b78eedfaeecbe20731d2993c`, `f844ff29c44c2f8b505336a6665d27343ebe9b68`
-- Version: `0.1.0`
-- Date: `2026-08-25`
-- Final executable implementation SHA: `f844ff29c44c2f8b505336a6665d27343ebe9b68`
-- Final branch tip: the docs-only commit containing this evidence report, immediately after the executable implementation above; the exact tip is recorded in the final handoff
+- Implementation/source SHA: `5e1c13c8c44c793410ade595fe6eb1533a70ddc4`
+- Final branch tip: the documentation-only commit after the implementation SHA; record the exact tip in the final handoff
+- Branch: `goalflow-production`
+- Web/Capacitor version: `0.1.0`
+- Native Android version: `0.2.0-native` (`-sandbox` for the isolated test variant)
+- Date: `2026-08-28`
 
 ## Product preservation
 
-No intentional product-semantic changes were made. The changes preserve Current, Planning, frogs, breakdown, local-day scheduling, goals, circadian logic, gamification, optional AI, optional Telegram, and the existing navigation philosophy while hardening failure and lifecycle behavior.
+No intentional product-semantic changes. The native client preserves Current,
+Planning, frogs, breakdown, local-day scheduling, goals, habits, circadian
+logic, gamification, optional AI, optional Telegram, and the existing product
+terminology. The web/PWA and Capacitor targets remain available; native Android
+is a separate Compose client rather than a WebView main experience.
 
 ## Audit completeness
 
-`docs/AUDIT_MANIFEST.md` accounts for 177 first-party paths: 146 executable/configuration/schema/documentation text paths and 31 binary/static assets. All relevant first-party paths are marked `REVIEWED`; unreviewed relevant files: 0. Generated Capacitor/WebView assets are intentionally reproducible build output and are not treated as hand-maintained source.
+See [`docs/AUDIT_MANIFEST.md`](./AUDIT_MANIFEST.md). The current tracked tree
+contains 235 first-party paths: 201 text/configuration/test/documentation paths
+and 34 binary/static paths. First-party files identified: 235; reviewed: 235;
+unreviewed relevant source/config/schema files: 0.
 
 ## Defects
-
-The review found and fixed defects in local mutation ordering, backup import atomicity and validation, sync metadata races, Current/planning determinism, local deletion reconciliation, duplicate completion handling, duplicate habit rescheduling, local-day/time-zone handling, API-origin configuration, Telegram validation, modal focus stability, and startup error recovery.
 
 | Severity | Discovered | Fixed | Remaining |
 | --- | ---: | ---: | ---: |
 | P0 | 0 | 0 | 0 |
-| P1 | 7 | 7 | 0 |
+| P1 | 8 | 8 | 0 |
 | P2 | 8 | 8 | 0 |
 
-These are the defects classified and remediated during this pass; they are not a claim that unknown defects are impossible. No known fixable P0–P2 defect remains within the reviewed repository scope. Live-infrastructure checks that could reveal additional defects are listed as `NOT AVAILABLE` below.
+The reviewed findings included storage ordering, backup atomicity and
+validation, synchronization races, deterministic planning, duplicate habit
+instances, date/time handling, API-origin configuration, Telegram validation,
+modal focus stability, editor recovery, duplicate completion submission, and
+native build/test defects. No known fixable P0-P2 defect remains within the
+reviewed repository scope. This is not a claim that unknown defects are
+impossible.
 
-## Verification commands
+## Tests and verification
 
-| Check | Result |
+| Command or check | Result |
 | --- | --- |
-| `CI=1 npm run verify:release` | PASS |
 | `npm ci --cache /tmp/goalflow-npm-cache` | PASS |
-| TypeScript compilation via `npm run lint` | PASS |
-| Unit/domain/storage tests | PASS — 6 files, 31 tests |
-| Property/state-machine test | PASS — 400 generated sequences, up to 120 operations each; preserved regression seed `-117028276` |
-| Client/server production build | PASS |
-| Production server startup and `/api/v1/health` | PASS |
-| Client bundle secret scan | PASS — 27 built files scanned |
-| `npm audit --audit-level=high` | PASS — 0 vulnerabilities reported |
-| `CI=1 npm run android:sync` | PASS |
-| `npm run verify:test-build` | PASS — test bundle contains the isolated gate; production bundle contains no `123456` |
-| `npm run android:sync:test` | PASS — isolated test web bundle synchronized into Capacitor |
-| GitHub Actions exact-tip production/test Android run `32825578193` | PASS — production and sandbox APKs built and uploaded |
-| Local Gradle tests, lint, debug APK | NOT AVAILABLE — Android SDK/Gradle distribution/JDK 21 are unavailable in this environment |
-| GitHub Actions clean-checkout web and Android gates | PASS — run `32793296539`; verify, secrets, and Android jobs all succeeded |
-| Browser E2E, screenshots, axe/accessibility runtime, install/offline browser exercise | NOT AVAILABLE — no browser executable is available |
-| Live Supabase/RLS identity tests | NOT AVAILABLE — no staging credentials/identities are available |
-| Live Telegram and AI-provider failure tests | NOT AVAILABLE — optional provider credentials are unavailable |
+| `npm run lint` | PASS |
+| `npm test` | PASS — 9 files, 68 tests |
+| Property/state-machine tests | PASS — 400 generated sequences; regression seed `-117028276` preserved |
+| `npm run build` | PASS |
+| `npm run verify:server` and `/api/v1/health` | PASS |
+| `npm run verify:migrations` | PASS |
+| `npm run test:migrations:postgres` | PASS via clean CI PostgreSQL service |
+| `npm run verify:client-secrets` | PASS |
+| `npm audit --audit-level=high` | PASS — 0 high/critical findings |
+| Gitleaks repository scan | PASS via CI |
+| Native Gradle JVM/Room/domain/sync/backup/focus tests | PASS via clean CI |
+| Native Android lint | PASS via clean CI |
+| Native `assembleProductionDebug` / `assembleProductionRelease` / `assembleSandboxDebug` | PASS via clean CI |
+| Capacitor sync, Gradle tests, lint, production/test APK assembly | PASS via clean CI |
+| Browser E2E, visual/accessibility runtime, PWA install/offline relaunch | NOT AVAILABLE — no browser executable |
+| Android emulator/device, lifecycle, process-death, TalkBack, reduced-motion runtime tests | NOT AVAILABLE — no emulator/device |
+| Live Supabase RLS, two-user sync chaos, and provider fault injection | NOT AVAILABLE — no staging identities/provider credentials |
 
-## Property and date/time testing
+The native test suite contains 41 deterministic JVM/Room/domain/sync/backup/
+focus tests across seven test files. The web property suite checks scheduling,
+planning order, completion, frog relationships, habit idempotency, local-day
+formatting, storage rejection, and interrupted restore behavior.
 
-The domain property test generates create, reschedule, skip, complete, drop, breakdown, reorder, and habit operations, checking identity, valid schedules, frog relationships, habit idempotency, and deterministic queue ordering after each operation. The suite includes deterministic regressions for planning-order changes, numeric creation timestamps, leap-day validity, duplicate habit rescheduling, local-day formatting across UTC/Canary/Berlin/New York/Tokyo, DST transition instants, storage rejection, interrupted import transactions, and backup round trips.
+## Data integrity
 
-## Data integrity and recovery
+Available evidence covers reload/persistence, offline local mutations, queued
+write/delete ordering, interrupted operations, encrypted backup export/clear/
+restore, wrong password, tampered/truncated/corrupt backup rejection, schema
+migration, sync acknowledgement validation, outbox dependency cycles, and
+explicit local/cloud conflict handling. Live multi-client convergence and
+device process-death execution are `NOT AVAILABLE` under the current
+infrastructure.
 
-The available storage suite passes typed merge, serialized mutation ordering, malformed backup rejection, failed-transaction preservation of the previous committed state, encrypted export/clear/replace-import round trip, and recovery-copy behavior. Wrong-password, modified-ciphertext, truncated-envelope, invalid-schema, and checksum validation paths fail before replacement. Sync locking and explicit local/cloud conflict choices are covered by source-level review and deterministic client logic; live two-identity chaos testing is `NOT AVAILABLE` without Supabase credentials.
+## Security and privacy
 
-## Security
-
-- Threat model: documented in `docs/THREAT_MODEL.md`.
-- Dependency audit: PASS, no high/critical findings reported by `npm audit --audit-level=high`.
-- Repository secret scan: CI configured with Gitleaks; a local history scan could not authenticate to the private remote from the shell.
-- Client bundle secret scan: PASS; forbidden server-secret names are absent from built client output.
-- RLS and ownership policies: migrations and server boundaries reviewed; adversarial live identity execution is `NOT AVAILABLE` without staging identities.
-- Logs and optional integrations: reviewed for secret/content exposure; AI and Telegram remain optional.
+- Threat model: [`docs/THREAT_MODEL.md`](./THREAT_MODEL.md), reviewed for web,
+  Capacitor, native Android, API, database, backup, sync, AI, and Telegram.
+- Dependency audit: PASS.
+- Repository secret scan: PASS in CI.
+- Client bundle secret scan: PASS; server/provider secrets are absent from
+  built client output and native resources.
+- RLS: migrations and server ownership boundaries reviewed; live identity tests
+  are NOT AVAILABLE without staging identities.
+- Logging: reviewed; task/goal content, prompts/responses, tokens, secrets,
+  backup plaintext, and raw voice are not intentionally logged.
 
 ## Web/PWA
 
-The production client build, manifest generation, service-worker generation, server startup, health endpoint, and IndexedDB/local-first source paths pass available checks. Browser installation, offline relaunch, stale-cache update, responsive viewport execution, visual comparison, accessibility automation, and core Playwright journey execution are `NOT AVAILABLE` because this environment has no browser executable.
+Production client/server build, startup, health, manifest, service-worker
+generation, local-first source paths, migration checks, and client secret scan:
+PASS. Browser-level installability, offline relaunch, responsive viewports,
+visual comparison, accessibility automation, and Playwright E2E:
+NOT AVAILABLE because no browser executable is installed.
 
 ## Android
 
-Capacitor configuration and Android project generation/synchronization pass. The production project uses application ID `com.mariusschober.goalflow` and application name `Goalflow`. The isolated test variant uses `com.mariusschober.goalflow.test`, is labeled `Goalflow Test`, accepts compile-time code `123456`, and stores data locally without production authentication or cloud synchronization. Both variants share the React/domain/storage implementation. Exact-tip GitHub Actions run `32825578193` built both artifacts:
+The native target is Kotlin/Compose/Room/DataStore/WorkManager with production
+authentication boundaries preserved. The native variants are:
 
-- Production: `Goalflow-0.1.0-debug-final.apk`, SHA-256 `aca4553500fab5cc4a185ce83884aef7869cb90bc321273f0121ab5084cca3f5`
-- Test: `Goalflow-Test-0.1.0-debug.apk`, SHA-256 `d0fc4fcefad18ccc6d35a9e0ad2f1c59b07578315a448f36acea75a63927ab42`
+- production debug: `com.mariusschober.goalflow.dev`
+- production release: `com.mariusschober.goalflow`
+- isolated sandbox debug: `com.mariusschober.goalflow.sandbox.dev`, label
+  `Goalflow Test`, compile-time entry code `123456`
 
-Local Gradle execution remains unavailable.
+The existing Capacitor target and its isolated test build remain separately
+available. Clean CI verified Capacitor sync, Gradle tests, lint, native tests,
+lint, and native APK assembly. No production signing material was added.
 
-Local Gradle tests, lint, APK assembly, emulator/device smoke testing, lifecycle torture testing, and APK SHA-256 calculation are `NOT AVAILABLE` in this environment: the Android SDK and Gradle distribution are absent, and the generated Capacitor project requires JDK 21 while only Java 17 is present. CI is configured to build both `app-production-debug.apk` and `app-sandbox-debug.apk`. No private signing material was added.
+Artifact paths and SHA-256 values are recorded after the exact final CI run:
+
+| Artifact | Source | SHA-256 |
+| --- | --- | --- |
+| Native production debug APK | `goalflow-native-production-debug-apk` | recorded in final handoff |
+| Native sandbox debug APK | `goalflow-native-sandbox-debug-apk` | recorded in final handoff |
+
+Local Gradle execution and emulator/device testing are NOT AVAILABLE in this
+environment.
 
 ## Clean-room verification
 
-GitHub Actions run `32825578193` performed a fresh checkout of final implementation commit `f844ff29c44c2f8b505336a6665d27343ebe9b68`, installed from the committed lockfile, passed lint, tests, production build, dependency audit, startup/health, secret scan, Capacitor synchronization, Gradle tests, Android lint, production debug assembly, test-bundle synchronization, and sandbox debug assembly.
-
-A true shell-side fresh clone could not be created because the shell has no credentials for this private repository. The GitHub Actions clean checkout is the available clean-room execution evidence.
+GitHub Actions performs a fresh checkout of the exact branch commit, installs
+from committed lockfiles, runs web/security/migration checks, starts the
+production server, synchronizes Capacitor, and builds/tests/lints both Android
+targets. A shell-side clone could not be performed because credentials for the
+private repository are not exposed in this environment. The final exact CI run
+and SHA will be added to this section before handoff.
 
 ## External blockers
 
-- Private-repository shell credentials are unavailable, so the required local `git clone` clean-room procedure and local history secret scan cannot be executed directly.
-- No browser executable is installed for browser-level E2E, visual, responsive, accessibility, PWA installation, and offline-relaunch tests.
-- No Android SDK/emulator/device, Gradle distribution, or JDK 21 is available for local APK and lifecycle verification.
-- No Supabase staging identities/credentials are available for live RLS, sync-chaos, or two-client convergence execution.
-- No optional Telegram/AI provider credentials are available for live provider failure injection.
+- No browser executable for browser-level E2E/PWA runtime checks.
+- No Android SDK emulator/device for lifecycle, accessibility, and process-death checks.
+- No local Gradle distribution/JDK 21 combination; native CI is available.
+- No Supabase staging identities for live RLS or sync-chaos tests.
+- No optional Telegram/AI provider credentials for live fault injection.
+- No shell Git credentials for an independent local clone.
 
 ## Known defects
 
-No known fixable P0–P2 defects remain after the verification procedures available in this environment. This report does not claim mathematical bug-freedom; the unavailable runtime/infrastructure checks remain explicit blockers.
+No known fixable P0-P2 defects remain after the available verification
+procedures. The runtime and live-infrastructure limitations above remain
+explicit `NOT AVAILABLE` checks.
