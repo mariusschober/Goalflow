@@ -369,7 +369,7 @@ fun NativeGoalsScreen(
     onCreateTrueNorth: (NativeTrueNorthDraft, () -> Unit) -> Unit,
     onUpdateTrueNorth: (GoalflowTrueNorth, NativeTrueNorthDraft, () -> Unit) -> Unit,
     onDeleteTrueNorth: (GoalflowTrueNorth) -> Unit,
-    onUpdateAmalgam: (String) -> Unit,
+    onUpdateAmalgam: (String, () -> Unit) -> Unit,
     onOpenInsights: () -> Unit
 ) {
     var goalEditor by remember { mutableStateOf<GoalflowGoal?>(null) }
@@ -379,7 +379,12 @@ fun NativeGoalsScreen(
     var deleteGoalCandidate by remember { mutableStateOf<GoalflowGoal?>(null) }
     var deleteTrueNorthCandidate by remember { mutableStateOf<GoalflowTrueNorth?>(null) }
     var amalgamEditing by rememberSaveable { mutableStateOf(false) }
+    var amalgamSaving by rememberSaveable { mutableStateOf(false) }
     var amalgamDraft by rememberSaveable(amalgam) { mutableStateOf(amalgam) }
+
+    LaunchedEffect(error) {
+        if (error != null) amalgamSaving = false
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -428,7 +433,16 @@ fun NativeGoalsScreen(
                 draft = amalgamDraft,
                 onStartEdit = { amalgamDraft = amalgam; amalgamEditing = true },
                 onDraftChange = { amalgamDraft = it },
-                onSave = { onUpdateAmalgam(amalgamDraft); amalgamEditing = false },
+                saving = amalgamSaving,
+                onSave = {
+                    if (!amalgamSaving) {
+                        amalgamSaving = true
+                        onUpdateAmalgam(amalgamDraft) {
+                            amalgamSaving = false
+                            amalgamEditing = false
+                        }
+                    }
+                },
                 onCancel = { amalgamEditing = false }
             )
         }
@@ -524,6 +538,7 @@ private fun AmalgamCard(
     draft: String,
     onStartEdit: () -> Unit,
     onDraftChange: (String) -> Unit,
+    saving: Boolean,
     onSave: () -> Unit,
     onCancel: () -> Unit
 ) {
@@ -537,7 +552,9 @@ private fun AmalgamCard(
                 OutlinedTextField(value = draft, onValueChange = onDraftChange, modifier = Modifier.fillMaxWidth(), singleLine = true, label = { Text("Thought") })
                 Row(horizontalArrangement = Arrangement.End, modifier = Modifier.fillMaxWidth()) {
                     TextButton(onClick = onCancel) { Text("Cancel", color = MaterialTheme.colorScheme.inverseOnSurface) }
-                    TextButton(onClick = onSave) { Text("Save", color = MaterialTheme.colorScheme.inverseOnSurface) }
+                    TextButton(onClick = onSave, enabled = !saving) {
+                        Text(if (saving) "Saving…" else "Save", color = MaterialTheme.colorScheme.inverseOnSurface)
+                    }
                 }
             } else {
                 Text("\"$value\"", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.inverseOnSurface)

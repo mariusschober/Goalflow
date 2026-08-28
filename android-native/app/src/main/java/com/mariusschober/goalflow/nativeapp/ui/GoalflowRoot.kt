@@ -454,7 +454,16 @@ fun GoalflowRoot(
                         trueNorth = trueNorth,
                         amalgam = amalgam,
                         error = error,
-                        onCreateGoal = { draft, onComplete -> goalflowViewModel.createGoal(draft.name, draft.description, onComplete) },
+                        onCreateGoal = { draft, onComplete ->
+                            goalflowViewModel.createGoal(
+                                name = draft.name,
+                                description = draft.description,
+                                deadline = draft.deadline,
+                                excitement = draft.excitement,
+                                roi = draft.roi,
+                                onComplete = onComplete
+                            )
+                        },
                         onUpdateGoal = { goal, draft, onComplete ->
                             goalflowViewModel.updateGoal(
                                 goal.copy(
@@ -503,7 +512,7 @@ fun GoalflowRoot(
                             )
                         },
                         onDeleteTrueNorth = goalflowViewModel::deleteTrueNorth,
-                        onUpdateAmalgam = goalflowViewModel::updateAmalgam,
+                        onUpdateAmalgam = { text, onComplete -> goalflowViewModel.updateAmalgam(text, onComplete) },
                         onOpenInsights = { destination = RootDestination.INSIGHTS }
                     )
                     RootDestination.INSIGHTS -> NativeInsightsScreen(

@@ -83,6 +83,26 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `goal creation keeps deadline and priority fields in local and sync records`() = runTest {
+        val goal = repository.createGoal(
+            name = "Ship the next chapter",
+            description = "One clear direction.",
+            deadline = "2026-09-15",
+            excitement = 8,
+            roi = 7
+        )
+
+        val stored = database.goalDao().get(goal.id)
+        assertEquals("2026-09-15", stored?.deadline)
+        assertEquals(8, stored?.excitement)
+        assertEquals(7, stored?.roi)
+        val payload = org.json.JSONObject(repository.pendingSyncMutations().single().payload)
+        assertEquals("2026-09-15", payload.getString("deadline"))
+        assertEquals(8, payload.getInt("excitement"))
+        assertEquals(7, payload.getInt("roi"))
+    }
+
+    @Test
     fun `habit instances use shared weekday convention and deterministic identity`() = runTest {
         val habit = repository.createHabit(
             title = "Sunday reset",
@@ -127,6 +147,22 @@ class GoalflowRepositorySyncTest {
         val progress = org.json.JSONObject(database.rawCollectionDao().get("progress")!!.payload)
         assertEquals(2, progress.getInt("level"))
         assertEquals(27, progress.getInt("xp"))
+    }
+
+    @Test
+    fun `blank completion note does not erase the existing task notes`() = runTest {
+        val task = repository.createTask(
+            title = "Keep the context",
+            notes = "Important context",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+
+        repository.completeTask(task.id, finalDescription = "   ")
+
+        assertEquals("Important context", database.taskDao().get(task.id)?.notes)
     }
 
     @Test

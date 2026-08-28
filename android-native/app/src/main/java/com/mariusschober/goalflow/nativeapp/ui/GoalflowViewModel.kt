@@ -302,10 +302,17 @@ class GoalflowViewModel(
         }
     }
 
-    fun createGoal(name: String, description: String, onComplete: () -> Unit) {
+    fun createGoal(
+        name: String,
+        description: String,
+        deadline: String? = null,
+        excitement: Int? = null,
+        roi: Int? = null,
+        onComplete: () -> Unit
+    ) {
         viewModelScope.launch {
             clearError()
-            runCatching { repository.createGoal(name, description) }
+            runCatching { repository.createGoal(name, description, deadline, excitement, roi) }
                 .onSuccess {
                     _notice.value = "Direction saved locally"
                     onComplete()
@@ -398,11 +405,14 @@ class GoalflowViewModel(
         }
     }
 
-    fun updateAmalgam(text: String) {
+    fun updateAmalgam(text: String, onComplete: () -> Unit = {}) {
         viewModelScope.launch {
             clearError()
             runCatching { repository.updateAmalgam(text) }
-                .onSuccess { _notice.value = "Background thought saved locally" }
+                .onSuccess {
+                    _notice.value = "Background thought saved locally"
+                    onComplete()
+                }
                 .onFailure { failure -> _error.value = failure.message ?: "The background thought could not be saved." }
         }
     }

@@ -250,7 +250,7 @@ class GoalflowRepository(
             }
             val updated = task.copy(
                 status = TaskStatus.COMPLETED.name,
-                notes = finalDescription?.trim() ?: task.notes,
+                notes = finalDescription?.trim()?.takeIf(String::isNotBlank) ?: task.notes,
                 completedAt = now,
                 updatedAt = now,
                 extraJson = updatedExtras.toString()
@@ -588,13 +588,26 @@ class GoalflowRepository(
         onMutation()
     }
 
-    suspend fun createGoal(name: String, description: String): GoalflowGoal {
+    suspend fun createGoal(
+        name: String,
+        description: String,
+        deadline: String? = null,
+        excitement: Int? = null,
+        roi: Int? = null
+    ): GoalflowGoal {
         val cleanName = name.trim()
         if (cleanName.isBlank()) throw SchedulingException("A goal needs a name.")
+        val cleanDeadline = deadline?.trim()?.takeIf(String::isNotBlank)
+        cleanDeadline?.let {
+            require(isRealLocalDay(it)) { "Choose a valid goal deadline." }
+        }
         val goal = GoalflowGoal(
             id = UUID.randomUUID().toString(),
             name = cleanName,
             description = description.trim(),
+            deadline = cleanDeadline,
+            excitement = excitement,
+            roi = roi,
             createdAt = System.currentTimeMillis()
         )
         database.withTransaction {
