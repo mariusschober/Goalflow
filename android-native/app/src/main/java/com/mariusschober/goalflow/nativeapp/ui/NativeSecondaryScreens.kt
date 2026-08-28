@@ -113,8 +113,8 @@ fun NativeHabitsScreen(
     habits: List<GoalflowHabit>,
     goals: List<GoalflowGoal>,
     error: String?,
-    onCreate: (NativeHabitDraft) -> Unit,
-    onUpdate: (GoalflowHabit, NativeHabitDraft) -> Unit,
+    onCreate: (NativeHabitDraft, () -> Unit) -> Unit,
+    onUpdate: (GoalflowHabit, NativeHabitDraft, () -> Unit) -> Unit,
     onDelete: (GoalflowHabit) -> Unit
 ) {
     var editor by remember { mutableStateOf<GoalflowHabit?>(null) }
@@ -137,6 +137,9 @@ fun NativeHabitsScreen(
                     modifier = Modifier.size(52.dp)
                 ) { Icon(Icons.Rounded.Add, contentDescription = "Add habit") }
             }
+        }
+        error?.let { message ->
+            item { Text(message, color = MaterialTheme.colorScheme.error) }
         }
         if (habits.isEmpty()) {
             item {
@@ -168,8 +171,8 @@ fun NativeHabitsScreen(
             error = error,
             onDismiss = { editorOpen = false },
             onSave = { draft ->
-                if (editor == null) onCreate(draft) else onUpdate(editor!!, draft)
-                editorOpen = false
+                val closeEditor = { editorOpen = false }
+                if (editor == null) onCreate(draft, closeEditor) else onUpdate(editor!!, draft, closeEditor)
             }
         )
     }
@@ -261,6 +264,10 @@ private fun HabitEditorSheet(
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     val weekdays = listOf("S", "M", "T", "W", "T", "F", "S")
+
+    LaunchedEffect(error) {
+        if (error != null) saving = false
+    }
 
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, modifier = Modifier) {
         Column(
@@ -356,11 +363,11 @@ fun NativeGoalsScreen(
     trueNorth: List<GoalflowTrueNorth>,
     amalgam: String,
     error: String?,
-    onCreateGoal: (NativeGoalDraft) -> Unit,
-    onUpdateGoal: (GoalflowGoal, NativeGoalDraft) -> Unit,
+    onCreateGoal: (NativeGoalDraft, () -> Unit) -> Unit,
+    onUpdateGoal: (GoalflowGoal, NativeGoalDraft, () -> Unit) -> Unit,
     onDeleteGoal: (GoalflowGoal) -> Unit,
-    onCreateTrueNorth: (NativeTrueNorthDraft) -> Unit,
-    onUpdateTrueNorth: (GoalflowTrueNorth, NativeTrueNorthDraft) -> Unit,
+    onCreateTrueNorth: (NativeTrueNorthDraft, () -> Unit) -> Unit,
+    onUpdateTrueNorth: (GoalflowTrueNorth, NativeTrueNorthDraft, () -> Unit) -> Unit,
     onDeleteTrueNorth: (GoalflowTrueNorth) -> Unit,
     onUpdateAmalgam: (String) -> Unit,
     onOpenInsights: () -> Unit
@@ -390,6 +397,9 @@ fun NativeGoalsScreen(
                     Icon(Icons.Rounded.Add, contentDescription = "Add goal")
                 }
             }
+        }
+        error?.let { message ->
+            item { Text(message, color = MaterialTheme.colorScheme.error) }
         }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer), shape = RoundedCornerShape(24.dp)) {
@@ -446,8 +456,8 @@ fun NativeGoalsScreen(
             error = error,
             onDismiss = { goalEditorOpen = false },
             onSave = { draft ->
-                if (goalEditor == null) onCreateGoal(draft) else onUpdateGoal(goalEditor!!, draft)
-                goalEditorOpen = false
+                val closeEditor = { goalEditorOpen = false }
+                if (goalEditor == null) onCreateGoal(draft, closeEditor) else onUpdateGoal(goalEditor!!, draft, closeEditor)
             }
         )
     }
@@ -457,8 +467,8 @@ fun NativeGoalsScreen(
             error = error,
             onDismiss = { trueNorthEditorOpen = false },
             onSave = { draft ->
-                if (trueNorthEditor == null) onCreateTrueNorth(draft) else onUpdateTrueNorth(trueNorthEditor!!, draft)
-                trueNorthEditorOpen = false
+                val closeEditor = { trueNorthEditorOpen = false }
+                if (trueNorthEditor == null) onCreateTrueNorth(draft, closeEditor) else onUpdateTrueNorth(trueNorthEditor!!, draft, closeEditor)
             }
         )
     }
@@ -570,6 +580,9 @@ private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: (
     var roi by rememberSaveable(key) { mutableStateOf(initial?.roi?.toString().orEmpty()) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(error) {
+        if (error != null) saving = false
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(if (initial == null) "New goal" else "Edit goal", style = MaterialTheme.typography.headlineMedium)
@@ -613,6 +626,9 @@ private fun TrueNorthEditorSheet(initial: GoalflowTrueNorth?, error: String?, on
     var duration by rememberSaveable(key) { mutableStateOf(initial?.anchorHabitDuration?.toString() ?: "15") }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(error) {
+        if (error != null) saving = false
+    }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(13.dp)) {
             Text(if (initial == null) "True North" else "Edit True North", style = MaterialTheme.typography.headlineMedium)

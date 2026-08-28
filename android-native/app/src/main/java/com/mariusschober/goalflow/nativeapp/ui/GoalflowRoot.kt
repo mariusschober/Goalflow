@@ -318,7 +318,8 @@ fun GoalflowRoot(
     // surface. Keep failures visible without leaving a stale error in a
     // later capture or editor sheet.
     val errorSurfaceOpen = captureOpen || circadianOpen || editTask != null ||
-        breakdownTask != null || backupAction != null || signInOpen || focusTask != null
+        breakdownTask != null || backupAction != null || signInOpen || focusTask != null ||
+        destination == RootDestination.HABITS || destination == RootDestination.GOALS
     LaunchedEffect(error, errorSurfaceOpen) {
         val message = error
         if (message != null && !errorSurfaceOpen) {
@@ -420,7 +421,7 @@ fun GoalflowRoot(
                         habits = habits,
                         goals = goals,
                         error = error,
-                        onCreate = { draft ->
+                        onCreate = { draft, onComplete ->
                             goalflowViewModel.createHabit(
                                 draft.title,
                                 draft.frequency,
@@ -428,10 +429,11 @@ fun GoalflowRoot(
                                 draft.isHighPriority,
                                 draft.beforeFrog,
                                 draft.duration,
-                                draft.goalId
-                            ) { }
+                                draft.goalId,
+                                onComplete
+                            )
                         },
-                        onUpdate = { habit, draft ->
+                        onUpdate = { habit, draft, onComplete ->
                             goalflowViewModel.updateHabit(
                                 habit.copy(
                                     title = draft.title,
@@ -441,7 +443,8 @@ fun GoalflowRoot(
                                     beforeFrog = draft.beforeFrog,
                                     duration = draft.duration,
                                     goalId = draft.goalId
-                                )
+                                ),
+                                onComplete
                             )
                         },
                         onDelete = goalflowViewModel::deleteHabit
@@ -451,8 +454,8 @@ fun GoalflowRoot(
                         trueNorth = trueNorth,
                         amalgam = amalgam,
                         error = error,
-                        onCreateGoal = { draft -> goalflowViewModel.createGoal(draft.name, draft.description) { } },
-                        onUpdateGoal = { goal, draft ->
+                        onCreateGoal = { draft, onComplete -> goalflowViewModel.createGoal(draft.name, draft.description, onComplete) },
+                        onUpdateGoal = { goal, draft, onComplete ->
                             goalflowViewModel.updateGoal(
                                 goal.copy(
                                     name = draft.name,
@@ -460,11 +463,12 @@ fun GoalflowRoot(
                                     deadline = draft.deadline,
                                     excitement = draft.excitement,
                                     roi = draft.roi
-                                )
+                                ),
+                                onComplete
                             )
                         },
                         onDeleteGoal = goalflowViewModel::deleteGoal,
-                        onCreateTrueNorth = { draft ->
+                        onCreateTrueNorth = { draft, onComplete ->
                             goalflowViewModel.createTrueNorth(
                                 com.mariusschober.goalflow.nativeapp.domain.GoalflowTrueNorth(
                                     id = "",
@@ -478,10 +482,11 @@ fun GoalflowRoot(
                                     anchorTask = draft.anchorTask,
                                     anchorHabitDuration = draft.anchorHabitDuration,
                                     createdAt = System.currentTimeMillis()
-                                )
-                            ) { }
+                                ),
+                                onComplete
+                            )
                         },
-                        onUpdateTrueNorth = { goal, draft ->
+                        onUpdateTrueNorth = { goal, draft, onComplete ->
                             goalflowViewModel.updateTrueNorth(
                                 goal.copy(
                                     vision = draft.vision,
@@ -493,7 +498,8 @@ fun GoalflowRoot(
                                     anchorHabit = draft.anchorHabit,
                                     anchorTask = draft.anchorTask,
                                     anchorHabitDuration = draft.anchorHabitDuration
-                                )
+                                ),
+                                onComplete
                             )
                         },
                         onDeleteTrueNorth = goalflowViewModel::deleteTrueNorth,

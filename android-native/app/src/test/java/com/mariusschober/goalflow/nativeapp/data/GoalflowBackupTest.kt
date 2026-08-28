@@ -129,6 +129,35 @@ class GoalflowBackupTest {
         assertThrows(BackupFormatException::class.java) { GoalflowBackup.decrypt(modified, PASSWORD) }
     }
 
+    @Test
+    fun `cyclic pending dependencies are rejected before restore`() {
+        val firstId = "00000000-0000-4000-8000-000000000001"
+        val secondId = "00000000-0000-4000-8000-000000000002"
+        fun mutation(id: String, dependency: String) = SyncOutboxEntity(
+            mutationId = id,
+            deviceId = "device-a",
+            entityType = "tasks",
+            entityId = id,
+            baseServerVersion = null,
+            version = 1,
+            payload = GoalflowJson.taskPayload(task.copy(id = id)).toString(),
+            updatedAt = "2026-08-27T00:00:00Z",
+            deletedAt = null,
+            dependsOnMutationId = dependency
+        )
+
+        val payload = GoalflowBackupPayload(
+            tasks = listOf(task.copy(id = firstId), task.copy(id = secondId)),
+            goals = emptyList(),
+            plans = emptyList(),
+            outbox = listOf(mutation(firstId, secondId), mutation(secondId, firstId))
+        )
+
+        assertThrows(BackupFormatException::class.java) {
+            GoalflowBackup.decrypt(GoalflowBackup.encrypt(payload, PASSWORD), PASSWORD)
+        }
+    }
+
     private companion object {
         const val PASSWORD = "correct horse battery staple"
     }

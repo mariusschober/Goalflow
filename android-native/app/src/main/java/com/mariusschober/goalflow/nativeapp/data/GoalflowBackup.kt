@@ -485,6 +485,7 @@ object GoalflowBackup {
 
     private fun validateSyncState(payload: GoalflowBackupPayload) {
         val outboxIds = payload.outbox.mapTo(linkedSetOf()) { it.mutationId }
+        val dependencies = payload.outbox.associate { it.mutationId to it.dependsOnMutationId }
         payload.outbox.forEach { mutation ->
             mutation.dependsOnMutationId?.let { dependency ->
                 runCatching { java.util.UUID.fromString(dependency) }
@@ -498,6 +499,16 @@ object GoalflowBackup {
                     throw BackupFormatException("Backup contains a conflict resolution without its preserved conflict.")
                 }
             }
+        }
+        val unresolved = outboxIds.toMutableSet()
+        while (unresolved.isNotEmpty()) {
+            val ready = unresolved.filter { mutationId ->
+                dependencies[mutationId].isNullOrBlank() || dependencies[mutationId] !in unresolved
+            }
+            if (ready.isEmpty()) {
+                throw BackupFormatException("Backup contains a cyclic pending mutation dependency.")
+            }
+            unresolved.removeAll(ready.toSet())
         }
         val represented = outboxIds.toMutableSet()
         payload.conflicts.forEach { conflict ->
