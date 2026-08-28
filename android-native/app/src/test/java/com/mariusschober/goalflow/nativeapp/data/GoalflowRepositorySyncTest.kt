@@ -62,6 +62,27 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `capture keeps duration and goal linkage in the local and sync records`() = runTest {
+        val goal = repository.createGoal("A real direction", "")
+        val task = repository.createTask(
+            title = "Make the next move",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false,
+            goalId = goal.id,
+            duration = 45
+        )
+
+        assertEquals(goal.id, database.taskDao().get(task.id)?.goalId)
+        assertEquals(45, org.json.JSONObject(database.taskDao().get(task.id)!!.extraJson).getInt("duration"))
+        val payload = org.json.JSONObject(repository.pendingSyncMutations().first { it.entityId == task.id }.payload)
+        assertEquals(goal.id, payload.getString("goalId"))
+        assertEquals(45, payload.getInt("duration"))
+    }
+
+    @Test
     fun `habit instances use shared weekday convention and deterministic identity`() = runTest {
         val habit = repository.createHabit(
             title = "Sunday reset",
