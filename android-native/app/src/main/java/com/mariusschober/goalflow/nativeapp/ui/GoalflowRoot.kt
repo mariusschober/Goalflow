@@ -156,7 +156,11 @@ private val primaryDestinations = listOf(
 )
 
 @Composable
-fun GoalflowRoot() {
+fun GoalflowRoot(
+    externalCaptureText: String? = null,
+    externalCaptureRequest: Int = 0,
+    onExternalCaptureConsumed: () -> Unit = {}
+) {
     val application = LocalContext.current.applicationContext as GoalflowApplication
     val context = LocalContext.current
     val localView = LocalView.current
@@ -200,6 +204,8 @@ fun GoalflowRoot() {
 
     var destination by rememberSaveable { mutableStateOf(RootDestination.CURRENT) }
     var captureOpen by rememberSaveable { mutableStateOf(false) }
+    var captureSeed by rememberSaveable { mutableStateOf("") }
+    var captureFormKey by rememberSaveable { mutableStateOf(0) }
     var capturePromptLoaded by rememberSaveable { mutableStateOf(false) }
     var datePickerForTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var editTask by remember { mutableStateOf<GoalflowTask?>(null) }
@@ -233,12 +239,26 @@ fun GoalflowRoot() {
 
     fun closeCapture() {
         scope.launch { application.preferences.markCapturePromptSeen() }
+        captureSeed = ""
         captureOpen = false
+    }
+
+    fun openCapture(initialTitle: String = "") {
+        captureSeed = initialTitle
+        captureFormKey += 1
+        captureOpen = true
+    }
+
+    LaunchedEffect(externalCaptureRequest) {
+        if (externalCaptureRequest > 0) {
+            openCapture(externalCaptureText.orEmpty())
+            onExternalCaptureConsumed()
+        }
     }
 
     LaunchedEffect(capturePromptSeen) {
         if (!capturePromptLoaded && capturePromptSeen != null) {
-            captureOpen = capturePromptSeen == false
+            if (capturePromptSeen == false && externalCaptureRequest == 0) openCapture()
             capturePromptLoaded = true
         }
     }
@@ -339,7 +359,7 @@ fun GoalflowRoot() {
                         gate = gate,
                         currentTask = currentTask,
                         circadian = circadian,
-                        onCapture = { captureOpen = true },
+                        onCapture = { openCapture() },
                         onPlanning = { destination = RootDestination.PLANNING },
                         onCheckIn = { circadianOpen = true },
                         onResetCircadian = goalflowViewModel::resetCircadian,
@@ -363,7 +383,7 @@ fun GoalflowRoot() {
                         today = today,
                         gate = gate,
                         tasks = tasks,
-                        onCapture = { captureOpen = true },
+                        onCapture = { openCapture() },
                         onMove = { date, taskId, direction ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
                             goalflowViewModel.moveTask(date, taskId, direction)
@@ -528,6 +548,8 @@ fun GoalflowRoot() {
 
     if (captureOpen) {
         CaptureSheet(
+            formKey = captureFormKey,
+            initialTitle = captureSeed,
             goals = goals,
             error = error,
             onDismiss = {
@@ -1621,24 +1643,26 @@ private fun SignInDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CaptureSheet(
+    formKey: Int,
+    initialTitle: String,
     goals: List<GoalflowGoal>,
     error: String?,
     onDismiss: () -> Unit,
     onSave: (String, String, SchedulePrecision, String, String?, Boolean, String?, Int) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    var title by rememberSaveable { mutableStateOf("") }
-    var notes by rememberSaveable { mutableStateOf("") }
-    var precision by rememberSaveable { mutableStateOf(SchedulePrecision.DAY) }
-    var selectedDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
-    var scheduledTime by rememberSaveable { mutableStateOf("") }
-    var frog by rememberSaveable { mutableStateOf(false) }
-    var selectedGoalId by rememberSaveable { mutableStateOf<String?>(null) }
-    var duration by rememberSaveable { mutableStateOf("25") }
-    var showDatePicker by rememberSaveable { mutableStateOf(false) }
-    var goalMenuOpen by rememberSaveable { mutableStateOf(false) }
-    var saving by rememberSaveable { mutableStateOf(false) }
-    var localError by rememberSaveable { mutableStateOf<String?>(null) }
+    var title by rememberSaveable(formKey) { mutableStateOf(initialTitle) }
+    var notes by rememberSaveable(formKey) { mutableStateOf("") }
+    var precision by rememberSaveable(formKey) { mutableStateOf(SchedulePrecision.DAY) }
+    var selectedDate by rememberSaveable(formKey) { mutableStateOf(LocalDate.now().toString()) }
+    var scheduledTime by rememberSaveable(formKey) { mutableStateOf("") }
+    var frog by rememberSaveable(formKey) { mutableStateOf(false) }
+    var selectedGoalId by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
+    var duration by rememberSaveable(formKey) { mutableStateOf("25") }
+    var showDatePicker by rememberSaveable(formKey) { mutableStateOf(false) }
+    var goalMenuOpen by rememberSaveable(formKey) { mutableStateOf(false) }
+    var saving by rememberSaveable(formKey) { mutableStateOf(false) }
+    var localError by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
