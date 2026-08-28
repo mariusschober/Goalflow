@@ -42,6 +42,7 @@ object GoalflowBackup {
     private const val MIN_ITERATIONS = 100_000
     private const val MAX_ITERATIONS = 1_000_000
     private const val MAX_CIPHERTEXT_BYTES = 10 * 1024 * 1024
+    private const val RAW_JSON_VALUE_KEY = "__goalflowNativeRawJsonV1"
 
     fun encrypt(payload: GoalflowBackupPayload, password: String): String {
         requirePassword(password)
@@ -130,7 +131,7 @@ object GoalflowBackup {
             val keys = raw.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
-                addRawCollection(rawCollections, key, jsonText(raw.get(key)))
+                addRawCollection(rawCollections, key, rawCollectionText(raw.get(key)))
             }
         }
         val metadataKeys = setOf(
@@ -217,7 +218,24 @@ object GoalflowBackup {
     }
 
     private fun rawCollectionsPayload(collections: Map<String, String>): JSONObject = JSONObject().apply {
-        collections.toSortedMap().forEach { (key, payload) -> put(key, parseJsonValue(payload)) }
+        collections.toSortedMap().forEach { (key, payload) ->
+            // Keep the original JSON text, including object-key order. The
+            // native JSON parser is not a lossless transport for web-owned
+            // collections, and these values must survive a native restore.
+            parseJsonValue(payload)
+            put(key, JSONObject().put(RAW_JSON_VALUE_KEY, payload))
+        }
+    }
+
+    private fun rawCollectionText(value: Any): String {
+        if (value is JSONObject && value.has(RAW_JSON_VALUE_KEY)) {
+            if (value.length() != 1) throw BackupFormatException("Backup preserved collection wrapper is invalid.")
+            val payload = value.opt(RAW_JSON_VALUE_KEY)
+            if (payload !is String) throw BackupFormatException("Backup preserved collection wrapper is invalid.")
+            parseJsonValue(payload)
+            return payload
+        }
+        return jsonText(value)
     }
 
     /**

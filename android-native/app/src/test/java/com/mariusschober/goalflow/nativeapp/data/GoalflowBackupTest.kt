@@ -66,7 +66,10 @@ class GoalflowBackupTest {
         assertEquals("outbox roundtrip", payload.outbox, restored.outbox)
         assertEquals("sync metadata roundtrip", payload.syncMeta, restored.syncMeta)
         assertEquals("conflicts roundtrip", payload.conflicts, restored.conflicts)
-        assertEquals("raw collections roundtrip", payload.rawCollections, restored.rawCollections)
+        assertEquals("raw collection keys", payload.rawCollections.keys, restored.rawCollections.keys)
+        payload.rawCollections.forEach { (key, value) ->
+            assertEquals("raw collection $key", value, restored.rawCollections[key])
+        }
     }
 
     @Test
