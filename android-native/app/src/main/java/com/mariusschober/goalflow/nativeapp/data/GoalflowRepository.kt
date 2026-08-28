@@ -656,12 +656,12 @@ class GoalflowRepository(
             // Keep the web client's daily streak rule: a missed day breaks a
             // daily streak, but the habit and its history remain intact.
             val lastDate = habit.lastCompletedDate?.let { runCatching { LocalDate.parse(it) }.getOrNull() }
-            if (habit.frequency == HabitFrequency.DAILY && lastDate != null
+            if (habit.frequency == HabitFrequency.DAILY.name && lastDate != null
                 && ChronoUnit.DAYS.between(lastDate, date) > 1 && habit.streak > 0
             ) {
                 habit = habit.copy(streak = 0)
-                habits.insert(toEntity(habit))
-                enqueueRecordInTransaction("habits", habit.id, GoalflowJson.habitPayload(habit).toString())
+                habits.insert(habit)
+                enqueueRecordInTransaction("habits", habit.id, GoalflowJson.habitPayload(toDomain(habit)).toString())
                 habitChanged = true
             }
             val allowed = habit.frequency == HabitFrequency.DAILY.name ||
@@ -1596,7 +1596,7 @@ class GoalflowRepository(
      * block a core local action. Missing projections start from an empty
      * object; damaged or non-object projections remain untouched.
      */
-    private fun preservedObjectOrEmptyInTransaction(entityType: String): JSONObject? {
+    private suspend fun preservedObjectOrEmptyInTransaction(entityType: String): JSONObject? {
         val stored = rawCollections.get(entityType) ?: return JSONObject()
         return runCatching {
             parseJsonValue(stored.payload) as? JSONObject
@@ -1647,14 +1647,21 @@ class GoalflowRepository(
     }.toString()
 
     private fun jsonEquivalent(left: String, right: String): Boolean = runCatching {
-        val leftValue = parseJsonValue(left)
-        val rightValue = parseJsonValue(right)
-        when {
-            leftValue is JSONObject && rightValue is JSONObject -> leftValue.similar(rightValue)
-            leftValue is JSONArray && rightValue is JSONArray -> leftValue.similar(rightValue)
-            else -> leftValue == rightValue
-        }
+        canonicalJson(parseJsonValue(left)) == canonicalJson(parseJsonValue(right))
     }.getOrDefault(false)
+
+    private fun canonicalJson(value: Any?): String = when {
+        value == null || value === JSONObject.NULL -> "null"
+        value is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(
+            prefix = "{", postfix = "}"
+        ) { key -> "${JSONObject.quote(key)}:${canonicalJson(value.opt(key))}" }
+        value is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") {
+            canonicalJson(value.opt(it))
+        }
+        value is String -> JSONObject.quote(value)
+        value is Number || value is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
 
     private fun sameInstant(left: String?, right: String): Boolean = runCatching {
         left != null && Instant.parse(left) == Instant.parse(right)

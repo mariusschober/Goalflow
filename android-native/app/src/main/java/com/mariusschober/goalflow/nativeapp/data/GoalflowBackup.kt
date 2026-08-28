@@ -256,8 +256,8 @@ object GoalflowBackup {
                 || runCatching { java.time.LocalDate.parse(localDate) }.isFailure
                 || item.optLong("confirmedAt", 0L) <= 0L
             ) throw BackupFormatException("Backup contains an invalid planning decision.")
-            val ids = item.optJSONArray("taskIds")?.let { idsArray ->
-                buildList(idsArray.length()) {
+            val ids: List<String> = item.optJSONArray("taskIds")?.let { idsArray ->
+                buildList {
                     val seen = hashSetOf<String>()
                     for (idIndex in 0 until idsArray.length()) {
                         val id = idsArray.optString(idIndex).trim()
@@ -449,15 +449,21 @@ object GoalflowBackup {
         .getOrElse { throw BackupFormatException("Backup contains invalid preserved collection data.") }
 
     private fun jsonEquivalent(left: String, right: String): Boolean = runCatching {
-        val leftValue = parseJsonValue(left)
-        val rightValue = parseJsonValue(right)
-        when {
-            leftValue is JSONObject && rightValue is JSONObject -> leftValue.similar(rightValue)
-            leftValue is JSONArray && rightValue is JSONArray -> leftValue.similar(rightValue)
-            leftValue is Number && rightValue is Number -> leftValue.toDouble() == rightValue.toDouble()
-            else -> leftValue == rightValue
-        }
+        canonicalJson(parseJsonValue(left)) == canonicalJson(parseJsonValue(right))
     }.getOrDefault(false)
+
+    private fun canonicalJson(value: Any?): String = when {
+        value == null || value === JSONObject.NULL -> "null"
+        value is JSONObject -> value.keys().asSequence().toList().sorted().joinToString(
+            prefix = "{", postfix = "}"
+        ) { key -> "${JSONObject.quote(key)}:${canonicalJson(value.opt(key))}" }
+        value is JSONArray -> (0 until value.length()).joinToString(prefix = "[", postfix = "]") {
+            canonicalJson(value.opt(it))
+        }
+        value is String -> JSONObject.quote(value)
+        value is Number || value is Boolean -> value.toString()
+        else -> JSONObject.quote(value.toString())
+    }
 
     private fun validateSyncState(payload: GoalflowBackupPayload) {
         val outboxIds = payload.outbox.mapTo(linkedSetOf()) { it.mutationId }
