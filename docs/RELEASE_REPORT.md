@@ -8,7 +8,8 @@ a pass.
 
 - Starting SHA: `7fa5a17e2b8892df91c2b23c4e551b67031731db`
 - Implementation/source SHA: `5e1c13c8c44c793410ade595fe6eb1533a70ddc4`
-- Final branch tip: the documentation-only commit after the implementation SHA; record the exact tip in the final handoff
+- Exact clean-checkout evidence tip: `35fd9d0d584c7865317a04c3437dd524d560c8b6`
+- Final branch tip: the subsequent documentation-only evidence commit; the exact tip is recorded in the final handoff
 - Branch: `goalflow-production`
 - Web/Capacitor version: `0.1.0`
 - Native Android version: `0.2.0-native` (`-sandbox` for the isolated test variant)
@@ -122,20 +123,22 @@ Artifact paths and SHA-256 values are recorded after the exact final CI run:
 
 | Artifact | Source | SHA-256 |
 | --- | --- | --- |
-| Native production debug APK | `goalflow-native-production-debug-apk` | recorded in final handoff |
-| Native sandbox debug APK | `goalflow-native-sandbox-debug-apk` | recorded in final handoff |
+| Native production debug APK | `goalflow-native-production-debug-apk` | `f3e276df1fab386d3a59bfb77892fe6e10d1ae5994f29eaa75fd5eff2791d076` |
+| Native sandbox debug APK | `goalflow-native-sandbox-debug-apk` | `19de56db7f477dbd42b26cb607502af73cabe419dff9004a50851252368d0a7c` |
 
 Local Gradle execution and emulator/device testing are NOT AVAILABLE in this
 environment.
 
 ## Clean-room verification
 
-GitHub Actions performs a fresh checkout of the exact branch commit, installs
+GitHub Actions run `33189348602` performed a fresh checkout of evidence tip
+`35fd9d0d584c7865317a04c3437dd524d560c8b6`, installed
 from committed lockfiles, runs web/security/migration checks, starts the
 production server, synchronizes Capacitor, and builds/tests/lints both Android
-targets. A shell-side clone could not be performed because credentials for the
-private repository are not exposed in this environment. The final exact CI run
-and SHA will be added to this section before handoff.
+targets. The run uploaded the two native APKs whose SHA-256 values are listed
+above. A shell-side clone could not be performed because credentials for the
+private repository are not exposed in this environment; the GitHub-hosted
+clean checkout is the available clean-room execution evidence.
 
 ## External blockers
 
