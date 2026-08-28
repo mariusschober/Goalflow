@@ -120,7 +120,6 @@ import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
-import com.mariusschober.goalflow.nativeapp.data.BackupFormatException
 import com.mariusschober.goalflow.nativeapp.data.NATIVE_RAW_COLLECTION_TYPES
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
@@ -741,14 +740,18 @@ fun GoalflowRoot(
                 signInOpen = false
                 backupError = null
             },
-            onConfirm = { email ->
+            onConfirm = { email, onComplete, onFailure ->
                 scope.launch {
                     runCatching { NativeAuthClient(application.sessionStore).requestMagicLink(email) }
                         .onSuccess {
+                            onComplete()
                             signInOpen = false
                             snackbarHostState.showSnackbar("Sign-in link sent")
                         }
-                        .onFailure { backupError = it.message ?: "Sign-in failed" }
+                        .onFailure {
+                            onFailure()
+                            backupError = it.message ?: "Sign-in failed"
+                        }
                 }
             }
         )
@@ -1654,9 +1657,13 @@ private fun BackupPasswordDialog(
 private fun SignInDialog(
     error: String?,
     onDismiss: () -> Unit,
-    onConfirm: (String) -> Unit
+    onConfirm: (String, () -> Unit, () -> Unit) -> Unit
 ) {
     var email by rememberSaveable { mutableStateOf("") }
+    var sending by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(error) {
+        if (error != null) sending = false
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Sign in to sync") },
@@ -1678,7 +1685,15 @@ private fun SignInDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(email) }, enabled = email.isNotBlank()) { Text("Send link") }
+            Button(
+                onClick = {
+                    if (!sending) {
+                        sending = true
+                        onConfirm(email, { sending = false }, { sending = false })
+                    }
+                },
+                enabled = email.isNotBlank() && !sending
+            ) { Text(if (sending) "Sending…" else "Send link") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
     )
