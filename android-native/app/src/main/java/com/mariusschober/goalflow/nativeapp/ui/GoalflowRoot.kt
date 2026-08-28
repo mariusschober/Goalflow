@@ -208,12 +208,28 @@ fun GoalflowRoot() {
     var signInOpen by rememberSaveable { mutableStateOf(false) }
     var circadianOpen by rememberSaveable { mutableStateOf(false) }
     var focusTask by remember { mutableStateOf<GoalflowTask?>(null) }
+    var focusStartedAt by remember { mutableStateOf<Long?>(null) }
     var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(tasks) {
+        val storedFocus = application.focusSessionStore.read() ?: return@LaunchedEffect
+        val storedTask = tasks.firstOrNull { it.id == storedFocus.taskId }
+        if (storedTask == null || storedTask.status.name != "OPEN" || storedTask.deletedAt != null) {
+            application.focusSessionStore.clear()
+            if (focusTask?.id == storedFocus.taskId) {
+                focusTask = null
+                focusStartedAt = null
+            }
+        } else if (focusTask == null) {
+            focusStartedAt = storedFocus.startedAtMillis
+            focusTask = storedTask
+        }
+    }
 
     fun closeCapture() {
         scope.launch { application.preferences.markCapturePromptSeen() }
@@ -329,6 +345,7 @@ fun GoalflowRoot() {
                         onResetCircadian = goalflowViewModel::resetCircadian,
                         onFocus = {
                             localView.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            focusStartedAt = application.focusSessionStore.beginOrResume(it.id).startedAtMillis
                             focusTask = it
                         },
                         onComplete = { task ->
@@ -553,10 +570,16 @@ fun GoalflowRoot() {
     focusTask?.let { task ->
         FocusTimerSheet(
             task = task,
+            startedAtMillis = focusStartedAt
+                ?: application.focusSessionStore.read()?.startedAtMillis
+                ?: System.currentTimeMillis(),
             onDismiss = { focusTask = null },
             onComplete = { actualDuration, flowState ->
                 localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
-                goalflowViewModel.completeTask(task, actualDuration, flowState) { focusTask = null }
+                application.focusSessionStore.clear()
+                focusTask = null
+                focusStartedAt = null
+                goalflowViewModel.completeTask(task, actualDuration, flowState)
             }
         )
     }
@@ -941,11 +964,12 @@ private fun CircadianStatusCard(
 @Composable
 private fun FocusTimerSheet(
     task: GoalflowTask,
+    startedAtMillis: Long,
     onDismiss: () -> Unit,
     onComplete: (actualDurationMinutes: Int, flowState: String?) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val startedAt = rememberSaveable(task.id) { System.currentTimeMillis() }
+    val startedAt = rememberSaveable(task.id, startedAtMillis) { startedAtMillis }
     var now by remember(task.id) { mutableStateOf(System.currentTimeMillis()) }
     var flowState by rememberSaveable(task.id) { mutableStateOf("") }
     val plannedMinutes = runCatching {
@@ -974,6 +998,7 @@ private fun FocusTimerSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
@@ -1658,6 +1683,7 @@ private fun CaptureSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .navigationBarsPadding()
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp)
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)

@@ -249,11 +249,22 @@ class GoalflowViewModel(
     fun moveTask(localDate: String, taskId: String, direction: Int) {
         viewModelScope.launch {
             clearError()
-            runCatching { repository.moveToday(localDate, taskId, direction) }
+                runCatching { repository.moveToday(localDate, taskId, direction) }
                 .onSuccess { result ->
                     if (result != null) {
-                        if (_reorderUndo.value?.let { it.previousIds == result.previousIds } != true) {
-                            _reorderUndo.value = result
+                        // A long-press drag can emit several adjacent moves.
+                        // Keep the first snapshot as the undo target while
+                        // updating the final order shown by the snackbar.
+                        val existing = _reorderUndo.value
+                        _reorderUndo.value = if (
+                            existing == null || existing.localDate != result.localDate
+                        ) {
+                            result
+                        } else {
+                            existing.copy(
+                                orderedIds = result.orderedIds,
+                                hadConfirmedPlan = existing.hadConfirmedPlan || result.hadConfirmedPlan
+                            )
                         }
                     }
                 }

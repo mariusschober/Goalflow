@@ -271,7 +271,7 @@ class GoalflowRepositorySyncTest {
             movedAgain?.previousIds
         )
         assertEquals("daily plan after move=${database.dailyPlanDao().get(today)}", null, database.dailyPlanDao().get(today))
-        assertEquals(listOf(second.id, first.id), database.taskDao().getAll()
+        assertEquals(listOf(first.id, second.id), database.taskDao().getAll()
             .filter { it.scheduledFor == today }
             .sortedBy { it.plannedOrder }
             .map { it.id })

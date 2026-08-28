@@ -3,6 +3,7 @@ package com.mariusschober.goalflow.nativeapp
 import android.app.Application
 import com.mariusschober.goalflow.nativeapp.data.GoalflowPreferences
 import com.mariusschober.goalflow.nativeapp.data.GoalflowDatabase
+import com.mariusschober.goalflow.nativeapp.data.GoalflowFocusSessionStore
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngine
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
@@ -24,6 +25,7 @@ class GoalflowApplication : Application() {
     }
     val sessionStore: SecureSessionStore by lazy { SecureSessionStore(this) }
     val preferences: GoalflowPreferences by lazy { GoalflowPreferences(this) }
+    val focusSessionStore: GoalflowFocusSessionStore by lazy { GoalflowFocusSessionStore(this) }
     val repository: GoalflowRepository by lazy {
         GoalflowRepository(database, deviceId) {
             runCatching { NativeSyncScheduler.schedule(this) }
