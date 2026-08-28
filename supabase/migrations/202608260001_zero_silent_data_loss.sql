@@ -1097,6 +1097,7 @@ declare
   existing_response jsonb;
   created_task public.tasks%rowtype;
   requested_id uuid;
+  requested_date date;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
   request_fingerprint := encode(digest(convert_to(jsonb_build_object('date', target_local_date, 'task', task_payload)::text, 'utf8'), 'sha256'), 'hex');
@@ -1105,6 +1106,9 @@ begin
   if coalesce(task_payload->>'taskId', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
     requested_id := (task_payload->>'taskId')::uuid;
   else requested_id := gen_random_uuid(); end if;
+  requested_date := case when task_payload->>'schedulePrecision' = 'month'
+    then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
+    else (task_payload->>'scheduledFor')::date end;
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':task-id:' || requested_id::text, 0));
   select * into created_task from public.tasks where id = requested_id;
   if found then
@@ -1113,9 +1117,7 @@ begin
       or created_task.notes <> coalesce(task_payload->>'notes', '')
       or created_task.tags <> array(select jsonb_array_elements_text(coalesce(task_payload->'tags', '[]'::jsonb)))
       or created_task.schedule_precision <> task_payload->>'schedulePrecision'
-      or created_task.scheduled_for <> case when task_payload->>'schedulePrecision' = 'month'
-        then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
-        else (task_payload->>'scheduledFor')::date end
+      or created_task.scheduled_for <> requested_date
       or created_task.source <> coalesce(task_payload->>'source', 'manual')
       or created_task.deleted_at is not null
     then
@@ -1135,9 +1137,7 @@ begin
     coalesce(task_payload->>'notes', ''),
     array(select jsonb_array_elements_text(coalesce(task_payload->'tags', '[]'::jsonb))),
     task_payload->>'schedulePrecision',
-    case when task_payload->>'schedulePrecision' = 'month'
-      then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
-      else (task_payload->>'scheduledFor')::date end,
+    requested_date,
     nullif(task_payload->>'scheduledTime', '')::time,
     coalesce((task_payload->>'plannedOrder')::integer, 0),
     coalesce((task_payload->>'isFrog')::boolean, false),
