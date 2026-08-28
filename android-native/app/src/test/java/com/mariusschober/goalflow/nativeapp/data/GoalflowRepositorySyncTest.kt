@@ -16,8 +16,12 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
+import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class GoalflowRepositorySyncTest {
@@ -67,7 +71,7 @@ class GoalflowRepositorySyncTest {
         val first = repository.generateHabitInstance(habit.id, "2026-08-23")
         val second = repository.generateHabitInstance(habit.id, "2026-08-23")
 
-        assertEquals("2d71406c-98b0-5d22-9e37-fd69c2fe82d1", first?.id)
+        assertEquals(uuidV5("${habit.id}:2026-08-23"), first?.id)
         assertEquals(first?.id, second?.id)
         assertEquals(1, database.taskDao().getAll().size)
         assertEquals(3, repository.pendingSyncMutations().size)
@@ -127,6 +131,20 @@ class GoalflowRepositorySyncTest {
         assertEquals("COMPLETED", database.taskDao().get(task.id)?.status)
         assertEquals("not-json", database.rawCollectionDao().get("stats")?.payload)
         assertEquals(60, org.json.JSONObject(database.rawCollectionDao().get("progress")!!.payload).getInt("xp"))
+    }
+
+    private fun uuidV5(name: String): String {
+        val namespace = UUID.fromString("c3e4bcbb-9f56-4ff5-a3a8-9f7478284169")
+        val namespaceBytes = ByteBuffer.allocate(16)
+            .putLong(namespace.mostSignificantBits)
+            .putLong(namespace.leastSignificantBits)
+            .array()
+        val digest = MessageDigest.getInstance("SHA-1")
+            .digest(namespaceBytes + name.toByteArray(StandardCharsets.UTF_8))
+        digest[6] = ((digest[6].toInt() and 0x0f) or 0x50).toByte()
+        digest[8] = ((digest[8].toInt() and 0x3f) or 0x80).toByte()
+        val bytes = ByteBuffer.wrap(digest)
+        return UUID(bytes.long, bytes.long).toString()
     }
 
     @Test

@@ -61,7 +61,6 @@ object GoalflowJson {
         put("wontDo", task.status == TaskStatus.DROPPED)
         put("source", task.source.name.lowercase())
         put("deletedAt", task.deletedAt?.let { Instant.ofEpochMilli(it).toString() } ?: JSONObject.NULL)
-        if (!has("hashtags")) put("hashtags", JSONArray())
     }
 
     fun goalsPayload(goals: List<GoalflowGoal>): JSONArray = JSONArray().apply {
