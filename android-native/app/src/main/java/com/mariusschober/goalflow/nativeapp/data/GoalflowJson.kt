@@ -23,7 +23,7 @@ object GoalflowJson {
         "id", "cloudId", "title", "description", "notes", "completed", "isFrog", "beforeFrog",
         "frogFailures", "rescheduleCount", "createdAt", "updatedAt", "completedAt", "dateAssigned",
         "scheduledFor", "schedulePrecision", "scheduledTime", "plannedOrder", "goalId", "habitId",
-        "parentTaskId", "lifecycleStatus", "wontDo", "source", "deletedAt"
+        "parentTaskId", "lifecycleStatus", "wontDo", "source", "deletedAt", "circadianRank"
     )
     private val goalKnownKeys = setOf(
         "id", "name", "description", "deadline", "completedTasks", "color", "createdAt", "excitement", "roi"
@@ -54,6 +54,7 @@ object GoalflowJson {
         put("schedulePrecision", task.schedulePrecision.name.lowercase())
         put("scheduledTime", task.scheduledTime ?: JSONObject.NULL)
         put("plannedOrder", task.plannedOrder)
+        put("circadianRank", task.circadianRank ?: JSONObject.NULL)
         put("goalId", task.goalId ?: JSONObject.NULL)
         put("habitId", task.habitId ?: JSONObject.NULL)
         put("parentTaskId", task.parentTaskId ?: JSONObject.NULL)
@@ -181,6 +182,7 @@ object GoalflowJson {
                         updatedAt = item.optLong("updatedAt", item.optLong("createdAt", 0L)),
                         completedAt = completedAt,
                         deletedAt = deletedAt,
+                        circadianRank = item.optNullableInt("circadianRank"),
                         extraJson = extraFields(item, taskKnownKeys)
                     )
                 )

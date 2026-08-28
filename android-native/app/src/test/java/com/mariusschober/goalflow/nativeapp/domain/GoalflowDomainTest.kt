@@ -47,6 +47,17 @@ class GoalflowDomainTest {
     }
 
     @Test
+    fun `queue applies circadian rank after the explicit plan order`() {
+        val laterRhythm = task("later-rhythm", order = 0).copy(circadianRank = 3)
+        val earlierRhythm = task("earlier-rhythm", order = 0).copy(circadianRank = 1)
+
+        assertEquals(
+            listOf("earlier-rhythm", "later-rhythm"),
+            buildTodayQueue(listOf(laterRhythm, earlierRhythm), today).map { it.id }
+        )
+    }
+
+    @Test
     fun `planning gate requires exact queue confirmation`() {
         val tasks = listOf(task("one", order = 0), task("two", order = 1))
 

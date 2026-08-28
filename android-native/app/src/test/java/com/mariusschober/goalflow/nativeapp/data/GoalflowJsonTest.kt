@@ -45,4 +45,15 @@ class GoalflowJsonTest {
         assertEquals("deep", taskRoundTrip.getJSONArray("hashtags").getString(0))
         assertEquals(12, goalRoundTrip.getInt("targetTasks"))
     }
+
+    @Test
+    fun `circadian ordering survives task serialization`() {
+        val task = GoalflowJson.parseTask(
+            """{"id":"task-1","title":"Morning light","dateAssigned":"2026-08-28","circadianRank":2}""",
+            strict = true
+        )
+
+        assertEquals(2, task.circadianRank)
+        assertEquals(2, GoalflowJson.taskPayload(task).getInt("circadianRank"))
+    }
 }

@@ -2116,7 +2116,7 @@ class GoalflowRepository(
         updatedAt = task.updatedAt,
         completedAt = task.completedAt,
         deletedAt = task.deletedAt,
-        extraJson = task.extraJson
+        extraJson = task.extraJsonWithOrderingHint()
     )
 
     private fun toDomain(row: TaskEntity) = GoalflowTask(
@@ -2139,8 +2139,17 @@ class GoalflowRepository(
         updatedAt = row.updatedAt,
         completedAt = row.completedAt,
         deletedAt = row.deletedAt,
+        circadianRank = runCatching { JSONObject(row.extraJson).nullableInt("circadianRank") }.getOrNull(),
         extraJson = row.extraJson
     )
+
+    private fun GoalflowTask.extraJsonWithOrderingHint(): String {
+        val extras = runCatching { JSONObject(extraJson) }.getOrElse {
+            throw SchedulingException("A synchronized record contains damaged preserved fields.")
+        }
+        circadianRank?.let { extras.put("circadianRank", it) }
+        return extras.toString()
+    }
 
     private fun toEntity(goal: GoalflowGoal) = GoalEntity(
         id = goal.id,

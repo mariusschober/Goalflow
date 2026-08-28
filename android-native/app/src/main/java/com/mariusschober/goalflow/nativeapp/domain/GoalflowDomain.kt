@@ -34,6 +34,8 @@ data class GoalflowTask(
     val updatedAt: Long,
     val completedAt: Long? = null,
     val deletedAt: Long? = null,
+    /** Optional ordering hint written by the web circadian planner. */
+    val circadianRank: Int? = null,
     /** JSON for fields introduced by another Goalflow client. Never discard them on edit. */
     val extraJson: String = "{}"
 )
@@ -197,11 +199,15 @@ private fun groupRank(task: GoalflowTask): Int = when {
 
 private fun compareCreatedAt(left: Long, right: Long): Int = left.compareTo(right)
 
+private fun optionalRank(value: Int?): Int = value ?: Int.MAX_VALUE
+
 val goalflowTaskComparator = Comparator<GoalflowTask> { left, right ->
     val group = groupRank(left).compareTo(groupRank(right))
     if (group != 0) return@Comparator group
     val order = left.plannedOrder.compareTo(right.plannedOrder)
     if (order != 0) return@Comparator order
+    val circadian = optionalRank(left.circadianRank).compareTo(optionalRank(right.circadianRank))
+    if (circadian != 0) return@Comparator circadian
     val time = (left.scheduledTime ?: "99:99").compareTo(right.scheduledTime ?: "99:99")
     if (time != 0) return@Comparator time
     val created = compareCreatedAt(left.createdAt, right.createdAt)
