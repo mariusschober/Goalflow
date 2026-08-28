@@ -1,6 +1,6 @@
 
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from 'react';
 import { Task, Stats, Session, Goal, UserProgress, FlowState, HashtagConfig, Habit, AccountabilityConfig, TrueNorthGoal, GamificationEvent, CircadianState } from '../types';
 import { getTodayYYYYMMDD } from '../utils/dateUtils';
 import { parseTitleForExtras } from '../utils/timeAndTagParser';
@@ -27,7 +27,152 @@ interface DailyTracking {
     dailyPostponeCount: number;
 }
 
+export interface DurableDailyPlan {
+    id: string;
+    localDate: string;
+    taskIds: string[];
+    confirmedAt: number;
+}
+
+const isRealLocalDate = (value: string): boolean => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
+
+const normalizeDailyPlans = (value: unknown): DurableDailyPlan[] => {
+    if (!Array.isArray(value)) throw new Error('Stored daily planning decisions are damaged. They were not discarded.');
+    const seen = new Set<string>();
+    return value.map((item, index) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            throw new Error(`Stored daily planning decision ${index} is invalid.`);
+        }
+        const record = item as Record<string, unknown>;
+        const localDate = String(record.localDate ?? record.id ?? '');
+        const taskIds = record.taskIds;
+        const confirmedAt = Number(record.confirmedAt);
+        if (!isRealLocalDate(localDate) || record.id !== localDate || seen.has(localDate)
+            || !Array.isArray(taskIds) || taskIds.some(id => typeof id !== 'string' || !id)
+            || !Number.isSafeInteger(confirmedAt) || confirmedAt <= 0) {
+            throw new Error(`Stored daily planning decision ${index} is invalid or duplicated.`);
+        }
+        seen.add(localDate);
+        return { id: localDate, localDate, taskIds: taskIds.map(String), confirmedAt };
+    });
+};
+
+const parseLegacyDailyPlan = (raw: string, confirmedAt: number): DurableDailyPlan | null => {
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch (_) { value = raw; }
+    if (typeof value === 'string') {
+        if (!isRealLocalDate(value)) throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+        return { id: value, localDate: value, taskIds: [], confirmedAt };
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+    }
+    const record = value as Record<string, unknown>;
+    const localDate = String(record.localDate ?? record.date ?? '');
+    if (!isRealLocalDate(localDate) || !Array.isArray(record.taskIds)
+        || record.taskIds.some(id => typeof id !== 'string' || !id)) {
+        throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+    }
+    return { id: localDate, localDate, taskIds: record.taskIds.map(String), confirmedAt };
+};
+
 const calculateXpToNextLevel = (level: number) => level * BASE_XP_FOR_LEVEL;
+
+const emptyStats = (): Stats => ({
+  tasksCompleted: 0,
+  frogsEaten: 0,
+  timeFocused: 0,
+  totalBreakMinutes: 0
+});
+
+/**
+ * A persistent state transition is staged in a synchronous, read-verified WAL
+ * before React is allowed to render it. Hydration and cloud application use
+ * the raw setter so they do not manufacture a second local mutation.
+ */
+const useDurableStoredState = <T,>(initialValue: T, storeName: string, userKey: string): [
+  T,
+  Dispatch<SetStateAction<T>>,
+  Dispatch<SetStateAction<T>>
+] => {
+  const [value, setRawState] = useState<T>(initialValue);
+  const valueRef = useRef(value);
+
+  const setFromStorage = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const next = typeof action === 'function'
+      ? (action as (previous: T) => T)(valueRef.current)
+      : action;
+    valueRef.current = next;
+    setRawState(next);
+  }, []);
+
+  const setDurably = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const previous = valueRef.current;
+    const next = typeof action === 'function'
+      ? (action as (current: T) => T)(previous)
+      : action;
+    storageService.stageLocalValue(storeName, userKey, previous, next);
+    valueRef.current = next;
+    setRawState(next);
+  }, [storeName, userKey]);
+
+  return [value, setDurably, setFromStorage];
+};
+
+/**
+ * Daily statistics are persisted as one date-keyed record. Keep that complete
+ * record and the active-day view in the same synchronous write-ahead
+ * transition so a process death cannot preserve a completion while silently
+ * losing its counters.
+ */
+const useDurableDailyStats = (userKey: string): [
+  Stats,
+  Dispatch<SetStateAction<Stats>>,
+  Record<string, Stats>,
+  (value: Record<string, Stats>) => void
+] => {
+  const initial = emptyStats();
+  const [stats, setRawStats] = useState<Stats>(initial);
+  const [allStats, setRawAllStats] = useState<Record<string, Stats>>({});
+  const statsRef = useRef(initial);
+  const allStatsRef = useRef<Record<string, Stats>>({});
+  const statsDateRef = useRef(getTodayYYYYMMDD());
+
+  const setFromStorage = useCallback((value: Record<string, Stats>) => {
+    const nextAll = value || {};
+    const today = getTodayYYYYMMDD();
+    const nextStats = nextAll[today] || emptyStats();
+    allStatsRef.current = nextAll;
+    statsRef.current = nextStats;
+    statsDateRef.current = today;
+    setRawAllStats(nextAll);
+    setRawStats(nextStats);
+  }, []);
+
+  const setDurably = useCallback<Dispatch<SetStateAction<Stats>>>((action) => {
+    const today = getTodayYYYYMMDD();
+    const current = statsDateRef.current === today
+      ? statsRef.current
+      : allStatsRef.current[today] || emptyStats();
+    const next = typeof action === 'function'
+      ? (action as (previous: Stats) => Stats)(current)
+      : action;
+    const previousAll = allStatsRef.current;
+    const nextAll = { ...previousAll, [today]: next };
+    storageService.stageLocalValue(STORES.STATS, userKey, previousAll, nextAll);
+    allStatsRef.current = nextAll;
+    statsRef.current = next;
+    statsDateRef.current = today;
+    setRawAllStats(nextAll);
+    setRawStats(next);
+  }, [userKey]);
+
+  return [stats, setDurably, allStats, setFromStorage];
+};
 
 export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   // Keys for DB retrieval (User scoped)
@@ -36,22 +181,22 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   // --- State Definitions ---
   const [isLoading, setIsLoading] = useState(true);
   
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [habits, setHabits] = useState<Habit[]>([]);
-  const [trueNorthGoals, setTrueNorthGoals] = useState<TrueNorthGoal[]>([]);
-  const [amalgam, setAmalgam] = useState<string>("My world takes care of me");
-  const [hashtagConfigs, setHashtagConfigs] = useState<Record<string, HashtagConfig>>({});
-  const [stats, setStats] = useState<Stats>({ tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
-  const [allStats, setAllStats] = useState<{ [date: string]: Stats }>({});
+  const [tasks, setTasks, setTasksFromStorage] = useDurableStoredState<Task[]>([], STORES.TASKS, USER_KEY);
+  const [goals, setGoals, setGoalsFromStorage] = useDurableStoredState<Goal[]>([], STORES.GOALS, USER_KEY);
+  const [habits, setHabits, setHabitsFromStorage] = useDurableStoredState<Habit[]>([], STORES.HABITS, USER_KEY);
+  const [trueNorthGoals, setTrueNorthGoals, setTrueNorthGoalsFromStorage] = useDurableStoredState<TrueNorthGoal[]>([], STORES.TRUE_NORTH, USER_KEY);
+  const [amalgam, setAmalgam, setAmalgamFromStorage] = useDurableStoredState<string>("My world takes care of me", STORES.AMALGAM, USER_KEY);
+  const [hashtagConfigs, setHashtagConfigs, setHashtagConfigsFromStorage] = useDurableStoredState<Record<string, HashtagConfig>>({}, STORES.HASHTAGS, USER_KEY);
+  const [stats, setStats, allStats, setAllStatsFromStorage] = useDurableDailyStats(USER_KEY);
   
-  const [userProgress, setUserProgress] = useState<UserProgress>({ level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL });
-  const [dailyTracking, setDailyTracking] = useState<DailyTracking>({ date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 });
-  const [accountabilityConfig, setAccountabilityConfig] = useState<AccountabilityConfig>({ enabled: false, partners: [], scope: 'all', targetHashtags: [] });
-  const [circadianState, setCircadianState] = useState<CircadianState>({ 
+  const [userProgress, setUserProgress, setUserProgressFromStorage] = useDurableStoredState<UserProgress>({ level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL }, STORES.PROGRESS, USER_KEY);
+  const [dailyTracking, setDailyTracking, setDailyTrackingFromStorage] = useDurableStoredState<DailyTracking>({ date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 }, STORES.TRACKING, USER_KEY);
+  const [accountabilityConfig, setAccountabilityConfig, setAccountabilityConfigFromStorage] = useDurableStoredState<AccountabilityConfig>({ enabled: false, partners: [], scope: 'all', targetHashtags: [] }, STORES.ACCOUNTABILITY, USER_KEY);
+  const [circadianState, setCircadianState, setCircadianStateFromStorage] = useDurableStoredState<CircadianState>({
       lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 }
-  });
-  const [userSettings, setUserSettings] = useState<UserSettings>({ enableAi: false, penaltyMode: 'off' });
+  }, STORES.CIRCADIAN, USER_KEY);
+  const [userSettings, setUserSettings, setUserSettingsFromStorage] = useDurableStoredState<UserSettings>({ enableAi: false, penaltyMode: 'off' }, STORES.SETTINGS, USER_KEY);
+  const [dailyPlans, setDailyPlans, setDailyPlansFromStorage] = useDurableStoredState<DurableDailyPlan[]>([], STORES.DAILY_PLANS, USER_KEY);
   const cloudAppliedStores = useRef(new Set<string>());
 
   // Transient State
@@ -66,7 +211,8 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       try {
         await storageService.migrateUserKey(legacyUserKey, USER_KEY);
         const [
-            lTasks, lGoals, lHabits, lTrueNorth, lAmalgam, lHashtags, lAllStats, lProgress, lDaily, lAccountability, lCircadian, lSettings
+            lTasks, lGoals, lHabits, lTrueNorth, lAmalgam, lHashtags, lAllStats, lProgress, lDaily, lAccountability, lCircadian, lSettings,
+            lDailyPlans
         ] = await Promise.all([
             storageService.migrateFromLocalStorage<Task[]>(STORES.TASKS, USER_KEY, `goalflow_tasks_${legacyUserKey}`, []),
             storageService.migrateFromLocalStorage<Goal[]>(STORES.GOALS, USER_KEY, `goalflow_goals_${legacyUserKey}`, []),
@@ -80,6 +226,33 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
             storageService.migrateFromLocalStorage<AccountabilityConfig>(STORES.ACCOUNTABILITY, USER_KEY, `goalflow_accountability_${legacyUserKey}`, { enabled: false, partners: [], scope: 'all', targetHashtags: [] }),
             storageService.migrateFromLocalStorage<CircadianState>(STORES.CIRCADIAN, USER_KEY, `goalflow_circadian_${legacyUserKey}`, { lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 } }),
             storageService.migrateFromLocalStorage<UserSettings>(STORES.SETTINGS, USER_KEY, `goalflow_settings_${legacyUserKey}`, { enableAi: false, penaltyMode: 'off' }),
+            (async (): Promise<DurableDailyPlan[]> => {
+                const current = await storageService.get<unknown>(STORES.DAILY_PLANS, USER_KEY);
+                if (current !== undefined) return normalizeDailyPlans(current);
+                const migrationTime = Date.now();
+                const legacyKeys = Array.from(new Set([
+                    `goalflow-daily-plan:${USER_KEY}`,
+                    `goalflow-daily-plan:${legacyUserKey}`
+                ]));
+                const migrated = new Map<string, DurableDailyPlan>();
+                for (const legacyKey of legacyKeys) {
+                    const raw = window.localStorage.getItem(legacyKey);
+                    if (raw === null) continue;
+                    const plan = parseLegacyDailyPlan(raw, migrationTime);
+                    if (!plan) continue;
+                    const existing = migrated.get(plan.id);
+                    if (existing && JSON.stringify(existing.taskIds) !== JSON.stringify(plan.taskIds)) {
+                        throw new Error('Legacy daily planning decisions disagree. Neither was discarded.');
+                    }
+                    migrated.set(plan.id, plan);
+                }
+                const plans = Array.from(migrated.values());
+                if (plans.length) {
+                    storageService.stageLocalValue(STORES.DAILY_PLANS, USER_KEY, undefined, plans);
+                    await storageService.set(STORES.DAILY_PLANS, USER_KEY, plans);
+                }
+                return plans;
+            })(),
         ]);
 
         await storageService.createLocalSnapshot(USER_KEY, 'before-migration');
@@ -99,36 +272,33 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
                 lifecycleStatus: task.lifecycleStatus || (task.completed ? 'completed' : task.wontDo ? 'dropped' : 'open')
             } as Task;
         });
-        setTasks(normalizedTasks);
-        setGoals(lGoals);
-        setHabits(lHabits);
-        setTrueNorthGoals(lTrueNorth);
-        setAmalgam(lAmalgam);
-        setHashtagConfigs(lHashtags);
-        setAllStats(lAllStats);
-        
-        // Stats for Today
+        setTasksFromStorage(normalizedTasks);
+        setGoalsFromStorage(lGoals);
+        setHabitsFromStorage(lHabits);
+        setTrueNorthGoalsFromStorage(lTrueNorth);
+        setAmalgamFromStorage(lAmalgam);
+        setHashtagConfigsFromStorage(lHashtags);
+        setAllStatsFromStorage(lAllStats);
+
         const today = getTodayYYYYMMDD();
-        setStats(lAllStats[today] || { tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
 
         // Ensure Progress calculations
-        setUserProgress({ ...lProgress, xpToNextLevel: calculateXpToNextLevel(lProgress.level) });
+        setUserProgressFromStorage({ ...lProgress, xpToNextLevel: calculateXpToNextLevel(lProgress.level) });
         
         // Reset daily tracking if new day
         if (lDaily.date !== today) {
             setDailyTracking({ date: today, planViewCount: 0, dailyPostponeCount: 0 });
         } else {
-            setDailyTracking(lDaily);
+            setDailyTrackingFromStorage(lDaily);
         }
 
-        setAccountabilityConfig(lAccountability);
-        setCircadianState(lCircadian);
-        setUserSettings(lSettings);
-
+        setAccountabilityConfigFromStorage(lAccountability);
+        setCircadianStateFromStorage(lCircadian);
+        setUserSettingsFromStorage(lSettings);
+        setDailyPlansFromStorage(lDailyPlans);
+        setIsLoading(false);
       } catch (err) {
-          console.error("Failed to hydrate data", err);
-      } finally {
-          setIsLoading(false);
+          console.error("Failed to hydrate data. Persistence remains blocked so existing data is not overwritten.", err);
       }
     };
 
@@ -164,46 +334,35 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   useEffect(() => { if (!isLoading) persistLocalState(STORES.ACCOUNTABILITY, accountabilityConfig); }, [accountabilityConfig, isLoading, persistLocalState]);
   useEffect(() => { if (!isLoading) persistLocalState(STORES.CIRCADIAN, circadianState); }, [circadianState, isLoading, persistLocalState]);
   useEffect(() => { if (!isLoading) persistLocalState(STORES.SETTINGS, userSettings); }, [userSettings, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.STATS, allStats); }, [allStats, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.DAILY_PLANS, dailyPlans); }, [dailyPlans, isLoading, persistLocalState]);
 
   useEffect(() => {
       const applyCloudChange = (event: Event) => {
           const { storeName, value } = (event as CustomEvent<{ storeName: string; value: any }>).detail;
           cloudAppliedStores.current.add(storeName);
-          if (storeName === STORES.TASKS) setTasks(value || []);
-          else if (storeName === STORES.GOALS) setGoals(value || []);
-          else if (storeName === STORES.HABITS) setHabits(value || []);
-          else if (storeName === STORES.TRUE_NORTH) setTrueNorthGoals(value || []);
-          else if (storeName === STORES.AMALGAM) setAmalgam(value || 'My world takes care of me');
-          else if (storeName === STORES.HASHTAGS) setHashtagConfigs(value || {});
-          else if (storeName === STORES.PROGRESS) setUserProgress(value);
-          else if (storeName === STORES.TRACKING) setDailyTracking(value);
-          else if (storeName === STORES.ACCOUNTABILITY) setAccountabilityConfig(value);
-          else if (storeName === STORES.CIRCADIAN) setCircadianState(value);
-          else if (storeName === STORES.SETTINGS) setUserSettings(value);
+          if (storeName === STORES.TASKS) setTasksFromStorage(value || []);
+          else if (storeName === STORES.GOALS) setGoalsFromStorage(value || []);
+          else if (storeName === STORES.HABITS) setHabitsFromStorage(value || []);
+          else if (storeName === STORES.TRUE_NORTH) setTrueNorthGoalsFromStorage(value || []);
+          else if (storeName === STORES.AMALGAM) setAmalgamFromStorage(value || 'My world takes care of me');
+          else if (storeName === STORES.HASHTAGS) setHashtagConfigsFromStorage(value || {});
+          else if (storeName === STORES.PROGRESS) setUserProgressFromStorage(value);
+          else if (storeName === STORES.TRACKING) setDailyTrackingFromStorage(value);
+          else if (storeName === STORES.ACCOUNTABILITY) setAccountabilityConfigFromStorage(value);
+          else if (storeName === STORES.CIRCADIAN) setCircadianStateFromStorage(value);
+          else if (storeName === STORES.SETTINGS) setUserSettingsFromStorage(value);
+          else if (storeName === STORES.DAILY_PLANS) setDailyPlansFromStorage(normalizeDailyPlans(value || []));
           else if (storeName === STORES.STATS) {
-              setAllStats(value || {});
-              setStats(value?.[getTodayYYYYMMDD()] || { tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
+              setAllStatsFromStorage(value || {});
           }
       };
       window.addEventListener('goalflow:cloud-change', applyCloudChange);
       return () => window.removeEventListener('goalflow:cloud-change', applyCloudChange);
-  }, []);
-
-  // Special Stats Persistence
-  useEffect(() => {
-      if (!isLoading) {
-          if (cloudAppliedStores.current.delete(STORES.STATS)) return;
-          const today = getTodayYYYYMMDD();
-          const updatedAllStats = { ...allStats, [today]: stats };
-          // Only update if changed deeply? No, React state update is enough signal.
-          // However, we avoid infinite loop by not setting AllStats in state here, just persisting it.
-          // But we need to keep `allStats` ref current for other logic if needed.
-          // Actually, let's update `allStats` state when `stats` changes, but do it carefully.
-          // Simplification: Just persist the merged object.
-          setAllStats(previous => previous[today] === stats ? previous : { ...previous, [today]: stats });
-          void persist(STORES.STATS, updatedAllStats);
-      }
-  }, [stats, isLoading, persist]); // Dep on stats updates the DB record
+  }, [setAllStatsFromStorage, setTasksFromStorage, setGoalsFromStorage, setHabitsFromStorage,
+      setTrueNorthGoalsFromStorage, setAmalgamFromStorage, setHashtagConfigsFromStorage,
+      setUserProgressFromStorage, setDailyTrackingFromStorage, setAccountabilityConfigFromStorage,
+      setCircadianStateFromStorage, setUserSettingsFromStorage, setDailyPlansFromStorage]);
 
   // --- Logic Exports ---
 
@@ -233,6 +392,23 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   const updateUserSettings = useCallback((updates: Partial<UserSettings>) => {
       setUserSettings(prev => ({ ...prev, ...updates }));
   }, []);
+
+  const confirmDailyPlan = useCallback((localDate: string, taskIds: string[]) => {
+      if (!isRealLocalDate(localDate) || taskIds.some(id => typeof id !== 'string' || !id)) {
+          throw new Error('The daily planning decision is invalid and was not saved.');
+      }
+      const plan: DurableDailyPlan = {
+          id: localDate,
+          localDate,
+          taskIds: [...taskIds],
+          confirmedAt: Date.now()
+      };
+      setDailyPlans(previous => [...previous.filter(item => item.id !== localDate), plan]);
+  }, [setDailyPlans]);
+
+  const clearDailyPlan = useCallback((localDate: string) => {
+      setDailyPlans(previous => previous.filter(item => item.id !== localDate));
+  }, [setDailyPlans]);
 
   // --- Habit Generation & Streak Break Logic (Simplified for brevity, logic remains same) ---
   useEffect(() => {
@@ -788,6 +964,7 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   return {
     isLoading,
     tasks, goals, habits, trueNorthGoals, amalgam,
+    dailyPlans, confirmDailyPlan, clearDailyPlan,
     currentTask, todayTasks, upcomingTasks, overdueTasks, recentCompletedTasks, allCompletedTasks, 
     stats, userProgress, hashtagConfigs, accountabilityConfig, justLeveledUp, setJustLeveledUp,
     gamificationEvent, setGamificationEvent, planningWarning, setPlanningWarning,

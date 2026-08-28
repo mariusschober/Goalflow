@@ -16,7 +16,46 @@ const encrypt = (payload: Buffer, key: Buffer): Buffer => {
   return Buffer.concat([Buffer.from('GFB1'), iv, tag, ciphertext]);
 };
 
-const userTables = ['profiles', 'tasks', 'daily_plans', 'task_events', 'telegram_identities', 'sync_records', 'entitlements'] as const;
+export interface DecryptedServerBackup {
+  schemaVersion: number;
+  exportedAt: string;
+  userId: string;
+  collections: Record<string, unknown>;
+}
+
+/** Verifies the encrypted envelope and plaintext checksum before any restore RPC can run. */
+export const decryptServerBackup = (
+  encrypted: Buffer,
+  masterKey: string,
+  expectedChecksum?: string
+): DecryptedServerBackup => {
+  if (encrypted.length < 48 || encrypted.subarray(0, 4).toString('ascii') !== 'GFB1') {
+    throw new Error('Backup envelope is invalid.');
+  }
+  const key = decodeKey(masterKey);
+  const iv = encrypted.subarray(4, 16);
+  const tag = encrypted.subarray(16, 32);
+  const ciphertext = encrypted.subarray(32);
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  const plain = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+  const checksum = crypto.createHash('sha256').update(plain).digest('hex');
+  if (expectedChecksum) {
+    if (!/^[a-f0-9]{64}$/i.test(expectedChecksum)
+      || !crypto.timingSafeEqual(Buffer.from(checksum), Buffer.from(expectedChecksum.toLowerCase()))) {
+      throw new Error('Backup checksum validation failed.');
+    }
+  }
+  const parsed = JSON.parse(plain.toString('utf8')) as Partial<DecryptedServerBackup>;
+  if (!Number.isInteger(parsed.schemaVersion) || Number(parsed.schemaVersion) < 1 || Number(parsed.schemaVersion) > 3) {
+    throw new Error('Backup schema version is unsupported.');
+  }
+  if (typeof parsed.userId !== 'string' || !parsed.userId || !parsed.collections
+    || typeof parsed.collections !== 'object' || Array.isArray(parsed.collections)) {
+    throw new Error('Backup plaintext is invalid.');
+  }
+  return parsed as DecryptedServerBackup;
+};
 
 const rotate = async (admin: SupabaseClient, userId: string, kind: 'daily' | 'weekly', keep: number) => {
   const { data, error } = await admin.from('backup_metadata').select('id,object_path')
@@ -25,28 +64,44 @@ const rotate = async (admin: SupabaseClient, userId: string, kind: 'daily' | 'we
   if (error) throw error;
   const expired = (data ?? []).slice(keep);
   if (!expired.length) return;
+  const { error: metadataError } = await admin.from('backup_metadata').update({ status: 'deleted' })
+    .eq('user_id', userId).in('id', expired.map(item => item.id));
+  if (metadataError) throw metadataError;
   const { error: removeError } = await admin.storage.from('goalflow-backups').remove(expired.map(item => item.object_path));
-  if (removeError) throw removeError;
-  await admin.from('backup_metadata').update({ status: 'deleted' }).in('id', expired.map(item => item.id));
+  if (removeError) {
+    // The encrypted objects still exist. Restore their discoverability before
+    // surfacing the failure; retention must never turn a transient storage
+    // error into an apparently deleted, valid backup.
+    const { error: rollbackError } = await admin.from('backup_metadata').update({ status: 'complete' })
+      .eq('user_id', userId).in('id', expired.map(item => item.id));
+    if (rollbackError) {
+      throw new AggregateError([removeError, rollbackError], 'Backup rotation failed and metadata recovery also failed.');
+    }
+    throw removeError;
+  }
 };
 
 export const runEncryptedBackups = async (config: AppConfig, admin: SupabaseClient): Promise<number> => {
   if (!config.BACKUP_MASTER_KEY) throw new Error('Encrypted backups are not configured.');
   const key = decodeKey(config.BACKUP_MASTER_KEY);
+  const { data: protocolVersion, error: protocolError } = await admin.rpc('goalflow_sync_protocol_version');
+  if (protocolError || Number(protocolVersion) !== 2) {
+    throw new Error('Backups were not started because the complete data-integrity schema is not installed.');
+  }
   const { data: profiles, error: profileError } = await admin.from('profiles').select('user_id').eq('status', 'active');
   if (profileError) throw profileError;
   let completed = 0;
 
   for (const profile of profiles ?? []) {
-    const collections: Record<string, unknown> = {};
-    for (const table of userTables) {
-      const column = table === 'profiles' ? 'user_id' : 'user_id';
-      const { data, error } = await admin.from(table).select('*').eq(column, profile.user_id);
-      if (error) throw error;
-      collections[table] = data ?? [];
+    const { data: collections, error: exportError } = await admin.rpc('export_goalflow_backup', {
+      target_user_id: profile.user_id
+    });
+    if (exportError) throw exportError;
+    if (!collections || typeof collections !== 'object' || Array.isArray(collections)) {
+      throw new Error('Database backup export returned an invalid snapshot.');
     }
     const exportedAt = new Date().toISOString();
-    const plain = Buffer.from(JSON.stringify({ schemaVersion: 2, exportedAt, userId: profile.user_id, collections }), 'utf8');
+    const plain = Buffer.from(JSON.stringify({ schemaVersion: 3, exportedAt, userId: profile.user_id, collections }), 'utf8');
     const checksum = crypto.createHash('sha256').update(plain).digest('hex');
     const encrypted = encrypt(plain, key);
     const kind: 'daily' | 'weekly' = new Date().getUTCDay() === 0 ? 'weekly' : 'daily';

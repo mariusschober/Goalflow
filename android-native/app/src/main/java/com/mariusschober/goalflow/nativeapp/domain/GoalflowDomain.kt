@@ -33,7 +33,9 @@ data class GoalflowTask(
     val createdAt: Long,
     val updatedAt: Long,
     val completedAt: Long? = null,
-    val deletedAt: Long? = null
+    val deletedAt: Long? = null,
+    /** JSON for fields introduced by another Goalflow client. Never discard them on edit. */
+    val extraJson: String = "{}"
 )
 
 data class GoalflowGoal(
@@ -45,7 +47,8 @@ data class GoalflowGoal(
     val color: String = "#315C4B",
     val createdAt: Long,
     val excitement: Int? = null,
-    val roi: Int? = null
+    val roi: Int? = null,
+    val extraJson: String = "{}"
 )
 
 data class GoalflowHabit(
@@ -60,7 +63,40 @@ data class GoalflowHabit(
     val beforeFrog: Boolean = false,
     val duration: Int? = null,
     val goalId: String? = null,
-    val createdAt: Long
+    val createdAt: Long,
+    val extraJson: String = "{}"
+)
+
+/** The small typed projection used by the native Insights surface. The full
+ * web-owned JSON remains preserved in the raw collection store. */
+data class GoalflowStats(
+    val tasksCompleted: Int = 0,
+    val frogsEaten: Int = 0,
+    val timeFocused: Int = 0,
+    val totalBreakMinutes: Int = 0,
+    val circadianScore: Int? = null
+)
+
+data class GoalflowProgress(
+    val level: Int = 1,
+    val xp: Int = 0,
+    val xpToNextLevel: Int = 100
+)
+
+data class GoalflowTrueNorth(
+    val id: String,
+    val vision: String,
+    val isMoneyGoal: Boolean = false,
+    val tangibleReality: String? = null,
+    val sensoryDetails: String = "",
+    val planB: String = "",
+    val importance: Int = 5,
+    val anchorHabit: String? = null,
+    val anchorTask: String? = null,
+    val anchorHabitDuration: Int? = null,
+    val createdAt: Long,
+    /** Preserve fields introduced by the web client or a later native client. */
+    val extraJson: String = "{}"
 )
 
 data class DailyPlan(

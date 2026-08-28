@@ -7,8 +7,10 @@ import androidx.work.Constraints
 import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.work.ExistingPeriodicWorkPolicy
 import com.mariusschober.goalflow.nativeapp.GoalflowApplication
 import java.util.concurrent.TimeUnit
 
@@ -17,17 +19,20 @@ class NativeSyncWorker(context: Context, params: WorkerParameters) : CoroutineWo
         val application = applicationContext as GoalflowApplication
         if (!NativeConfig.canUseCloud) return Result.success()
         return runCatching {
-            NativeAuthClient(application.sessionStore).currentSession()
-            NativeSyncEngine(application.repository, application.sessionStore).synchronize()
+            val session = NativeAuthClient(application.sessionStore).currentSession()
+            if (session != null) application.syncEngine.synchronize()
         }.fold(
             onSuccess = { Result.success() },
-            onFailure = { if (runAttemptCount < 5) Result.retry() else Result.failure() }
+            // Pending Room mutations are never discarded. WorkManager keeps an
+            // exponential retry alive through network flapping and restarts.
+            onFailure = { Result.retry() }
         )
     }
 }
 
 object NativeSyncScheduler {
     private const val WORK_NAME = "goalflow-native-sync"
+    private const val PERIODIC_WORK_NAME = "goalflow-native-sync-periodic"
 
     fun schedule(context: Context) {
         if (!NativeConfig.canUseCloud) return
@@ -36,5 +41,14 @@ object NativeSyncScheduler {
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
             .build()
         WorkManager.getInstance(context).enqueueUniqueWork(WORK_NAME, ExistingWorkPolicy.KEEP, request)
+        val periodic = PeriodicWorkRequestBuilder<NativeSyncWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
+            .build()
+        WorkManager.getInstance(context).enqueueUniquePeriodicWork(
+            PERIODIC_WORK_NAME,
+            ExistingPeriodicWorkPolicy.KEEP,
+            periodic
+        )
     }
 }

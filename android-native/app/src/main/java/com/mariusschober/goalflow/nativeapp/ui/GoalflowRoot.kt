@@ -3,6 +3,7 @@ package com.mariusschober.goalflow.nativeapp.ui
 import android.net.Uri
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -36,6 +37,7 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Flag
 import androidx.compose.material.icons.rounded.MoreHoriz
+import androidx.compose.material.icons.rounded.Repeat
 import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.TaskAlt
 import androidx.compose.material.icons.rounded.Timeline
@@ -83,6 +85,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -106,6 +109,7 @@ import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.data.BackupFormatException
+import com.mariusschober.goalflow.nativeapp.data.NATIVE_RAW_COLLECTION_TYPES
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
 import java.time.Instant
@@ -121,9 +125,21 @@ import kotlinx.coroutines.launch
 private enum class RootDestination(val label: String) {
     CURRENT("Current"),
     PLANNING("Planning"),
+    HABITS("Habits"),
     GOALS("Goals"),
+    INSIGHTS("Insights"),
     SETTINGS("Settings")
 }
+
+private val primaryDestinations = listOf(
+    RootDestination.CURRENT,
+    RootDestination.PLANNING,
+    RootDestination.HABITS,
+    RootDestination.GOALS,
+    RootDestination.SETTINGS
+)
+
+private const val CAPTURE_PROMPT_SEEN = "capture_prompt_seen"
 
 @Composable
 fun GoalflowRoot() {
@@ -131,20 +147,31 @@ fun GoalflowRoot() {
     val context = LocalContext.current
     val localView = LocalView.current
     val scope = rememberCoroutineScope()
+    val uiPreferences = remember {
+        application.getSharedPreferences("goalflow-native-ui", android.content.Context.MODE_PRIVATE)
+    }
     val goalflowViewModel: GoalflowViewModel = viewModel(
-        factory = GoalflowViewModelFactory(application.repository)
+        factory = GoalflowViewModelFactory(application.repository, application.syncEngine)
     )
     val tasks by goalflowViewModel.tasks.collectAsStateWithLifecycle()
     val goals by goalflowViewModel.goals.collectAsStateWithLifecycle()
+    val habits by goalflowViewModel.habits.collectAsStateWithLifecycle()
+    val stats by goalflowViewModel.stats.collectAsStateWithLifecycle()
+    val progress by goalflowViewModel.progress.collectAsStateWithLifecycle()
+    val trueNorth by goalflowViewModel.trueNorth.collectAsStateWithLifecycle()
+    val amalgam by goalflowViewModel.amalgam.collectAsStateWithLifecycle()
     val today by goalflowViewModel.today.collectAsStateWithLifecycle()
     val gate by goalflowViewModel.planningGate.collectAsStateWithLifecycle()
     val currentTask by goalflowViewModel.currentTask.collectAsStateWithLifecycle()
     val notice by goalflowViewModel.notice.collectAsStateWithLifecycle()
     val error by goalflowViewModel.error.collectAsStateWithLifecycle()
+    val conflicts by goalflowViewModel.conflicts.collectAsStateWithLifecycle()
     var destination by rememberSaveable { mutableStateOf(RootDestination.CURRENT) }
-    var captureOpen by rememberSaveable { mutableStateOf(false) }
-    var goalOpen by rememberSaveable { mutableStateOf(false) }
+    var captureOpen by rememberSaveable {
+        mutableStateOf(!uiPreferences.getBoolean(CAPTURE_PROMPT_SEEN, false))
+    }
     var datePickerForTask by remember { mutableStateOf<GoalflowTask?>(null) }
+    var editTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var backupAction by rememberSaveable { mutableStateOf<String?>(null) }
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
@@ -155,6 +182,11 @@ fun GoalflowRoot() {
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    fun closeCapture() {
+        uiPreferences.edit().putBoolean(CAPTURE_PROMPT_SEEN, true).apply()
+        captureOpen = false
+    }
+
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
@@ -163,6 +195,10 @@ fun GoalflowRoot() {
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    BackHandler(enabled = destination == RootDestination.INSIGHTS) {
+        destination = RootDestination.GOALS
     }
 
     val exportLauncher = rememberLauncherForActivityResult(
@@ -228,6 +264,7 @@ fun GoalflowRoot() {
                             goalflowViewModel.completeTask(task)
                         },
                         onBreakDown = { breakdownTask = it },
+                        onEdit = { editTask = it },
                         onDrop = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.dropTask(task)
@@ -250,11 +287,99 @@ fun GoalflowRoot() {
                         onReschedule = { task, date -> goalflowViewModel.rescheduleTask(task, date) },
                         onComplete = { task -> goalflowViewModel.completeTask(task) },
                         onBreakDown = { breakdownTask = it },
-                        onDrop = { task -> goalflowViewModel.dropTask(task) }
+                        onDrop = { task -> goalflowViewModel.dropTask(task) },
+                        onEdit = { editTask = it }
                     )
-                    RootDestination.GOALS -> GoalsScreen(
+                    RootDestination.HABITS -> NativeHabitsScreen(
+                        habits = habits,
                         goals = goals,
-                        onAdd = { goalOpen = true }
+                        error = error,
+                        onCreate = { draft ->
+                            goalflowViewModel.createHabit(
+                                draft.title,
+                                draft.frequency,
+                                draft.specificDays,
+                                draft.isHighPriority,
+                                draft.beforeFrog,
+                                draft.duration,
+                                draft.goalId
+                            ) { }
+                        },
+                        onUpdate = { habit, draft ->
+                            goalflowViewModel.updateHabit(
+                                habit.copy(
+                                    title = draft.title,
+                                    frequency = draft.frequency,
+                                    specificDays = draft.specificDays,
+                                    isHighPriority = draft.isHighPriority,
+                                    beforeFrog = draft.beforeFrog,
+                                    duration = draft.duration,
+                                    goalId = draft.goalId
+                                )
+                            )
+                        },
+                        onDelete = goalflowViewModel::deleteHabit
+                    )
+                    RootDestination.GOALS -> NativeGoalsScreen(
+                        goals = goals,
+                        trueNorth = trueNorth,
+                        amalgam = amalgam,
+                        error = error,
+                        onCreateGoal = { draft -> goalflowViewModel.createGoal(draft.name, draft.description) { } },
+                        onUpdateGoal = { goal, draft ->
+                            goalflowViewModel.updateGoal(
+                                goal.copy(
+                                    name = draft.name,
+                                    description = draft.description,
+                                    deadline = draft.deadline,
+                                    excitement = draft.excitement,
+                                    roi = draft.roi
+                                )
+                            )
+                        },
+                        onDeleteGoal = goalflowViewModel::deleteGoal,
+                        onCreateTrueNorth = { draft ->
+                            goalflowViewModel.createTrueNorth(
+                                com.mariusschober.goalflow.nativeapp.domain.GoalflowTrueNorth(
+                                    id = "",
+                                    vision = draft.vision,
+                                    isMoneyGoal = draft.isMoneyGoal,
+                                    tangibleReality = draft.tangibleReality,
+                                    sensoryDetails = draft.sensoryDetails,
+                                    planB = draft.planB,
+                                    importance = draft.importance,
+                                    anchorHabit = draft.anchorHabit,
+                                    anchorTask = draft.anchorTask,
+                                    anchorHabitDuration = draft.anchorHabitDuration,
+                                    createdAt = System.currentTimeMillis()
+                                )
+                            ) { }
+                        },
+                        onUpdateTrueNorth = { goal, draft ->
+                            goalflowViewModel.updateTrueNorth(
+                                goal.copy(
+                                    vision = draft.vision,
+                                    isMoneyGoal = draft.isMoneyGoal,
+                                    tangibleReality = draft.tangibleReality,
+                                    sensoryDetails = draft.sensoryDetails,
+                                    planB = draft.planB,
+                                    importance = draft.importance,
+                                    anchorHabit = draft.anchorHabit,
+                                    anchorTask = draft.anchorTask,
+                                    anchorHabitDuration = draft.anchorHabitDuration
+                                )
+                            )
+                        },
+                        onDeleteTrueNorth = goalflowViewModel::deleteTrueNorth,
+                        onUpdateAmalgam = goalflowViewModel::updateAmalgam,
+                        onOpenInsights = { destination = RootDestination.INSIGHTS }
+                    )
+                    RootDestination.INSIGHTS -> NativeInsightsScreen(
+                        tasks = tasks,
+                        habits = habits,
+                        stats = stats,
+                        progress = progress,
+                        onBack = { destination = RootDestination.GOALS }
                     )
                     RootDestination.SETTINGS -> SettingsScreen(
                         signedIn = sessionActive,
@@ -279,36 +404,75 @@ fun GoalflowRoot() {
         }
     }
 
+    conflicts.firstOrNull { it.status !in setOf("resolved", "resolving_local") }?.let { conflict ->
+        val supportedLocally = conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans") ||
+            (conflict.entityType in NATIVE_RAW_COLLECTION_TYPES && conflict.localPayload.isNotBlank())
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Sync conflict — both versions are safe") },
+            text = {
+                Text(if (supportedLocally) {
+                    "This ${conflict.entityType.removeSuffix("s")} was changed in two places. " +
+                        "Choose explicitly; Goalflow will not overwrite either version silently."
+                } else {
+                    "A cloud ${conflict.entityType} change cannot be displayed by this app version. " +
+                        "Its complete payload remains preserved until you explicitly keep the canonical cloud copy."
+                })
+            },
+            confirmButton = {
+                if (supportedLocally) {
+                    Button(onClick = { goalflowViewModel.resolveConflict(conflict, keepLocal = true) }) {
+                        Text("Keep this device")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { goalflowViewModel.resolveConflict(conflict, keepLocal = false) }) {
+                    Text(if (supportedLocally) "Use cloud version" else "Keep canonical cloud copy")
+                }
+            }
+        )
+    }
+
     if (captureOpen) {
         CaptureSheet(
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
-                captureOpen = false
+                closeCapture()
             },
-            onSave = { title, notes, precision, scheduledFor, isFrog ->
+            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog ->
                 goalflowViewModel.createTask(
                     title = title,
                     notes = notes,
                     precision = precision,
                     scheduledFor = scheduledFor,
-                    scheduledTime = null,
+                    scheduledTime = scheduledTime,
                     isFrog = isFrog,
-                    onComplete = { captureOpen = false }
+                    onComplete = { closeCapture() }
                 )
             }
         )
     }
 
-    if (goalOpen) {
-        GoalSheet(
+    editTask?.let { task ->
+        NativeTaskEditorSheet(
+            task = task,
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
-                goalOpen = false
+                editTask = null
             },
-            onSave = { name, description ->
-                goalflowViewModel.createGoal(name, description) { goalOpen = false }
+            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog ->
+                goalflowViewModel.updateTask(
+                    task = task,
+                    title = title,
+                    notes = notes,
+                    precision = precision,
+                    scheduledFor = scheduledFor,
+                    scheduledTime = scheduledTime,
+                    isFrog = isFrog
+                ) { editTask = null }
             }
         )
     }
@@ -410,15 +574,17 @@ private fun GoalflowNavigationBar(
     onSelect: (RootDestination) -> Unit
 ) {
     NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-        RootDestination.entries.forEach { destination ->
+        primaryDestinations.forEach { destination ->
             val icon = when (destination) {
                 RootDestination.CURRENT -> Icons.Rounded.TaskAlt
                 RootDestination.PLANNING -> Icons.Rounded.Timeline
+                RootDestination.HABITS -> Icons.Rounded.Repeat
                 RootDestination.GOALS -> Icons.Rounded.Flag
                 RootDestination.SETTINGS -> Icons.Rounded.Settings
+                RootDestination.INSIGHTS -> Icons.Rounded.Timeline
             }
             NavigationBarItem(
-                selected = selected == destination,
+                selected = selected == destination || (selected == RootDestination.INSIGHTS && destination == RootDestination.GOALS),
                 onClick = { onSelect(destination) },
                 icon = { Icon(icon, contentDescription = destination.label) },
                 label = { Text(destination.label) }
@@ -436,6 +602,7 @@ private fun CurrentScreen(
     onPlanning: () -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
+    onEdit: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
     LazyColumn(
@@ -471,7 +638,7 @@ private fun CurrentScreen(
                     onClick = onPlanning
                 )
                 is PlanningGate.Ready -> currentTask?.let { task ->
-                    CurrentTaskCard(task, gate.queue.size, onComplete, onBreakDown, onDrop)
+                    CurrentTaskCard(task, gate.queue.size, onComplete, onBreakDown, onEdit, onDrop)
                 }
             }
         }
@@ -551,6 +718,7 @@ private fun CurrentTaskCard(
     remaining: Int,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
+    onEdit: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
     Card(
@@ -579,6 +747,11 @@ private fun CurrentTaskCard(
             Text(task.title, style = MaterialTheme.typography.headlineMedium)
             if (task.notes.isNotBlank()) {
                 Text(task.notes, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            OutlinedButton(onClick = { onEdit(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Icon(Icons.Rounded.MoreHoriz, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Adjust commitment")
             }
             Button(
                 onClick = {
@@ -614,6 +787,7 @@ private fun PlanningScreen(
     onReschedule: (GoalflowTask, String) -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
+    onEdit: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
     val queue = (gate as? PlanningGate.DailyPlanningRequired)?.taskIds
@@ -683,7 +857,8 @@ private fun PlanningScreen(
                         task = task,
                         isFirst = queue.firstOrNull()?.id == task.id,
                         isLast = queue.lastOrNull()?.id == task.id,
-                        onMove = { direction -> onMove(today, task.id, direction) }
+                        onMove = { direction -> onMove(today, task.id, direction) },
+                        onEdit = { onEdit(task) }
                     )
                 }
                 if (gate is PlanningGate.DailyPlanningRequired) {
@@ -764,7 +939,8 @@ private fun PlannedTaskRow(
     task: GoalflowTask,
     isFirst: Boolean,
     isLast: Boolean,
-    onMove: (Int) -> Unit
+    onMove: (Int) -> Unit,
+    onEdit: () -> Unit
 ) {
     Card(shape = RoundedCornerShape(20.dp)) {
         Row(
@@ -779,6 +955,7 @@ private fun PlannedTaskRow(
                 Text(task.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
                 if (task.isFrog) Text("Frog", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
             }
+            IconButton(onClick = onEdit) { Icon(Icons.Rounded.MoreHoriz, contentDescription = "Edit ${task.title}") }
             IconButton(onClick = { onMove(-1) }, enabled = !isFirst, modifier = Modifier.semantics { contentDescription = "Move ${task.title} up" }) {
                 Icon(Icons.Rounded.ArrowUpward, contentDescription = null)
             }
@@ -1010,20 +1187,41 @@ private fun SignInDialog(
 private fun CaptureSheet(
     error: String?,
     onDismiss: () -> Unit,
-    onSave: (String, String, SchedulePrecision, String, Boolean) -> Unit
+    onSave: (String, String, SchedulePrecision, String, String?, Boolean) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var title by rememberSaveable { mutableStateOf("") }
     var notes by rememberSaveable { mutableStateOf("") }
     var precision by rememberSaveable { mutableStateOf(SchedulePrecision.DAY) }
     var selectedDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
+    var scheduledTime by rememberSaveable { mutableStateOf("") }
     var frog by rememberSaveable { mutableStateOf(false) }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
+    var saving by rememberSaveable { mutableStateOf(false) }
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) {
         focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+    LaunchedEffect(error) {
+        if (error != null) saving = false
+    }
+
+    fun submit() {
+        if (saving || title.isBlank()) return
+        saving = true
+        focusManager.clearFocus()
+        onSave(
+            title,
+            notes,
+            precision,
+            if (precision == SchedulePrecision.DAY) selectedDate else selectedDate.substring(0, 7),
+            scheduledTime.trim().takeIf { precision == SchedulePrecision.DAY && it.isNotBlank() },
+            frog
+        )
     }
 
     ModalBottomSheet(
@@ -1052,10 +1250,7 @@ private fun CaptureSheet(
                 singleLine = true,
                 keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Done),
                 keyboardActions = androidx.compose.foundation.text.KeyboardActions(onDone = {
-                    if (title.isNotBlank()) {
-                        focusManager.clearFocus()
-                        onSave(title, notes, precision, selectedDate, frog)
-                    }
+                    submit()
                 })
             )
             OutlinedTextField(
@@ -1080,6 +1275,16 @@ private fun CaptureSheet(
                 Spacer(Modifier.width(8.dp))
                 Text(if (precision == SchedulePrecision.DAY) formatDate(selectedDate) else formatMonth(selectedDate.substring(0, 7)))
             }
+            if (precision == SchedulePrecision.DAY) {
+                OutlinedTextField(
+                    value = scheduledTime,
+                    onValueChange = { scheduledTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Time (optional, HH:mm)") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next)
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Checkbox(checked = frog, onCheckedChange = { frog = it })
                 Column(modifier = Modifier.weight(1f)) {
@@ -1090,12 +1295,11 @@ private fun CaptureSheet(
             error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             Button(
                 onClick = {
-                    focusManager.clearFocus()
-                    onSave(title, notes, precision, if (precision == SchedulePrecision.DAY) selectedDate else selectedDate.substring(0, 7), frog)
+                    submit()
                 },
-                enabled = title.isNotBlank(),
+                enabled = title.isNotBlank() && !saving,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
-            ) { Text("Save commitment") }
+            ) { Text(if (saving) "Saving…" else "Save commitment") }
         }
     }
 

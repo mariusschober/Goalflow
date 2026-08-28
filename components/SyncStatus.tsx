@@ -11,7 +11,7 @@ interface StatusDetail {
 
 export const SyncStatus: React.FC<{ userKey: string }> = ({ userKey }) => {
   const [status, setStatus] = useState<StatusDetail>({ state: navigator.onLine ? 'saved-locally' : 'offline' });
-  const [conflictStores, setConflictStores] = useState<string[]>([]);
+  const [conflicts, setConflicts] = useState<Array<{ id: string; entityType: string; entityId: string; localPayload?: any }>>([]);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -19,9 +19,9 @@ export const SyncStatus: React.FC<{ userKey: string }> = ({ userKey }) => {
       const detail = (event as CustomEvent<StatusDetail>).detail;
       setStatus(detail);
       if (detail.conflictCount) {
-        const meta = await storageService.get<{ conflicts?: Array<{ entityType: string }> }>(STORES.SYNC, userKey);
-        setConflictStores(Array.from(new Set(meta?.conflicts?.map(item => item.entityType) || [])));
-      } else setConflictStores([]);
+        const meta = await storageService.get<{ conflicts?: Array<{ id: string; entityType: string; entityId: string; localPayload?: any }> }>(STORES.SYNC, userKey);
+        setConflicts(meta?.conflicts || []);
+      } else setConflicts([]);
     };
     window.addEventListener('goalflow:sync-state', onState);
     return () => window.removeEventListener('goalflow:sync-state', onState);
@@ -42,13 +42,16 @@ export const SyncStatus: React.FC<{ userKey: string }> = ({ userKey }) => {
         <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-gray-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-800">
           <p className="font-bold text-gray-900 dark:text-white">{labels[status.state]}</p>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status.lastSuccessfulSync ? `Last successful sync: ${new Date(status.lastSuccessfulSync).toLocaleString()}` : status.message || 'Changes remain available on this device.'}</p>
-          {conflictStores.map(storeName => (
-            <div key={storeName} className="mt-3 border-t border-gray-100 pt-3 dark:border-slate-700">
-              <p className="text-sm font-bold text-gray-700 dark:text-gray-200">Conflicting {storeName}</p>
+          {conflicts.map(conflict => (
+            <div key={conflict.id} className="mt-3 border-t border-gray-100 pt-3 dark:border-slate-700">
+              <p className="text-sm font-bold text-gray-700 dark:text-gray-200">
+                Conflicting {conflict.entityType === STORES.TASKS ? 'task' : conflict.entityType}
+                {conflict.localPayload?.title ? `: ${conflict.localPayload.title}` : ''}
+              </p>
               <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">Both versions are preserved until you choose.</p>
               <div className="mt-2 flex gap-2">
-                <button type="button" onClick={() => void resolveLocalConflict(userKey, storeName, 'local')} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white">Keep this device</button>
-                <button type="button" onClick={() => void resolveLocalConflict(userKey, storeName, 'cloud')} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 dark:border-slate-600 dark:text-gray-200">Use cloud</button>
+                <button type="button" onClick={() => void resolveLocalConflict(userKey, conflict.id, 'local')} className="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white">Keep this device</button>
+                <button type="button" onClick={() => void resolveLocalConflict(userKey, conflict.id, 'cloud')} className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 dark:border-slate-600 dark:text-gray-200">Use cloud</button>
               </div>
             </div>
           ))}

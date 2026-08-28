@@ -12,7 +12,8 @@ const mutationSchema = z.object({
   version: z.number().int().positive(),
   payload: z.unknown(),
   updatedAt: z.string().datetime(),
-  deletedAt: z.string().datetime().nullable().default(null)
+  deletedAt: z.string().datetime().nullable().default(null),
+  resolvesConflictId: z.string().uuid().optional()
 });
 
 const pushBody = z.object({ mutations: z.array(mutationSchema).min(1).max(50) });
@@ -41,6 +42,13 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
     try {
       const database = requireDatabase(admin);
       const body = pushBody.parse(request.body);
+      // Never call the legacy RPC: it did not fingerprint requests and could
+      // auto-resolve conflicts. Production rollout must apply the forward
+      // migration before this server begins accepting mutations.
+      const { data: protocolVersion, error: protocolError } = await database.rpc('goalflow_sync_protocol_version');
+      if (protocolError || Number(protocolVersion) !== 2) {
+        throw new Error('The hardened synchronization protocol is not installed. Local mutations remain pending.');
+      }
       const results: unknown[] = [];
       for (const mutation of body.mutations) {
         const { data, error } = await database.rpc('push_sync_mutation', {
@@ -56,8 +64,24 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
           target_deleted_at: mutation.deletedAt
         });
         if (error) throw error;
-        if ((data as { accepted?: boolean } | null)?.accepted && mutation.entityType === 'tasks') {
-          await reconcileLegacyTasks(database, request.user!.id, mutation.payload);
+        if (!data || typeof data !== 'object' || typeof (data as { accepted?: unknown }).accepted !== 'boolean') {
+          throw new Error('Synchronization mutation returned an invalid receipt.');
+        }
+        if ((data as { accepted: boolean }).accepted && mutation.entityType === 'tasks') {
+          await reconcileLegacyTasks(database, request.user!.id, mutation.payload, {
+            entityId: mutation.entityId,
+            serverVersion: Number((data as { serverVersion?: unknown }).serverVersion),
+            deletedAt: mutation.deletedAt,
+            updatedAt: mutation.updatedAt
+          });
+        }
+        if ((data as { accepted: boolean }).accepted && mutation.resolvesConflictId) {
+          const { error: resolutionError } = await database.from('sync_conflicts')
+            .update({ resolved_at: new Date().toISOString() })
+            .eq('id', mutation.resolvesConflictId)
+            .eq('user_id', request.user!.id)
+            .is('resolved_at', null);
+          if (resolutionError) throw resolutionError;
         }
         results.push({ mutationId: mutation.mutationId, ...(data as Record<string, unknown>) });
       }
@@ -128,7 +152,7 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
   router.post('/sync/conflicts/resolve', async (request, response) => {
     try {
       const database = requireDatabase(admin);
-      const input = z.object({ entityType: z.string().min(1).max(64), choice: z.enum(['local', 'cloud']) }).parse(request.body);
+      const input = z.object({ mutationId: z.string().uuid(), choice: z.enum(['local', 'cloud']) }).parse(request.body);
       // Keeping the local version is only complete once its retry is accepted
       // by push_sync_mutation. Leave the server conflict visible until then.
       if (input.choice === 'local') {
@@ -136,7 +160,7 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
         return;
       }
       const { error } = await database.from('sync_conflicts').update({ resolved_at: new Date().toISOString() })
-        .eq('user_id', request.user!.id).eq('entity_type', input.entityType).is('resolved_at', null);
+        .eq('user_id', request.user!.id).eq('mutation_id', input.mutationId).is('resolved_at', null);
       if (error) throw error;
       response.status(204).end();
     } catch (error) {

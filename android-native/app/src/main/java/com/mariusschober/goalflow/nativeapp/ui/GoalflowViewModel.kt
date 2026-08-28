@@ -4,17 +4,24 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowProgress
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowStats
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowTrueNorth
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
+import com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -22,7 +29,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel() {
+class GoalflowViewModel(
+    private val repository: GoalflowRepository,
+    private val syncEngine: NativeSyncEngine
+) : ViewModel() {
     private val _today = MutableStateFlow(LocalDate.now().toString())
     val today: StateFlow<String> = _today.asStateFlow()
 
@@ -33,6 +43,42 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
     )
 
     val goals: StateFlow<List<GoalflowGoal>> = repository.goalStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
+    val habits: StateFlow<List<GoalflowHabit>> = repository.habitStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
+    val stats: StateFlow<GoalflowStats> = repository.statsStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        GoalflowStats()
+    )
+
+    val progress: StateFlow<GoalflowProgress> = repository.progressStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        GoalflowProgress()
+    )
+
+    val trueNorth: StateFlow<List<GoalflowTrueNorth>> = repository.trueNorthStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
+    val amalgam: StateFlow<String> = repository.amalgamStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        "My world takes care of me"
+    )
+
+    val conflicts: StateFlow<List<SyncConflictEntity>> = repository.conflictStream.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         emptyList()
@@ -63,9 +109,41 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
                 _today.value = LocalDate.now().toString()
             }
         }
+        viewModelScope.launch {
+            combine(habits, today) { currentHabits, date -> currentHabits to date }
+                .collectLatest { (currentHabits, date) ->
+                    currentHabits.forEach { habit ->
+                        runCatching { repository.generateHabitInstance(habit.id, date) }
+                    }
+                }
+        }
     }
 
     fun createTask(
+        title: String,
+        notes: String,
+        precision: SchedulePrecision,
+        scheduledFor: String,
+        scheduledTime: String?,
+        isFrog: Boolean,
+        goalId: String? = null,
+        onComplete: () -> Unit
+    ) {
+        viewModelScope.launch {
+            clearError()
+            runCatching {
+                repository.createTask(title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId)
+            }.onSuccess {
+                _notice.value = "Commitment captured locally"
+                onComplete()
+            }.onFailure { failure ->
+                _error.value = failure.message ?: "The task could not be saved."
+            }
+        }
+    }
+
+    fun updateTask(
+        task: GoalflowTask,
         title: String,
         notes: String,
         precision: SchedulePrecision,
@@ -77,12 +155,12 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
         viewModelScope.launch {
             clearError()
             runCatching {
-                repository.createTask(title, notes, precision, scheduledFor, scheduledTime, isFrog)
+                repository.updateTask(task.id, title, notes, precision, scheduledFor, scheduledTime, isFrog)
             }.onSuccess {
-                _notice.value = "Commitment captured locally"
+                _notice.value = "Commitment updated locally"
                 onComplete()
             }.onFailure { failure ->
-                _error.value = failure.message ?: "The task could not be saved."
+                _error.value = failure.message ?: "The task could not be updated."
             }
         }
     }
@@ -165,14 +243,128 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
         }
     }
 
+    fun updateGoal(goal: GoalflowGoal, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.updateGoal(goal) }
+                .onSuccess { _notice.value = "Direction updated locally"; onComplete() }
+                .onFailure { failure -> _error.value = failure.message ?: "The goal could not be updated." }
+        }
+    }
+
+    fun deleteGoal(goal: GoalflowGoal) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.deleteGoal(goal.id) }
+                .onSuccess { _notice.value = "Goal removed; linked commitments remain." }
+                .onFailure { failure -> _error.value = failure.message ?: "The goal could not be removed." }
+        }
+    }
+
+    fun createHabit(
+        title: String,
+        frequency: com.mariusschober.goalflow.nativeapp.domain.HabitFrequency,
+        specificDays: Set<Int>,
+        highPriority: Boolean,
+        beforeFrog: Boolean,
+        duration: Int?,
+        goalId: String?,
+        onComplete: () -> Unit
+    ) {
+        viewModelScope.launch {
+            clearError()
+            runCatching {
+                repository.createHabit(title, frequency, specificDays, highPriority, beforeFrog, duration, goalId)
+            }.onSuccess {
+                _notice.value = "Habit added locally"
+                onComplete()
+            }.onFailure { failure -> _error.value = failure.message ?: "The habit could not be saved." }
+        }
+    }
+
+    fun updateHabit(habit: GoalflowHabit, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.updateHabit(habit) }
+                .onSuccess { _notice.value = "Habit updated locally"; onComplete() }
+                .onFailure { failure -> _error.value = failure.message ?: "The habit could not be updated." }
+        }
+    }
+
+    fun deleteHabit(habit: GoalflowHabit) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.deleteHabit(habit.id) }
+                .onSuccess { _notice.value = "Habit removed; history remains." }
+                .onFailure { failure -> _error.value = failure.message ?: "The habit could not be removed." }
+        }
+    }
+
+    fun createTrueNorth(goal: GoalflowTrueNorth, onComplete: () -> Unit) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.createTrueNorthGoal(goal) }
+                .onSuccess { _notice.value = "Vision anchored locally"; onComplete() }
+                .onFailure { failure -> _error.value = failure.message ?: "The vision could not be saved." }
+        }
+    }
+
+    fun updateTrueNorth(goal: GoalflowTrueNorth, onComplete: () -> Unit = {}) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.updateTrueNorthGoal(goal) }
+                .onSuccess { _notice.value = "Vision updated locally"; onComplete() }
+                .onFailure { failure -> _error.value = failure.message ?: "The vision could not be updated." }
+        }
+    }
+
+    fun deleteTrueNorth(goal: GoalflowTrueNorth) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.deleteTrueNorthGoal(goal.id) }
+                .onSuccess { _notice.value = "Vision removed; linked commitments remain." }
+                .onFailure { failure -> _error.value = failure.message ?: "The vision could not be removed." }
+        }
+    }
+
+    fun updateAmalgam(text: String) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.updateAmalgam(text) }
+                .onSuccess { _notice.value = "Background thought saved locally" }
+                .onFailure { failure -> _error.value = failure.message ?: "The background thought could not be saved." }
+        }
+    }
+
+    fun resolveConflict(conflict: SyncConflictEntity, keepLocal: Boolean) {
+        viewModelScope.launch {
+            clearError()
+            runCatching {
+                if (keepLocal) repository.resolveConflictLocally(conflict.id)
+                else syncEngine.resolveConflictWithCloud(conflict)
+            }.onSuccess {
+                _notice.value = if (keepLocal) {
+                    "Local version queued for safe reconciliation"
+                } else {
+                    "Cloud version applied"
+                }
+            }.onFailure { failure ->
+                _error.value = failure.message ?: "The conflict remains preserved."
+            }
+        }
+    }
+
     fun clearNotice() { _notice.value = null }
     fun clearError() { _error.value = null }
 }
 
-class GoalflowViewModelFactory(private val repository: GoalflowRepository) : ViewModelProvider.Factory {
+class GoalflowViewModelFactory(
+    private val repository: GoalflowRepository,
+    private val syncEngine: NativeSyncEngine
+) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(GoalflowViewModel::class.java))
-        return GoalflowViewModel(repository) as T
+        return GoalflowViewModel(repository, syncEngine) as T
     }
 }

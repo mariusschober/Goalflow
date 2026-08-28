@@ -19,11 +19,15 @@ data class NativeSession(
     val userId: String?
 )
 
+fun interface NativeSessionProvider {
+    fun read(): NativeSession?
+}
+
 /** Stores cloud session material encrypted by an Android Keystore key. */
-class SecureSessionStore(context: Context) {
+class SecureSessionStore(context: Context) : NativeSessionProvider {
     private val preferences = context.getSharedPreferences("goalflow-secure-session", Context.MODE_PRIVATE)
 
-    fun read(): NativeSession? = runCatching {
+    override fun read(): NativeSession? = runCatching {
         val encoded = preferences.getString(KEY_SESSION, null) ?: return null
         val json = JSONObject(decrypt(encoded))
         NativeSession(
@@ -41,11 +45,15 @@ class SecureSessionStore(context: Context) {
             put("expiresAtMillis", session.expiresAtMillis)
             put("userId", session.userId ?: JSONObject.NULL)
         }
-        preferences.edit().putString(KEY_SESSION, encrypt(json.toString())).apply()
+        check(preferences.edit().putString(KEY_SESSION, encrypt(json.toString())).commit()) {
+            "The cloud session could not be stored durably."
+        }
     }
 
     fun clear() {
-        preferences.edit().remove(KEY_SESSION).apply()
+        check(preferences.edit().remove(KEY_SESSION).commit()) {
+            "The cloud session could not be cleared."
+        }
     }
 
     private fun key(): SecretKey {
