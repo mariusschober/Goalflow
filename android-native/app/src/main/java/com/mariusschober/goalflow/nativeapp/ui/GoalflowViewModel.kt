@@ -141,12 +141,13 @@ class GoalflowViewModel(
         scheduledTime: String?,
         isFrog: Boolean,
         goalId: String? = null,
+        duration: Int? = null,
         onComplete: () -> Unit
     ) {
         viewModelScope.launch {
             clearError()
             runCatching {
-                repository.createTask(title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId)
+                repository.createTask(title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId, duration)
             }.onSuccess {
                 _notice.value = "Commitment captured locally"
                 onComplete()
@@ -164,12 +165,14 @@ class GoalflowViewModel(
         scheduledFor: String,
         scheduledTime: String?,
         isFrog: Boolean,
+        goalId: String? = null,
+        duration: Int? = null,
         onComplete: () -> Unit
     ) {
         viewModelScope.launch {
             clearError()
             runCatching {
-                repository.updateTask(task.id, title, notes, precision, scheduledFor, scheduledTime, isFrog)
+                repository.updateTask(task.id, title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId, duration)
             }.onSuccess {
                 _notice.value = "Commitment updated locally"
                 onComplete()

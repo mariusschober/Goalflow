@@ -52,6 +52,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.Divider
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
@@ -502,12 +504,13 @@ fun GoalflowRoot() {
 
     if (captureOpen) {
         CaptureSheet(
+            goals = goals,
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
                 closeCapture()
             },
-            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog ->
+            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId, duration ->
                 goalflowViewModel.createTask(
                     title = title,
                     notes = notes,
@@ -515,6 +518,8 @@ fun GoalflowRoot() {
                     scheduledFor = scheduledFor,
                     scheduledTime = scheduledTime,
                     isFrog = isFrog,
+                    goalId = goalId,
+                    duration = duration,
                     onComplete = { closeCapture() }
                 )
             }
@@ -549,12 +554,13 @@ fun GoalflowRoot() {
     editTask?.let { task ->
         NativeTaskEditorSheet(
             task = task,
+            goals = goals,
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
                 editTask = null
             },
-            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog ->
+            onSave = { title, notes, precision, scheduledFor, scheduledTime, isFrog, goalId, duration ->
                 goalflowViewModel.updateTask(
                     task = task,
                     title = title,
@@ -562,7 +568,9 @@ fun GoalflowRoot() {
                     precision = precision,
                     scheduledFor = scheduledFor,
                     scheduledTime = scheduledTime,
-                    isFrog = isFrog
+                    isFrog = isFrog,
+                    goalId = goalId,
+                    duration = duration
                 ) { editTask = null }
             }
         )
@@ -732,6 +740,38 @@ private fun GoalflowSandboxGate(onGranted: () -> Unit) {
                 enabled = code.isNotBlank() && !checking,
                 modifier = Modifier.fillMaxWidth().height(56.dp)
             ) { Text("Enter test app") }
+        }
+    }
+}
+
+@Composable
+internal fun GoalPicker(
+    goals: List<GoalflowGoal>,
+    selectedGoalId: String?,
+    expanded: Boolean,
+    onExpandedChange: (Boolean) -> Unit,
+    onSelect: (String?) -> Unit
+) {
+    val selectedName = goals.firstOrNull { it.id == selectedGoalId }?.name ?: "No linked goal"
+    Box {
+        OutlinedButton(
+            onClick = { onExpandedChange(true) },
+            modifier = Modifier.fillMaxWidth().height(52.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.Start) {
+                Text("Direction", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(selectedName, maxLines = 1)
+            }
+            Icon(Icons.Rounded.MoreHoriz, contentDescription = "Choose linked goal")
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { onExpandedChange(false) }) {
+            DropdownMenuItem(text = { Text("No linked goal") }, onClick = { onSelect(null) })
+            goals.forEach { goal ->
+                DropdownMenuItem(
+                    text = { Text(goal.name, maxLines = 1) },
+                    onClick = { onSelect(goal.id) }
+                )
+            }
         }
     }
 }
@@ -1541,9 +1581,10 @@ private fun SignInDialog(
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CaptureSheet(
+    goals: List<GoalflowGoal>,
     error: String?,
     onDismiss: () -> Unit,
-    onSave: (String, String, SchedulePrecision, String, String?, Boolean) -> Unit
+    onSave: (String, String, SchedulePrecision, String, String?, Boolean, String?, Int) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var title by rememberSaveable { mutableStateOf("") }
@@ -1552,8 +1593,12 @@ private fun CaptureSheet(
     var selectedDate by rememberSaveable { mutableStateOf(LocalDate.now().toString()) }
     var scheduledTime by rememberSaveable { mutableStateOf("") }
     var frog by rememberSaveable { mutableStateOf(false) }
+    var selectedGoalId by rememberSaveable { mutableStateOf<String?>(null) }
+    var duration by rememberSaveable { mutableStateOf("25") }
     var showDatePicker by rememberSaveable { mutableStateOf(false) }
+    var goalMenuOpen by rememberSaveable { mutableStateOf(false) }
     var saving by rememberSaveable { mutableStateOf(false) }
+    var localError by rememberSaveable { mutableStateOf<String?>(null) }
     val focusManager = LocalFocusManager.current
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -1568,7 +1613,13 @@ private fun CaptureSheet(
 
     fun submit() {
         if (saving || title.isBlank()) return
+        val minutes = duration.toIntOrNull()
+        if (minutes == null || minutes !in 1..1_440) {
+            localError = "Duration must be between 1 and 1,440 minutes."
+            return
+        }
         saving = true
+        localError = null
         focusManager.clearFocus()
         onSave(
             title,
@@ -1576,7 +1627,9 @@ private fun CaptureSheet(
             precision,
             if (precision == SchedulePrecision.DAY) selectedDate else selectedDate.substring(0, 7),
             scheduledTime.trim().takeIf { precision == SchedulePrecision.DAY && it.isNotBlank() },
-            frog
+            frog,
+            selectedGoalId,
+            minutes
         )
     }
 
@@ -1641,6 +1694,26 @@ private fun CaptureSheet(
                     keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next)
                 )
             }
+            OutlinedTextField(
+                value = duration,
+                onValueChange = { duration = it.filter(Char::isDigit).take(4); localError = null },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Estimated minutes") },
+                singleLine = true,
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Next
+                )
+            )
+            if (goals.isNotEmpty()) {
+                GoalPicker(
+                    goals = goals,
+                    selectedGoalId = selectedGoalId,
+                    expanded = goalMenuOpen,
+                    onExpandedChange = { goalMenuOpen = it },
+                    onSelect = { selectedGoalId = it; goalMenuOpen = false }
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Checkbox(checked = frog, onCheckedChange = { frog = it })
                 Column(modifier = Modifier.weight(1f)) {
@@ -1648,7 +1721,7 @@ private fun CaptureSheet(
                     Text("A commitment you refuse to quietly avoid.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
-            error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
+            (error ?: localError)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium) }
             Button(
                 onClick = {
                     submit()

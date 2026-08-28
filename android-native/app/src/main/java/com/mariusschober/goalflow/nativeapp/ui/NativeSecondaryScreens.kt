@@ -722,9 +722,10 @@ private fun InsightMetric(label: String, value: String, modifier: Modifier = Mod
 @Composable
 fun NativeTaskEditorSheet(
     task: GoalflowTask,
+    goals: List<GoalflowGoal>,
     error: String?,
     onDismiss: () -> Unit,
-    onSave: (String, String, SchedulePrecision, String, String?, Boolean) -> Unit
+    onSave: (String, String, SchedulePrecision, String, String?, Boolean, String?, Int) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val key = task.id
@@ -734,8 +735,16 @@ fun NativeTaskEditorSheet(
     var scheduledFor by rememberSaveable(key) { mutableStateOf(task.scheduledFor) }
     var scheduledTime by rememberSaveable(key) { mutableStateOf(task.scheduledTime.orEmpty()) }
     var frog by rememberSaveable(key) { mutableStateOf(task.isFrog) }
+    var selectedGoalId by rememberSaveable(key) { mutableStateOf(task.goalId) }
+    val initialDuration = remember(key) {
+        runCatching { org.json.JSONObject(task.extraJson).optInt("duration", 25) }
+            .getOrDefault(25)
+            .coerceIn(1, 1_440)
+    }
+    var duration by rememberSaveable(key) { mutableStateOf(initialDuration.toString()) }
+    var goalMenuOpen by rememberSaveable(key) { mutableStateOf(false) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
-    var localError by remember { mutableStateOf<String?>(null) }
+    var localError by rememberSaveable(key) { mutableStateOf<String?>(null) }
     LaunchedEffect(error) { if (error != null) saving = false }
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -771,11 +780,29 @@ fun NativeTaskEditorSheet(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
                 )
             }
+            OutlinedTextField(
+                value = duration,
+                onValueChange = { duration = it.filter(Char::isDigit).take(4); localError = null },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Estimated minutes") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next)
+            )
+            if (goals.isNotEmpty()) {
+                GoalPicker(
+                    goals = goals,
+                    selectedGoalId = selectedGoalId,
+                    expanded = goalMenuOpen,
+                    onExpandedChange = { goalMenuOpen = it },
+                    onSelect = { selectedGoalId = it; goalMenuOpen = false }
+                )
+            }
             CheckRow("Frog", frog, "A commitment you refuse to quietly avoid") { frog = it }
             (error ?: localError)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(onClick = {
                 if (!saving) {
                     if (title.trim().isBlank()) localError = "A commitment needs a clear title."
+                    else if (duration.toIntOrNull() == null || duration.toInt() !in 1..1_440) localError = "Duration must be between 1 and 1,440 minutes."
                     else {
                         saving = true
                         onSave(
@@ -784,7 +811,9 @@ fun NativeTaskEditorSheet(
                             SchedulePrecision.valueOf(precisionName),
                             scheduledFor,
                             scheduledTime.trim().takeIf { precisionName == SchedulePrecision.DAY.name && it.isNotBlank() },
-                            frog
+                            frog,
+                            selectedGoalId,
+                            duration.toInt()
                         )
                     }
                 }

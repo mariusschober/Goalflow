@@ -115,10 +115,13 @@ class GoalflowRepository(
         scheduledFor: String,
         scheduledTime: String?,
         isFrog: Boolean,
-        goalId: String? = null
+        goalId: String? = null,
+        duration: Int? = null
     ): GoalflowTask {
         val cleanTitle = title.trim()
         if (cleanTitle.isBlank()) throw SchedulingException("A task needs an actionable title.")
+        val cleanDuration = duration ?: 25
+        if (cleanDuration !in 1..1_440) throw SchedulingException("Duration must be between 1 and 1,440 minutes.")
         val today = LocalDate.now().toString()
         assertSchedule(schedulePrecision, scheduledFor, today, scheduledTime)
         val now = System.currentTimeMillis()
@@ -141,7 +144,7 @@ class GoalflowRepository(
                 createdAt = now,
                 updatedAt = now,
                 extraJson = JSONObject()
-                    .put("duration", 25)
+                    .put("duration", cleanDuration)
                     .put("hashtags", JSONArray())
                     .toString()
             )
@@ -308,7 +311,7 @@ class GoalflowRepository(
             tasks.update(restored)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(restored)).toString())
 
-            val goalId = undo.nullableString("goalId")
+            val goalId = undo.nullableStringValue("goalId")
             val goalBefore = undo.nullableInt("goalCompletedTasksBefore")
             if (goalId != null && goalBefore != null) {
                 goals.get(goalId)?.let { goal ->
@@ -320,7 +323,7 @@ class GoalflowRepository(
                 }
             }
 
-            val habitId = undo.nullableString("habitId")
+            val habitId = undo.nullableStringValue("habitId")
             val habitStreakBefore = undo.nullableInt("habitStreakBefore")
             val habitBestBefore = undo.nullableInt("habitBestStreakBefore")
             if (habitId != null && habitStreakBefore != null && habitBestBefore != null) {
@@ -328,7 +331,7 @@ class GoalflowRepository(
                     val restoredHabit = habit.copy(
                         streak = habitStreakBefore,
                         bestStreak = habitBestBefore,
-                        lastCompletedDate = undo.nullableString("habitLastCompletedDateBefore")
+                        lastCompletedDate = undo.nullableStringValue("habitLastCompletedDateBefore")
                     )
                     habits.insert(restoredHabit)
                     enqueueRecordInTransaction(
@@ -370,10 +373,15 @@ class GoalflowRepository(
         schedulePrecision: SchedulePrecision,
         scheduledFor: String,
         scheduledTime: String? = null,
-        isFrog: Boolean? = null
+        isFrog: Boolean? = null,
+        goalId: String? = null,
+        duration: Int? = null
     ) {
         val cleanTitle = title.trim()
         if (cleanTitle.isBlank()) throw SchedulingException("A task needs an actionable title.")
+        if (duration != null && duration !in 1..1_440) {
+            throw SchedulingException("Duration must be between 1 and 1,440 minutes.")
+        }
         assertSchedule(schedulePrecision, scheduledFor, LocalDate.now().toString(), scheduledTime)
         database.withTransaction {
             val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
@@ -391,6 +399,10 @@ class GoalflowRepository(
                 }) {
                 throw SchedulingException("A habit instance already exists on that day.")
             }
+            val updatedExtras = runCatching { JSONObject(current.extraJson) }.getOrElse {
+                throw SchedulingException("This commitment contains damaged preserved fields; export a backup before editing it.")
+            }
+            duration?.let { updatedExtras.put("duration", it) }
             val updated = current.copy(
                 title = cleanTitle,
                 notes = notes.trim(),
@@ -398,6 +410,8 @@ class GoalflowRepository(
                 scheduledFor = scheduledFor,
                 scheduledTime = scheduledTime,
                 isFrog = current.isFrog || isFrog == true,
+                goalId = goalId,
+                extraJson = updatedExtras.toString(),
                 updatedAt = System.currentTimeMillis()
             )
             tasks.update(updated)
@@ -1808,19 +1822,19 @@ class GoalflowRepository(
                 lastCheckIn = root.optString("lastCheckIn"),
                 score = root.optInt("score", 0).coerceIn(0, 100),
                 mode = mode,
-                sunriseTime = root.nullableString("sunriseTime"),
-                sunsetTime = root.nullableString("sunsetTime"),
-                solarNoonTime = root.nullableString("solarNoonTime"),
+                sunriseTime = root.nullableStringValue("sunriseTime"),
+                sunsetTime = root.nullableStringValue("sunsetTime"),
+                solarNoonTime = root.nullableStringValue("solarNoonTime"),
                 sunrise = metrics.optBoolean("sunrise", false),
                 sleepHours = metrics.optInt("sleepHours", 8).coerceIn(0, 24),
                 energy = metrics.optInt("energy", 5).coerceIn(1, 10),
                 clarity = metrics.optInt("clarity", 5).coerceIn(1, 10),
                 interest = metrics.optInt("interest", 5).coerceIn(1, 10),
-                wakeTime = metrics.nullableString("wakeTime"),
+                wakeTime = metrics.nullableStringValue("wakeTime"),
                 eatingWindow = metrics.opt("eatingWindow").takeIf { it is Number }
                     ?.let { (it as Number).toInt() }
                     ?.coerceIn(1, 24),
-                firstMealTime = metrics.nullableString("firstMealTime")
+                firstMealTime = metrics.nullableStringValue("firstMealTime")
             )
         }.getOrDefault(GoalflowCircadianState())
     }
@@ -1906,7 +1920,7 @@ class GoalflowRepository(
     private fun nullableString(item: JSONObject, key: String): String? =
         if (!item.has(key) || item.isNull(key)) null else item.optString(key).takeIf(String::isNotBlank)
 
-    private fun JSONObject.nullableString(key: String): String? =
+    private fun JSONObject.nullableStringValue(key: String): String? =
         if (!has(key) || isNull(key)) null else optString(key).takeIf(String::isNotBlank)
 
     private fun JSONObject.nullableInt(key: String): Int? {
