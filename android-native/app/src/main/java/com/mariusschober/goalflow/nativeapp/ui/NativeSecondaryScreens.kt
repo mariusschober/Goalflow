@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Flag
@@ -283,13 +285,16 @@ private fun HabitEditorSheet(
             }
             if (frequencyName == HabitFrequency.SPECIFIC_DAYS.name) {
                 Text("Choose weekdays", style = MaterialTheme.typography.labelLarge)
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Row(
+                    modifier = Modifier.horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     weekdays.forEachIndexed { index, label ->
                         OutlinedButton(
                             onClick = {
                                 selectedDays = if (index in selectedDays) selectedDays - index else (selectedDays + index).sorted()
                             },
-                            modifier = Modifier.size(42.dp),
+                            modifier = Modifier.size(48.dp),
                             contentPadding = PaddingValues(0.dp)
                         ) { Text(label, color = if (index in selectedDays) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface) }
                     }
@@ -595,6 +600,7 @@ private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: (
     var deadline by rememberSaveable(key) { mutableStateOf(initial?.deadline.orEmpty()) }
     var excitement by rememberSaveable(key) { mutableStateOf(initial?.excitement?.toString().orEmpty()) }
     var roi by rememberSaveable(key) { mutableStateOf(initial?.roi?.toString().orEmpty()) }
+    var showDatePicker by rememberSaveable(key) { mutableStateOf(false) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(error) {
@@ -605,7 +611,16 @@ private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: (
             Text(if (initial == null) "New goal" else "Edit goal", style = MaterialTheme.typography.headlineMedium)
             OutlinedTextField(value = name, onValueChange = { name = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Direction") }, singleLine = true)
             OutlinedTextField(value = description, onValueChange = { description = it }, modifier = Modifier.fillMaxWidth(), label = { Text("What would make it real?") }, minLines = 3, maxLines = 5)
-            OutlinedTextField(value = deadline, onValueChange = { deadline = it.filter { char -> char.isDigit() || char == '-' }.take(10) }, modifier = Modifier.fillMaxWidth(), label = { Text("Deadline (YYYY-MM-DD, optional)") }, singleLine = true)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    Icon(Icons.Rounded.DateRange, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(deadline.ifBlank { "Choose deadline" }, maxLines = 1)
+                }
+                if (deadline.isNotBlank()) {
+                    TextButton(onClick = { deadline = "" }) { Text("Clear") }
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(value = excitement, onValueChange = { excitement = it.filter(Char::isDigit).take(2) }, modifier = Modifier.weight(1f), label = { Text("Excitement /10") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
                 OutlinedTextField(value = roi, onValueChange = { roi = it.filter(Char::isDigit).take(2) }, modifier = Modifier.weight(1f), label = { Text("ROI /10") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
@@ -624,6 +639,13 @@ private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: (
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if (saving) "Saving…" else if (initial == null) "Create goal" else "Save changes") }
         }
+    }
+    if (showDatePicker) {
+        GoalflowDatePickerDialog(
+            initialDate = deadline.ifBlank { java.time.LocalDate.now().toString() },
+            onDismiss = { showDatePicker = false },
+            onConfirm = { date -> deadline = date; showDatePicker = false }
+        )
     }
 }
 
@@ -853,6 +875,7 @@ fun NativeTaskEditorSheet(
     var scheduledTime by rememberSaveable(key) { mutableStateOf(task.scheduledTime.orEmpty()) }
     var frog by rememberSaveable(key) { mutableStateOf(task.isFrog) }
     var selectedGoalId by rememberSaveable(key) { mutableStateOf(task.goalId) }
+    var showDatePicker by rememberSaveable(key) { mutableStateOf(false) }
     val initialDuration = remember(key) {
         runCatching { org.json.JSONObject(task.extraJson).optInt("duration", 25) }
             .getOrDefault(25)
@@ -886,7 +909,13 @@ fun NativeTaskEditorSheet(
                     modifier = Modifier.weight(1f)
                 ) { Text("Future month") }
             }
-            OutlinedTextField(value = scheduledFor, onValueChange = { scheduledFor = it.filter { char -> char.isDigit() || char == '-' }.take(10) }, modifier = Modifier.fillMaxWidth(), label = { Text(if (precisionName == SchedulePrecision.DAY.name) "Day (YYYY-MM-DD)" else "Month (YYYY-MM)") }, singleLine = true)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                OutlinedButton(onClick = { showDatePicker = true }, modifier = Modifier.weight(1f).height(52.dp)) {
+                    Icon(Icons.Rounded.DateRange, contentDescription = null)
+                    Spacer(Modifier.width(8.dp))
+                    Text(scheduledFor, maxLines = 1)
+                }
+            }
             if (precisionName == SchedulePrecision.DAY.name) {
                 OutlinedTextField(
                     value = scheduledTime,
@@ -936,5 +965,20 @@ fun NativeTaskEditorSheet(
                 }
             }, enabled = !saving, modifier = Modifier.fillMaxWidth().height(56.dp)) { Text(if (saving) "Saving…" else "Save changes") }
         }
+    }
+    if (showDatePicker) {
+        val pickerDate = if (precisionName == SchedulePrecision.MONTH.name) {
+            "${scheduledFor.take(7)}-01"
+        } else {
+            scheduledFor
+        }
+        GoalflowDatePickerDialog(
+            initialDate = pickerDate,
+            onDismiss = { showDatePicker = false },
+            onConfirm = { date ->
+                scheduledFor = if (precisionName == SchedulePrecision.MONTH.name) date.take(7) else date
+                showDatePicker = false
+            }
+        )
     }
 }

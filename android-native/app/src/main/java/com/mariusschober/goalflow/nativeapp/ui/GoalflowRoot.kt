@@ -1206,16 +1206,6 @@ private fun CurrentTaskCard(
             if (task.notes.isNotBlank()) {
                 Text(task.notes, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            OutlinedButton(onClick = { onEdit(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
-                Icon(Icons.Rounded.MoreHoriz, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Adjust commitment")
-            }
-            OutlinedButton(onClick = { onFocus(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
-                Icon(Icons.Rounded.Timeline, contentDescription = null)
-                Spacer(Modifier.width(8.dp))
-                Text("Start focus session")
-            }
             Button(
                 onClick = {
                     onComplete(task)
@@ -1229,6 +1219,16 @@ private fun CurrentTaskCard(
                 Icon(Icons.Rounded.Check, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Complete")
+            }
+            OutlinedButton(onClick = { onEdit(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Icon(Icons.Rounded.MoreHoriz, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Adjust commitment")
+            }
+            OutlinedButton(onClick = { onFocus(task) }, modifier = Modifier.fillMaxWidth().height(50.dp)) {
+                Icon(Icons.Rounded.Timeline, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Start focus session")
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 TextButton(onClick = { onBreakDown(task) }) { Text("Break down") }
@@ -2097,7 +2097,7 @@ private fun BreakdownDialog(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GoalflowDatePickerDialog(initialDate: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+internal fun GoalflowDatePickerDialog(initialDate: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     val initialMillis = runCatching {
         LocalDate.parse(initialDate.take(10)).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
     }.getOrDefault(System.currentTimeMillis())
