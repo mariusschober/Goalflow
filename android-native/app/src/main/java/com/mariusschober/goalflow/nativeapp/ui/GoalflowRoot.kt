@@ -5,6 +5,7 @@ import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.BackHandler
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
@@ -326,7 +327,10 @@ fun GoalflowRoot() {
                         onPlanning = { destination = RootDestination.PLANNING },
                         onCheckIn = { circadianOpen = true },
                         onResetCircadian = goalflowViewModel::resetCircadian,
-                        onFocus = { focusTask = it },
+                        onFocus = {
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+                            focusTask = it
+                        },
                         onComplete = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.completeTask(task)
@@ -353,7 +357,10 @@ fun GoalflowRoot() {
                         },
                         onScheduleMonthTask = { datePickerForTask = it },
                         onReschedule = { task, date -> goalflowViewModel.rescheduleTask(task, date) },
-                        onComplete = { task -> goalflowViewModel.completeTask(task) },
+                        onComplete = { task ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            goalflowViewModel.completeTask(task)
+                        },
                         onBreakDown = { breakdownTask = it },
                         onDrop = { task -> goalflowViewModel.dropTask(task) },
                         onEdit = { editTask = it }
@@ -520,7 +527,10 @@ fun GoalflowRoot() {
                     isFrog = isFrog,
                     goalId = goalId,
                     duration = duration,
-                    onComplete = { closeCapture() }
+                    onComplete = {
+                        localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                        closeCapture()
+                    }
                 )
             }
         )
@@ -857,8 +867,13 @@ private fun CurrentScreen(
                     },
                     onClick = onPlanning
                 )
-                is PlanningGate.Ready -> currentTask?.let { task ->
-                    CurrentTaskCard(task, gate.queue.size, onFocus, onComplete, onBreakDown, onEdit, onDrop)
+                is PlanningGate.Ready -> AnimatedContent(
+                    targetState = currentTask,
+                    label = "current-commitment"
+                ) { task ->
+                    task?.let {
+                        CurrentTaskCard(it, gate.queue.size, onFocus, onComplete, onBreakDown, onEdit, onDrop)
+                    }
                 }
             }
         }

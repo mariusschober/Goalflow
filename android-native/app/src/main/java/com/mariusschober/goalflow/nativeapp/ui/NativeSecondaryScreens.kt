@@ -488,9 +488,18 @@ private fun TrueNorthCard(goal: GoalflowTrueNorth, onEdit: () -> Unit, onDelete:
                 IconButton(onClick = onDelete) { Icon(Icons.Rounded.Delete, contentDescription = "Remove vision") }
             }
             if (goal.sensoryDetails.isNotBlank()) Text(goal.sensoryDetails, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            goal.tangibleReality?.let {
+                Text("Reality: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (goal.planB.isNotBlank()) {
+                Text("Safety net: ${goal.planB}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 LabelPill("Importance ${goal.importance}/10", MaterialTheme.colorScheme.secondaryContainer)
                 goal.anchorHabit?.let { LabelPill("Anchor: $it", MaterialTheme.colorScheme.primaryContainer) }
+            }
+            goal.anchorTask?.let {
+                Text("First milestone: $it", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
             }
         }
     }
@@ -647,9 +656,22 @@ fun NativeInsightsScreen(
     onBack: () -> Unit
 ) {
     val today = java.time.LocalDate.now().toString()
-    val completed = tasks.count { it.status.name == "COMPLETED" && it.deletedAt == null }
-    val completedToday = tasks.count { it.status.name == "COMPLETED" && it.scheduledFor == today && it.deletedAt == null }
+    val completedTasks = tasks
+        .filter { it.status.name == "COMPLETED" && it.deletedAt == null }
+        .sortedWith(compareByDescending<GoalflowTask> { it.completedAt ?: 0L }.thenBy { it.id })
+    val completed = completedTasks.size
+    val completedToday = completedTasks.count { it.scheduledFor == today }
     val openToday = tasks.count { it.status.name == "OPEN" && it.scheduledFor == today && it.deletedAt == null }
+    val frogsEaten = completedTasks.count { it.isFrog }
+    val focusMinutes = completedTasks.sumOf { task ->
+        runCatching {
+            val extras = org.json.JSONObject(task.extraJson)
+            extras.optInt("actualDuration", extras.optInt("duration", 0)).coerceAtLeast(0)
+        }.getOrDefault(0)
+    }
+    val flowRated = completedTasks.count { task ->
+        runCatching { org.json.JSONObject(task.extraJson).optString("flowState").isNotBlank() }.getOrDefault(false)
+    }
     val progressFraction = (progress.xp.toFloat() / progress.xpToNextLevel.coerceAtLeast(1)).coerceIn(0f, 1f)
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
@@ -684,9 +706,24 @@ fun NativeInsightsScreen(
         }
         item {
             Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                InsightMetric("Frogs", stats.frogsEaten.toString(), Modifier.weight(1f))
-                InsightMetric("Focus", "${stats.timeFocused} min", Modifier.weight(1f))
+                InsightMetric("Frogs", frogsEaten.toString(), Modifier.weight(1f))
+                InsightMetric("Focus", "$focusMinutes min", Modifier.weight(1f))
                 InsightMetric("Habits", habits.count { it.streak > 0 }.toString(), Modifier.weight(1f))
+            }
+        }
+        item {
+            Card(shape = RoundedCornerShape(22.dp)) {
+                Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("What the record says", style = MaterialTheme.typography.titleLarge)
+                    Text(
+                        if (flowRated == 0) {
+                            "Complete a focus session and rate it once. The pattern will stay on this device with your commitments."
+                        } else {
+                            "$flowRated completed session${if (flowRated == 1) "" else "s"} has a focus note. Use it as a signal, not a score."
+                        },
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
         item {
@@ -704,6 +741,51 @@ fun NativeInsightsScreen(
                     )
                 }
             }
+        }
+        item { Text("Recent completions", style = MaterialTheme.typography.titleLarge) }
+        if (completedTasks.isEmpty()) {
+            item {
+                Text(
+                    "Completed commitments will appear here. Keep the next action small and honest.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        } else {
+            items(completedTasks.take(8), key = { it.id }) { task ->
+                CompletedTaskRow(task)
+            }
+        }
+    }
+}
+
+@Composable
+private fun CompletedTaskRow(task: GoalflowTask) {
+    val duration = runCatching {
+        val extras = org.json.JSONObject(task.extraJson)
+        extras.optInt("actualDuration", extras.optInt("duration", 0)).coerceAtLeast(0)
+    }.getOrDefault(0)
+    val flowState = runCatching { org.json.JSONObject(task.extraJson).optString("flowState") }
+        .getOrDefault("")
+    Card(shape = RoundedCornerShape(18.dp)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(task.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
+                Text(
+                    buildString {
+                        append(task.scheduledFor)
+                        if (duration > 0) append(" · $duration min")
+                        if (flowState.isNotBlank()) append(" · $flowState")
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (task.isFrog) Text("FROG", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
         }
     }
 }

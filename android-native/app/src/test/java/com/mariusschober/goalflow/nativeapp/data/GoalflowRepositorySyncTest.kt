@@ -254,11 +254,23 @@ class GoalflowRepositorySyncTest {
         val moved = repository.moveToday(today, second.id, -1)
         val movedAgain = repository.moveToday(today, second.id, 1)
 
-        assertEquals(listOf(first.id, second.id), moved?.previousIds)
-        assertEquals(listOf(second.id, first.id), moved?.orderedIds)
-        assertTrue(moved?.hadConfirmedPlan == true)
-        assertEquals(listOf(second.id, first.id), movedAgain?.previousIds)
-        assertEquals(null, database.dailyPlanDao().get(today))
+        assertEquals(
+            "first move previousIds=${moved?.previousIds}",
+            listOf(first.id, second.id),
+            moved?.previousIds
+        )
+        assertEquals(
+            "first move orderedIds=${moved?.orderedIds}",
+            listOf(second.id, first.id),
+            moved?.orderedIds
+        )
+        assertTrue("first move hadConfirmedPlan=${moved?.hadConfirmedPlan}", moved?.hadConfirmedPlan == true)
+        assertEquals(
+            "second move previousIds=${movedAgain?.previousIds}",
+            listOf(second.id, first.id),
+            movedAgain?.previousIds
+        )
+        assertEquals("daily plan after move=${database.dailyPlanDao().get(today)}", null, database.dailyPlanDao().get(today))
         assertEquals(listOf(second.id, first.id), database.taskDao().getAll()
             .filter { it.scheduledFor == today }
             .sortedBy { it.plannedOrder }
