@@ -11,13 +11,13 @@ import java.util.UUID
 
 class GoalflowApplication : Application() {
     val database: GoalflowDatabase by lazy { GoalflowDatabase.create(this) }
-    private val preferences by lazy { getSharedPreferences("goalflow-native", MODE_PRIVATE) }
+    private val devicePreferences by lazy { getSharedPreferences("goalflow-native", MODE_PRIVATE) }
     val deviceId: String by lazy {
-        preferences.getString("device_id", null) ?: UUID.randomUUID().toString().also { created ->
-            check(preferences.edit().putString("device_id", created).commit()) {
+        devicePreferences.getString("device_id", null) ?: UUID.randomUUID().toString().also { created ->
+            check(devicePreferences.edit().putString("device_id", created).commit()) {
                 "A stable synchronization device identity could not be persisted."
             }
-            check(preferences.getString("device_id", null) == created) {
+            check(devicePreferences.getString("device_id", null) == created) {
                 "The synchronization device identity failed read-back verification."
             }
         }
