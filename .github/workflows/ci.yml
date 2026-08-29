@@ -133,7 +133,7 @@ jobs:
       - name: Compile native instrumentation tests
         run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
       - name: Compile native startup benchmark
-        run: ./android-native/gradlew -p android-native :benchmark:assembleProductionReleaseAndroidTest
+        run: ./android-native/gradlew -p android-native :benchmark:assemble
       - run: ./android-native/gradlew -p android-native lint
       - run: ./android-native/gradlew -p android-native assembleProductionDebug
       - run: ./android-native/gradlew -p android-native assembleProductionRelease
