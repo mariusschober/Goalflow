@@ -150,10 +150,13 @@ jobs:
           arch: x86
           profile: pixel_2
           disk-size: 2048M
-          ram-size: 1536M
-          heap-size: 384M
+          cores: 4
+          ram-size: 2048M
+          heap-size: 512M
           disable-animations: true
-          script: ./android-native/gradlew -p android-native connectedProductionDebugAndroidTest
+          script: |
+            sleep 45
+            ./android-native/gradlew -p android-native connectedProductionDebugAndroidTest
       - name: Upload native production debug APK
         uses: actions/upload-artifact@v4
         with:
