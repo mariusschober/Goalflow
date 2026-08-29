@@ -125,6 +125,7 @@ import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.data.NATIVE_RAW_COLLECTION_TYPES
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
+import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
