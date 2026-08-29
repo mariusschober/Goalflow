@@ -62,6 +62,8 @@ class NativeSyncEngineTest {
         )
         val originalMutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
         var pushCalls = 0
+        var retriedTaskCalls = 0
+        var eventCalls = 0
         var committedMutationId: String? = null
         val transport = NativeSyncTransport { path, _, _, body ->
             when {
@@ -75,7 +77,13 @@ class NativeSyncEngineTest {
                         committedMutationId = mutationId
                         throw SocketTimeoutException("response lost after commit")
                     }
-                    assertEquals(committedMutationId, mutationId)
+                    if (mutation.getString("entityType") == "tasks") {
+                        assertEquals(committedMutationId, mutationId)
+                        retriedTaskCalls += 1
+                    } else {
+                        assertEquals("task_events", mutation.getString("entityType"))
+                        eventCalls += 1
+                    }
                     NativeHttpResponse(
                         200,
                         JSONObject().put(
@@ -113,7 +121,9 @@ class NativeSyncEngineTest {
 
         engine.synchronize()
 
-        assertEquals(2, pushCalls)
+        assertEquals(3, pushCalls)
+        assertEquals(1, retriedTaskCalls)
+        assertEquals(1, eventCalls)
         assertTrue(repository.pendingSyncMutations().isEmpty())
     }
 
