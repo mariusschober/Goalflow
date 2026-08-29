@@ -58,6 +58,15 @@ From the repository root, with Java 21 and an Android SDK installed:
 ./android-native/gradlew -p android-native assembleProductionDebug
 ./android-native/gradlew -p android-native assembleProductionRelease
 ./android-native/gradlew -p android-native assembleSandboxDebug
+./android-native/gradlew -p android-native :app:assembleProductionDebugAndroidTest
+./android-native/gradlew -p android-native :benchmark:assemble
+```
+
+For a connected Android device, run the compiled instrumentation suites with:
+
+```bash
+./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
+./android-native/gradlew -p android-native :benchmark:connectedCheck
 ```
 
 The installable native debug APKs are produced at:
@@ -85,13 +94,17 @@ untouched.
 
 ## CI and unavailable runtime checks
 
-The `native-android` GitHub Actions job runs the native unit suite, lint,
-production debug/release assembly, sandbox debug assembly, and uploads both
-native debug APKs from a clean checkout. The separate `android` job continues
-to run Capacitor sync, wrapper tests/lint, and wrapper APK assembly.
+The `native-android` GitHub Actions job runs the native JVM/Room/domain/sync/
+backup/focus suite, compiles the app instrumentation APK and the real
+Macrobenchmark source, runs lint, assembles production debug/release and
+sandbox debug, and uploads both native debug APKs from a clean checkout. The
+separate `android` job continues to run Capacitor sync, wrapper tests/lint, and
+wrapper APK assembly.
 
 Emulator/device lifecycle tests, screenshot tests, TalkBack runtime checks,
-Macrobenchmark, and offline process-death execution require an Android runtime
-and are reported as `NOT AVAILABLE` when no emulator/device is provided. A
-successful compile or APK assembly is not presented as evidence for those
-runtime behaviors.
+Macrobenchmark timing execution, and offline process-death execution require an
+Android runtime and are reported as `NOT AVAILABLE` when no emulator/device is
+provided. A successful source compile or APK assembly is not presented as
+evidence for those runtime behaviors. The target app is marked `profileable`
+and includes `ProfileInstaller` so a physical-device run is ready to collect
+startup and frame data.

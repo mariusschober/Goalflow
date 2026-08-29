@@ -7,13 +7,13 @@ a pass.
 ## Release identity
 
 - Starting SHA: `7fa5a17e2b8892df91c2b23c4e551b67031731db`
-- Implementation/source SHA: `5e1c13c8c44c793410ade595fe6eb1533a70ddc4`
-- Exact clean-checkout evidence tip: `35fd9d0d584c7865317a04c3437dd524d560c8b6`
-- Final branch tip: the subsequent documentation-only evidence commit; the exact tip is recorded in the final handoff
+- Implementation/source SHA: `31697e2736fae17ee6dd81fefbc5d94ac65ea421`
+- Exact clean-checkout evidence tip: `31697e2736fae17ee6dd81fefbc5d94ac65ea421`
+- Final branch tip: the follow-on documentation evidence commit after the clean CI run below
 - Branch: `goalflow-production`
 - Web/Capacitor version: `0.1.0`
 - Native Android version: `0.2.0-native` (`-sandbox` for the isolated test variant)
-- Date: `2026-08-28`
+- Date: `2026-08-29`
 
 ## Product preservation
 
@@ -62,6 +62,8 @@ impossible.
 | `npm audit --audit-level=high` | PASS — 0 high/critical findings |
 | Gitleaks repository scan | PASS via CI |
 | Native Gradle JVM/Room/domain/sync/backup/focus tests | PASS via clean CI |
+| Native instrumentation APK compilation | PASS via clean CI |
+| Native startup Macrobenchmark source/module compilation | PASS via clean CI (`:benchmark:assemble`); timing execution requires a device |
 | Native Android lint | PASS via clean CI |
 | Native `assembleProductionDebug` / `assembleProductionRelease` / `assembleSandboxDebug` | PASS via clean CI |
 | Capacitor sync, Gradle tests, lint, production/test APK assembly | PASS via clean CI |
@@ -69,8 +71,10 @@ impossible.
 | Android emulator/device, lifecycle, process-death, TalkBack, reduced-motion runtime tests | NOT AVAILABLE — no emulator/device |
 | Live Supabase RLS, two-user sync chaos, and provider fault injection | NOT AVAILABLE — no staging identities/provider credentials |
 
-The native test suite contains 41 deterministic JVM/Room/domain/sync/backup/
-focus tests across seven test files. The web property suite checks scheduling,
+The native test suite contains 44 deterministic JVM/Room/domain/sync/backup/
+focus tests across seven test files. The instrumentation smoke test and startup
+Macrobenchmark also compile in the native CI gate; their device execution is
+not available in this environment. The web property suite checks scheduling,
 planning order, completion, frog relationships, habit idempotency, local-day
 formatting, storage rejection, and interrupted restore behavior.
 
@@ -116,29 +120,36 @@ authentication boundaries preserved. The native variants are:
   `Goalflow Test`, compile-time entry code `123456`
 
 The existing Capacitor target and its isolated test build remain separately
-available. Clean CI verified Capacitor sync, Gradle tests, lint, native tests,
-lint, and native APK assembly. No production signing material was added.
+available. Clean CI verified Capacitor sync, Gradle tests, lint, native tests, native
+instrumentation compilation, Macrobenchmark source compilation, lint, and
+native APK assembly. The native target manifest is profileable and includes
+ProfileInstaller; no production signing material was added.
 
-Artifact paths and SHA-256 values are recorded after the exact final CI run:
+Artifact paths and GitHub Actions artifact digests are recorded from clean CI run
+[33254691188](https://github.com/mariusschober/Goalflow/actions/runs/33254691188):
 
-| Artifact | Source | SHA-256 |
-| --- | --- | --- |
-| Native production debug APK | `goalflow-native-production-debug-apk` | `f3e276df1fab386d3a59bfb77892fe6e10d1ae5994f29eaa75fd5eff2791d076` |
-| Native sandbox debug APK | `goalflow-native-sandbox-debug-apk` | `19de56db7f477dbd42b26cb607502af73cabe419dff9004a50851252368d0a7c` |
+| Artifact | GitHub Actions artifact ID | Archive digest |
+| --- | ---: | --- |
+| Native production debug APK | `9715491423` | `sha256:e82a2a2478f270e3104319d3b46ece755208fe4829d378c112700ceaab8e3d1e` |
+| Native sandbox debug APK | `9715591979` | `sha256:5324b98b453d9f4872f85036e3d2baff1b6515d6cd283fffd4bbcde79c1d28f4` |
+
+The digest covers the GitHub Actions artifact ZIP; download the APK from the
+linked run's artifact panel.
 
 Local Gradle execution and emulator/device testing are NOT AVAILABLE in this
 environment.
 
 ## Clean-room verification
 
-GitHub Actions run `33189348602` performed a fresh checkout of evidence tip
-`35fd9d0d584c7865317a04c3437dd524d560c8b6`, installed
-from committed lockfiles, runs web/security/migration checks, starts the
-production server, synchronizes Capacitor, and builds/tests/lints both Android
-targets. The run uploaded the two native APKs whose SHA-256 values are listed
-above. A shell-side clone could not be performed because credentials for the
-private repository are not exposed in this environment; the GitHub-hosted
-clean checkout is the available clean-room execution evidence.
+GitHub Actions run `33254691188` performed a fresh checkout of evidence tip
+`31697e2736fae17ee6dd81fefbc5d94ac65ea421`, installed from committed lockfiles,
+ran web/security/migration checks, started the production server, synchronized
+Capacitor, compiled the native instrumentation and Macrobenchmark source,
+and built/tested/linted all Android variants. The run uploaded the two native
+APK artifacts whose archive digests are listed above. A shell-side clone could
+not be performed because credentials for the private repository are not exposed
+in this environment; the GitHub-hosted clean checkout is the available
+clean-room execution evidence.
 
 ## External blockers
 
