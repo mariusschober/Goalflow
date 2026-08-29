@@ -56,6 +56,7 @@ class NativeAndroidSmokeTest {
     fun focus_session_is_full_screen_and_can_break_down_before_completion() {
         val application = composeRule.activity.application as GoalflowApplication
         val today = java.time.LocalDate.now().toString()
+        application.focusSessionStore.clear()
         val task = runBlocking {
             application.database.taskDao().deleteAll()
             application.database.dailyPlanDao().deleteAll()
