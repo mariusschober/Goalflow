@@ -800,10 +800,13 @@ private fun GoalflowSandboxGate(onGranted: () -> Unit) {
 
     LaunchedEffect(Unit) {
         var focused = false
-        repeat(8) {
+        repeat(10) {
             if (!focused) {
                 withFrameNanos { }
-                focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
+                focused = runCatching {
+                    focusRequester.requestFocus()
+                    true
+                }.getOrDefault(false)
             }
             if (!focused) delay(40)
         }
@@ -1941,8 +1944,18 @@ private fun CaptureSheet(
     val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-        keyboardController?.show()
+        var focused = false
+        repeat(10) {
+            if (!focused) {
+                withFrameNanos { }
+                focused = runCatching {
+                    focusRequester.requestFocus()
+                    true
+                }.getOrDefault(false)
+            }
+            if (!focused) delay(40)
+        }
+        if (focused) keyboardController?.show()
     }
     LaunchedEffect(error) {
         if (error != null) saving = false
