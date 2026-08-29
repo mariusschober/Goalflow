@@ -10,7 +10,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 /**
- * Release-targeted performance guardrail for the product's first usable frame.
+ * Startup performance guardrail for the product's first usable frame.
  * Run on a physical/emulated device with:
  * ./gradlew :benchmark:connectedCheck
  */
