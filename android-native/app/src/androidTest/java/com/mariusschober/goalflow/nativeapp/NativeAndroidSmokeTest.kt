@@ -40,7 +40,7 @@ class NativeAndroidSmokeTest {
     fun activity_recreation_keeps_current_destination() {
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Current").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Current").onFirst().assertIsDisplayed()
     }
 
     @Test
