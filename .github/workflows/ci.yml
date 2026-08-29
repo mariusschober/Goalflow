@@ -136,6 +136,12 @@ jobs:
       - run: ./android-native/gradlew -p android-native assembleProductionDebug
       - run: ./android-native/gradlew -p android-native assembleProductionRelease
       - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Reclaim runner disk for emulator
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/cmake
+          sudo rm -rf /usr/local/lib/android/sdk/system-images/*
+          df -h /
       - name: Run native emulator journey
         uses: reactivecircus/android-emulator-runner@v2
         with:
