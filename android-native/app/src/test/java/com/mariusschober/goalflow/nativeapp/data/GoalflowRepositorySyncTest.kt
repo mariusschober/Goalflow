@@ -55,7 +55,7 @@ class GoalflowRepositorySyncTest {
         )
 
         assertNotNull(database.taskDao().get(task.id))
-        val pending = repository.pendingSyncMutations()
+        val pending = repository.pendingSyncMutations().filter { it.entityType == "tasks" }
         assertEquals(1, pending.size)
         assertEquals(task.id, pending.single().entityId)
         assertEquals("Never lose this", org.json.JSONObject(pending.single().payload).getString("title"))
@@ -116,11 +116,13 @@ class GoalflowRepositorySyncTest {
         assertEquals(uuidV5("${habit.id}:2026-08-23"), first?.id)
         assertEquals(first?.id, second?.id)
         assertEquals(1, database.taskDao().getAll().size)
-        assertEquals(3, repository.pendingSyncMutations().size)
+        val pending = repository.pendingSyncMutations().filter { it.entityType != "task_events" }
+        assertEquals(3, pending.size)
         assertEquals(
             mapOf("habits" to 1, "progress" to 1, "tasks" to 1),
-            repository.pendingSyncMutations().groupingBy { it.entityType }.eachCount()
+            pending.groupingBy { it.entityType }.eachCount()
         )
+        assertEquals(1, repository.pendingSyncMutations().count { it.entityType == "task_events" })
     }
 
     @Test
@@ -137,7 +139,7 @@ class GoalflowRepositorySyncTest {
         assertEquals(LocalDate.now().toString(), database.habitDao().get(habit.id)?.lastCompletedDate)
         assertEquals(9, repository.pendingSyncMutations().size)
         assertEquals(
-            mapOf("goals" to 2, "habits" to 2, "tasks" to 2, "progress" to 2, "stats" to 1),
+            mapOf("goals" to 2, "habits" to 2, "tasks" to 2, "progress" to 2, "stats" to 1, "task_events" to 2),
             repository.pendingSyncMutations().groupingBy { it.entityType }.eachCount()
         )
         val stats = org.json.JSONObject(database.rawCollectionDao().get("stats")!!.payload)
@@ -466,7 +468,7 @@ class GoalflowRepositorySyncTest {
             scheduledTime = null,
             isFrog = false
         )
-        val mutation = repository.readySyncMutations().single()
+        val mutation = repository.readySyncMutations().single { it.entityType == "tasks" }
         try {
             repository.commitPushResults(
                 listOf(mutation),
@@ -476,7 +478,10 @@ class GoalflowRepositorySyncTest {
         } catch (_: IllegalArgumentException) {
             // Pending state remains authoritative.
         }
-        assertEquals(mutation.mutationId, repository.pendingSyncMutations().single().mutationId)
+        assertEquals(
+            mutation.mutationId,
+            repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
+        )
 
         val remote = task.copy(title = "Remote", updatedAt = task.updatedAt + 1)
         repository.applyRemotePage(
@@ -532,7 +537,7 @@ class GoalflowRepositorySyncTest {
         )
 
         assertEquals(0, conflicts)
-        assertEquals(1, repository.pendingSyncMutations().size)
+        assertEquals(1, repository.pendingSyncMutations().count { it.entityType == "tasks" })
         assertEquals("Device B", database.taskDao().get(remote.id)?.title)
     }
 
@@ -568,7 +573,7 @@ class GoalflowRepositorySyncTest {
             // Room must roll the complete transaction back.
         }
 
-        assertEquals(2, repository.pendingSyncMutations().size)
+        assertEquals(2, repository.pendingSyncMutations().count { it.entityType == "tasks" })
         assertTrue(database.syncConflictDao().getAll().isEmpty())
     }
 

@@ -64,6 +64,7 @@ class GoalflowDatabaseMigrationTest {
                 )
             )
             assertEquals("[]", database.rawCollectionDao().get("truenorth")?.payload)
+            assertEquals(0, database.taskEventDao().getAll().size)
         } finally {
             database.close()
         }

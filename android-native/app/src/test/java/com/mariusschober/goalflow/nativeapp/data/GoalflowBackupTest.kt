@@ -26,6 +26,16 @@ class GoalflowBackupTest {
             goals = emptyList(),
             plans = emptyList(),
             habits = listOf(GoalflowHabit(id = "habit-1", title = "Keep habit", createdAt = 3L)),
+            events = listOf(
+                TaskEventEntity(
+                    id = "event-1",
+                    taskId = task.id,
+                    eventType = "created",
+                    localDate = "2026-08-26",
+                    metadata = """{"source":"capture"}""",
+                    createdAt = 4L
+                )
+            ),
             outbox = listOf(
                 SyncOutboxEntity(
                     mutationId = "00000000-0000-4000-8000-000000000001",
@@ -63,6 +73,7 @@ class GoalflowBackupTest {
         assertEquals("goals roundtrip", payload.goals, restored.goals)
         assertEquals("plans roundtrip", payload.plans, restored.plans)
         assertEquals("habits roundtrip", payload.habits, restored.habits)
+        assertEquals("events roundtrip", payload.events, restored.events)
         assertEquals("outbox roundtrip", payload.outbox, restored.outbox)
         assertEquals("sync metadata roundtrip", payload.syncMeta, restored.syncMeta)
         assertEquals("conflicts roundtrip", payload.conflicts, restored.conflicts)

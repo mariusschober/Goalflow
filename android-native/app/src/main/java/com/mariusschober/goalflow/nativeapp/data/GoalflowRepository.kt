@@ -79,6 +79,7 @@ class GoalflowRepository(
     private val onMutation: () -> Unit = {}
 ) {
     private val tasks = database.taskDao()
+    private val taskEvents = database.taskEventDao()
     private val goals = database.goalDao()
     private val plans = database.dailyPlanDao()
     private val habits = database.habitDao()
@@ -150,6 +151,7 @@ class GoalflowRepository(
             )
             tasks.insert(toEntity(task))
             enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(task).toString())
+            recordTaskEventInTransaction(task.id, "created", task.scheduledFor)
             task
         }.also { onMutation() }
     }
@@ -257,6 +259,7 @@ class GoalflowRepository(
             )
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            recordTaskEventInTransaction(id, "completed", today)
             task.goalId?.let { goalId ->
                 previousGoal?.let { goal ->
                     val updatedGoal = goal.copy(completedTasks = (goal.completedTasks + 1).coerceAtLeast(0))
@@ -310,6 +313,7 @@ class GoalflowRepository(
             )
             tasks.update(restored)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(restored)).toString())
+            recordTaskEventInTransaction(id, "restored", LocalDate.now().toString())
 
             val goalId = undo.nullableStringValue("goalId")
             val goalBefore = undo.nullableInt("goalCompletedTasksBefore")
@@ -351,6 +355,32 @@ class GoalflowRepository(
         if (changed) onMutation()
     }
 
+    /** Moves a normal open commitment to the end of today's queue without losing its history. */
+    suspend fun skipTask(id: String) {
+        val today = LocalDate.now().toString()
+        database.withTransaction {
+            val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
+            if (current.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be skipped.")
+            if (current.deletedAt != null) throw SchedulingException("An archived task cannot be skipped.")
+            if (current.schedulePrecision != SchedulePrecision.DAY.name || current.scheduledFor != today) {
+                throw SchedulingException("Only today's commitment can be skipped.")
+            }
+            if (current.isFrog) throw SchedulingException("A frog cannot be skipped.")
+            val maxOrder = tasks.getAll()
+                .filter { it.status == TaskStatus.OPEN.name && it.deletedAt == null
+                    && it.schedulePrecision == SchedulePrecision.DAY.name && it.scheduledFor == today }
+                .maxOfOrNull { it.plannedOrder } ?: current.plannedOrder
+            val updated = current.copy(
+                plannedOrder = maxOrder + 1,
+                updatedAt = System.currentTimeMillis()
+            )
+            tasks.update(updated)
+            enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            recordTaskEventInTransaction(id, "skipped", today)
+        }
+        onMutation()
+    }
+
     /** Explicitly closes an open commitment without pretending it was completed. */
     suspend fun dropTask(id: String) {
         val changed = database.withTransaction {
@@ -360,6 +390,7 @@ class GoalflowRepository(
             val updated = task.copy(status = TaskStatus.DROPPED.name, updatedAt = System.currentTimeMillis())
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            recordTaskEventInTransaction(id, "dropped", LocalDate.now().toString())
             true
         }
         if (changed) onMutation()
@@ -399,6 +430,8 @@ class GoalflowRepository(
                 }) {
                 throw SchedulingException("A habit instance already exists on that day.")
             }
+            val scheduleChanged = current.schedulePrecision != schedulePrecision.name ||
+                current.scheduledFor != scheduledFor || current.scheduledTime != scheduledTime
             val updatedExtras = runCatching { JSONObject(current.extraJson) }.getOrElse {
                 throw SchedulingException("This commitment contains damaged preserved fields; export a backup before editing it.")
             }
@@ -416,6 +449,18 @@ class GoalflowRepository(
             )
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            if (scheduleChanged) {
+                val eventType = if (!current.isFrog && updated.isFrog) "promoted_to_frog" else "rescheduled"
+                recordTaskEventInTransaction(
+                    id,
+                    eventType,
+                    scheduledFor,
+                    JSONObject()
+                        .put("schedulePrecision", schedulePrecision.name)
+                        .put("scheduledFor", scheduledFor)
+                        .toString()
+                )
+            }
         }
         onMutation()
     }
@@ -462,8 +507,10 @@ class GoalflowRepository(
             tasks.update(updatedParent)
             tasks.insertAll(created.map(::toEntity))
             enqueueRecordInTransaction("tasks", parent.id, GoalflowJson.taskPayload(toDomain(updatedParent)).toString())
+            recordTaskEventInTransaction(parent.id, "broken_down", today)
             created.forEach { child ->
                 enqueueRecordInTransaction("tasks", child.id, GoalflowJson.taskPayload(child).toString())
+                recordTaskEventInTransaction(child.id, "created", child.scheduledFor)
             }
         }
         onMutation()
@@ -503,6 +550,16 @@ class GoalflowRepository(
                 )
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            val eventType = if (!current.isFrog && updated.isFrog) "promoted_to_frog" else "rescheduled"
+            recordTaskEventInTransaction(
+                id,
+                eventType,
+                scheduledFor,
+                JSONObject()
+                    .put("schedulePrecision", SchedulePrecision.DAY.name)
+                    .put("scheduledFor", scheduledFor)
+                    .toString()
+            )
         }
         onMutation()
     }
@@ -783,6 +840,7 @@ class GoalflowRepository(
                 )
                 tasks.insert(toEntity(task))
                 enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(task).toString())
+                recordTaskEventInTransaction(task.id, "created", today)
             }
         }
         onMutation()
@@ -1016,6 +1074,7 @@ class GoalflowRepository(
                 if (conflictingId != null) return@withTransaction toDomain(conflictingId) to habitChanged
                 tasks.insert(toEntity(task))
                 enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(task).toString())
+                recordTaskEventInTransaction(task.id, "created", localDate)
                 task to true
             }
         }
@@ -1029,6 +1088,7 @@ class GoalflowRepository(
                 tasks = tasks.getAll().map(::toDomain),
                 goals = goals.getAll().map(::toDomain),
                 plans = plans.getAll().map(::toDomain),
+                events = taskEvents.getAll(),
                 habits = habits.getAll().map(::toDomain),
                 outbox = outbox.getAll(),
                 syncMeta = syncMeta.getAll(),
@@ -1047,6 +1107,7 @@ class GoalflowRepository(
             val originalGoals = goals.getAll().map(::toDomain)
             val originalHabits = habits.getAll().map(::toDomain)
             val originalPlans = plans.getAll().map(::toDomain)
+            val originalEvents = taskEvents.getAll()
             val originalRaw = rawCollections.getAll()
             val preservedOutbox = mergeExactById(
                 outbox.getAll(), payload.outbox, SyncOutboxEntity::mutationId, "pending mutation"
@@ -1073,6 +1134,7 @@ class GoalflowRepository(
             val incomingGoals = payload.goals.map(::toEntity)
             val incomingHabits = payload.habits.map(::toEntity)
             val incomingPlans = payload.plans.map(::toEntity)
+            val incomingEvents = payload.events
             val nowIso = Instant.now().toString()
             val rawByType = linkedMapOf<String, RawCollectionEntity>().apply {
                 originalRaw.forEach { put(it.entityType, it) }
@@ -1105,6 +1167,14 @@ class GoalflowRepository(
                 habits.insertAll(incomingHabits)
                 plans.insertAll(incomingPlans)
             }
+            val restoredEvents = when {
+                mode == BackupRestoreMode.MERGE ->
+                    mergeExactById(originalEvents, incomingEvents, TaskEventEntity::id, "task event")
+                incomingEvents.isNotEmpty() -> incomingEvents
+                else -> originalEvents
+            }
+            taskEvents.deleteAll()
+            taskEvents.insertAll(restoredEvents)
             outbox.deleteAll()
             outbox.insertAll(preservedOutbox)
             syncMeta.insertAll(mergedMeta)
@@ -1135,6 +1205,15 @@ class GoalflowRepository(
             payload.goals.forEach { enqueueRecordInTransaction("goals", it.id, GoalflowJson.goalPayload(it).toString()) }
             payload.habits.forEach { enqueueRecordInTransaction("habits", it.id, GoalflowJson.habitPayload(it).toString()) }
             payload.plans.forEach { enqueueRecordInTransaction("daily_plans", it.localDate, GoalflowJson.planPayload(it).toString()) }
+            payload.events.forEach { event ->
+                val taskPredecessor = outbox.getForEntity("tasks", event.taskId).lastOrNull()?.mutationId
+                enqueueRecordInTransaction(
+                    "task_events",
+                    event.id,
+                    GoalflowTaskEventJson.eventPayload(event).toString(),
+                    dependsOnMutationIdOverride = taskPredecessor
+                )
+            }
             // Preserve collections introduced by a newer client locally, but
             // only enqueue collections this client explicitly understands for
             // synchronization. This prevents a future/unknown backup key from
@@ -1224,17 +1303,17 @@ class GoalflowRepository(
                 if (result.accepted && !result.replayMismatch) {
                     outbox.delete(mutation.mutationId)
                     mutation.resolvesConflictId?.let { conflicts.delete(it) }
-                    val remaining = outbox.getForEntity(mutation.entityType, mutation.entityId)
-                    val dependent = remaining.firstOrNull { it.dependsOnMutationId == mutation.mutationId }
-                    if (dependent != null) {
-                        outbox.insert(
-                            dependent.copy(
-                                baseServerVersion = result.serverVersion,
-                                dependsOnMutationId = null,
-                                attemptedAt = null
+                    outbox.getAll()
+                        .filter { it.dependsOnMutationId == mutation.mutationId }
+                        .forEach { dependent ->
+                            outbox.insert(
+                                dependent.copy(
+                                    baseServerVersion = result.serverVersion,
+                                    dependsOnMutationId = null,
+                                    attemptedAt = null
+                                )
                             )
-                        )
-                    }
+                        }
                     syncMeta.insert(
                         SyncMetaEntity(
                             entityType = metaKey,
@@ -1264,6 +1343,17 @@ class GoalflowRepository(
                         )
                     )
                     outbox.deleteForEntity(mutation.entityType, mutation.entityId)
+                    outbox.getAll()
+                        .filter { it.dependsOnMutationId == mutation.mutationId }
+                        .forEach { dependent ->
+                            outbox.insert(
+                                dependent.copy(
+                                    baseServerVersion = result.serverVersion.takeIf { it > 0L },
+                                    dependsOnMutationId = null,
+                                    attemptedAt = null
+                                )
+                            )
+                        }
                     conflictCount += 1
                 }
             }
@@ -1418,7 +1508,7 @@ class GoalflowRepository(
             val conflict = conflicts.get(conflictId) ?: return@withTransaction
             if (conflict.status == "resolving_local") return@withTransaction
             require(
-                conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans")
+                conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans", "task_events")
                     || (conflict.entityType in NATIVE_RAW_COLLECTION_TYPES && conflict.localPayload.isNotBlank())
             ) {
                 "This remote data type cannot be resolved locally by this app version. Both versions remain preserved."
@@ -1511,6 +1601,7 @@ class GoalflowRepository(
             "goals" -> goals.delete(entityId)
             "habits" -> habits.delete(entityId)
             "daily_plans" -> plans.delete(entityId)
+            "task_events" -> taskEvents.delete(entityId)
             in NATIVE_RAW_COLLECTION_TYPES -> rawCollections.delete(entityType)
             else -> throw IllegalArgumentException("This conflict type cannot be applied by the native client.")
         }
@@ -1586,11 +1677,45 @@ class GoalflowRepository(
         }
     }
 
+    private suspend fun recordTaskEventInTransaction(
+        taskId: String,
+        eventType: String,
+        localDate: String = LocalDate.now().toString(),
+        metadata: JSONObject = JSONObject()
+    ) {
+        require(eventType in GoalflowTaskEventJson.KNOWN_EVENT_TYPES) {
+            "Unknown task event type cannot be recorded."
+        }
+        val normalizedDate = if (localDate.matches(Regex("^\\d{4}-\\d{2}$"))) {
+            "$localDate-01"
+        } else localDate
+        require(runCatching { LocalDate.parse(normalizedDate) }.isSuccess) {
+            "Task event local date is invalid."
+        }
+        val event = TaskEventEntity(
+            id = UUID.randomUUID().toString(),
+            taskId = taskId,
+            eventType = eventType,
+            localDate = normalizedDate,
+            metadata = metadata.toString(),
+            createdAt = System.currentTimeMillis()
+        )
+        taskEvents.insert(event)
+        val taskPredecessor = outbox.getForEntity("tasks", taskId).lastOrNull()?.mutationId
+        enqueueRecordInTransaction(
+            "task_events",
+            event.id,
+            GoalflowTaskEventJson.eventPayload(event).toString(),
+            dependsOnMutationIdOverride = taskPredecessor
+        )
+    }
+
     private suspend fun enqueueRecordInTransaction(
         entityType: String,
         entityId: String,
         payload: String,
-        deletedAt: String? = null
+        deletedAt: String? = null,
+        dependsOnMutationIdOverride: String? = null
     ) {
         val metaKey = syncMetaKey(entityType, entityId)
         val current = syncMeta.get(metaKey)
@@ -1629,7 +1754,7 @@ class GoalflowRepository(
                     payload = payload,
                     updatedAt = updatedAt,
                     deletedAt = deletedAt,
-                    dependsOnMutationId = predecessor?.mutationId
+                    dependsOnMutationId = dependsOnMutationIdOverride ?: predecessor?.mutationId
                 )
             )
         }
@@ -1711,6 +1836,17 @@ class GoalflowRepository(
                 if (record.deletedAt != null) plans.delete(record.entityId)
                 else plans.insert(parsePlan(record.payload, record.entityId))
             }
+            "task_events" -> {
+                if (trimmed.startsWith("[")) {
+                    taskEvents.insertAll(GoalflowTaskEventJson.parseEvents(record.payload, strict = true))
+                } else if (record.deletedAt != null) {
+                    taskEvents.delete(record.entityId)
+                } else {
+                    val remote = GoalflowTaskEventJson.parseEvent(record.payload, strict = true)
+                    require(remote.id == record.entityId) { "Task event sync identifier does not match its payload." }
+                    taskEvents.insert(remote)
+                }
+            }
             in NATIVE_RAW_COLLECTION_TYPES -> {
                 if (record.deletedAt != null) rawCollections.delete(record.entityType)
                 else rawCollections.insert(
@@ -1759,6 +1895,9 @@ class GoalflowRepository(
                 for (index in 0 until array.length()) GoalflowJson.parseHabit(array.getJSONObject(index).toString(), strict = true)
             } else if (record.deletedAt == null) GoalflowJson.parseHabit(record.payload, strict = true)
             "daily_plans" -> if (record.deletedAt == null) parsePlan(record.payload, record.entityId)
+            "task_events" -> if (record.payload.trimStart().startsWith("[")) {
+                GoalflowTaskEventJson.parseEvents(record.payload, strict = true)
+            } else GoalflowTaskEventJson.parseEvent(record.payload, strict = true)
             in NATIVE_RAW_COLLECTION_TYPES -> {
                 require(record.entityId == "singleton") { "A preserved collection must use its singleton identity." }
                 parseJsonValue(record.payload)

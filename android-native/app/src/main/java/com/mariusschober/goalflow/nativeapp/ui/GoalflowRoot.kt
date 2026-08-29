@@ -390,6 +390,10 @@ fun GoalflowRoot(
                         onDrop = { task ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
                             goalflowViewModel.dropTask(task)
+                        },
+                        onSkip = { task ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+                            goalflowViewModel.skipTask(task)
                         }
                     )
                     RootDestination.PLANNING -> PlanningScreen(
@@ -906,7 +910,8 @@ private fun CurrentScreen(
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
-    onDrop: (GoalflowTask) -> Unit
+    onDrop: (GoalflowTask) -> Unit,
+    onSkip: (GoalflowTask) -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -953,7 +958,16 @@ private fun CurrentScreen(
                     label = "current-commitment"
                 ) { task ->
                     task?.let {
-                        CurrentTaskCard(it, gate.queue.size, onFocus, onComplete, onBreakDown, onEdit, onDrop)
+                        CurrentTaskCard(
+                            task = it,
+                            remaining = gate.queue.size,
+                            onFocus = onFocus,
+                            onComplete = onComplete,
+                            onBreakDown = onBreakDown,
+                            onEdit = onEdit,
+                            onDrop = onDrop,
+                            onSkip = onSkip
+                        )
                     }
                 }
             }
@@ -1180,7 +1194,8 @@ private fun CurrentTaskCard(
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
-    onDrop: (GoalflowTask) -> Unit
+    onDrop: (GoalflowTask) -> Unit,
+    onSkip: (GoalflowTask) -> Unit
 ) {
     Card(
         colors = CardDefaults.cardColors(
@@ -1234,6 +1249,12 @@ private fun CurrentTaskCard(
                 Text("Start focus session")
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
+                if (!task.isFrog) {
+                    TextButton(
+                        onClick = { onSkip(task) },
+                        modifier = Modifier.semantics { contentDescription = "Skip ${task.title} for now" }
+                    ) { Text("Skip for now") }
+                }
                 TextButton(onClick = { onBreakDown(task) }) { Text("Break down") }
                 TextButton(onClick = { onDrop(task) }) { Text("Drop explicitly") }
             }

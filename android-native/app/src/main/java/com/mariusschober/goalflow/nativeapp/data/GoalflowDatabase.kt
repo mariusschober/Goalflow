@@ -135,6 +135,19 @@ data class RawCollectionEntity(
     val deletedAt: String?
 )
 
+@Entity(
+    tableName = "task_events",
+    indices = [Index(value = ["taskId", "createdAt"])]
+)
+data class TaskEventEntity(
+    @PrimaryKey val id: String,
+    val taskId: String,
+    val eventType: String,
+    val localDate: String,
+    val metadata: String,
+    val createdAt: Long
+)
+
 @Dao
 interface TaskDao {
     @Query("SELECT * FROM tasks ORDER BY scheduledFor ASC, plannedOrder ASC, createdAt ASC, id ASC")
@@ -237,6 +250,27 @@ interface HabitDao {
     suspend fun delete(id: String)
 
     @Query("DELETE FROM habits")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface TaskEventDao {
+    @Query("SELECT * FROM task_events ORDER BY createdAt ASC, id ASC")
+    suspend fun getAll(): List<TaskEventEntity>
+
+    @Query("SELECT * FROM task_events WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): TaskEventEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(event: TaskEventEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(events: List<TaskEventEntity>)
+
+    @Query("DELETE FROM task_events WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM task_events")
     suspend fun deleteAll()
 }
 
@@ -351,9 +385,10 @@ interface RawCollectionDao {
         SyncOutboxEntity::class,
         SyncMetaEntity::class,
         SyncConflictEntity::class,
-        RawCollectionEntity::class
+        RawCollectionEntity::class,
+        TaskEventEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class GoalflowDatabase : RoomDatabase() {
@@ -365,6 +400,7 @@ abstract class GoalflowDatabase : RoomDatabase() {
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun syncConflictDao(): SyncConflictDao
     abstract fun rawCollectionDao(): RawCollectionDao
+    abstract fun taskEventDao(): TaskEventDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -406,10 +442,17 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE TABLE IF NOT EXISTS task_events (id TEXT NOT NULL PRIMARY KEY, taskId TEXT NOT NULL, eventType TEXT NOT NULL, localDate TEXT NOT NULL, metadata TEXT NOT NULL, createdAt INTEGER NOT NULL)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_task_events_taskId_createdAt ON task_events (taskId, createdAt)")
+            }
+        }
+
         fun create(context: Context): GoalflowDatabase = Room.databaseBuilder(
             context,
             GoalflowDatabase::class.java,
             "goalflow-native.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
     }
 }

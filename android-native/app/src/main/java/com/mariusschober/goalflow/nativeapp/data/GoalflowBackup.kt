@@ -22,6 +22,7 @@ data class GoalflowBackupPayload(
     val goals: List<GoalflowGoal>,
     val plans: List<DailyPlan>,
     val habits: List<GoalflowHabit> = emptyList(),
+    val events: List<TaskEventEntity> = emptyList(),
     val outbox: List<SyncOutboxEntity> = emptyList(),
     val syncMeta: List<SyncMetaEntity> = emptyList(),
     val conflicts: List<SyncConflictEntity> = emptyList(),
@@ -37,7 +38,7 @@ enum class BackupRestoreMode { MERGE, REPLACE }
 object GoalflowBackup {
     private const val FORMAT = "goalflow-encrypted-backup"
     private const val FORMAT_VERSION = 1
-    private const val SCHEMA_VERSION = 3
+    private const val SCHEMA_VERSION = 4
     private const val ITERATIONS = 310_000
     private const val MIN_ITERATIONS = 100_000
     private const val MAX_ITERATIONS = 1_000_000
@@ -114,6 +115,8 @@ object GoalflowBackup {
         val tasks = optionalArray(collections, "tasks").toString().let { GoalflowJson.parseTasks(it, strict = true) }
         val goals = optionalArray(collections, "goals").toString().let { GoalflowJson.parseGoals(it, strict = true) }
         val plans = parsePlans(optionalArray(collections, "plans", "daily_plans"))
+        val events = optionalArray(collections, "events", "task_events").toString()
+            .let { GoalflowTaskEventJson.parseEvents(it, strict = true) }
         val habits = optionalArrayOrNull(collections, "habits")?.let { array ->
             buildList(array.length()) {
                 for (index in 0 until array.length()) {
@@ -135,7 +138,7 @@ object GoalflowBackup {
             }
         }
         val metadataKeys = setOf(
-            "tasks", "goals", "plans", "daily_plans", "habits", "outbox", "syncMeta", "conflicts",
+            "tasks", "goals", "plans", "daily_plans", "events", "task_events", "habits", "outbox", "syncMeta", "conflicts",
             "rawCollections", "schemaVersion", "exportedAt", "checksum"
         )
         val directKeys = collections.keys()
@@ -144,19 +147,21 @@ object GoalflowBackup {
             if (key !in metadataKeys) addRawCollection(rawCollections, key, jsonText(collections.get(key)))
         }
         val payload = GoalflowBackupPayload(
-            tasks,
-            goals,
-            plans,
-            habits,
-            optionalArrayOrNull(collections, "outbox")?.let(::parseOutbox).orEmpty(),
-            optionalArrayOrNull(collections, "syncMeta")?.let(::parseSyncMeta).orEmpty(),
-            optionalArrayOrNull(collections, "conflicts")?.let(::parseConflicts).orEmpty(),
-            rawCollections
+            tasks = tasks,
+            goals = goals,
+            plans = plans,
+            habits = habits,
+            events = events,
+            outbox = optionalArrayOrNull(collections, "outbox")?.let(::parseOutbox).orEmpty(),
+            syncMeta = optionalArrayOrNull(collections, "syncMeta")?.let(::parseSyncMeta).orEmpty(),
+            conflicts = optionalArrayOrNull(collections, "conflicts")?.let(::parseConflicts).orEmpty(),
+            rawCollections = rawCollections
         )
         requireUnique(payload.tasks.map { it.id }, "task")
         requireUnique(payload.goals.map { it.id }, "goal")
         requireUnique(payload.habits.map { it.id }, "habit")
         requireUnique(payload.plans.map { it.localDate }, "planning decision")
+        requireUnique(payload.events.map { it.id }, "task event")
         requireUnique(payload.outbox.map { it.mutationId }, "pending mutation")
         requireUnique(payload.syncMeta.map { it.entityType }, "synchronization metadata")
         requireUnique(payload.conflicts.map { it.id }, "conflict")
@@ -206,6 +211,7 @@ object GoalflowBackup {
         put("tasks", GoalflowJson.tasksPayload(payload.tasks))
         put("goals", GoalflowJson.goalsPayload(payload.goals))
         put("plans", plansPayload(payload.plans))
+        if (schemaVersion >= 4) put("events", GoalflowTaskEventJson.eventsPayload(payload.events))
         if (schemaVersion >= 3) {
             put("habits", GoalflowJson.habitsPayload(payload.habits))
             put("outbox", outboxPayload(payload.outbox))

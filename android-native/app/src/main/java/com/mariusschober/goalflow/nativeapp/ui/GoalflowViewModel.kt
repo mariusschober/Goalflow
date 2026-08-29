@@ -219,6 +219,15 @@ class GoalflowViewModel(
 
     fun clearUndo() { _undoTaskId.value = null }
 
+    fun skipTask(task: GoalflowTask) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.skipTask(task.id) }
+                .onSuccess { _notice.value = "Commitment moved to the end of today" }
+                .onFailure { failure -> _error.value = failure.message ?: "The commitment could not be skipped." }
+        }
+    }
+
     fun dropTask(task: GoalflowTask) {
         viewModelScope.launch {
             clearError()
