@@ -1,7 +1,9 @@
 package com.mariusschober.goalflow.nativeapp.data
 
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
+import com.mariusschober.goalflow.nativeapp.domain.HabitFrequency
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.domain.TaskSource
 import com.mariusschober.goalflow.nativeapp.domain.TaskStatus
@@ -18,51 +20,82 @@ import java.time.Instant
  */
 object GoalflowJson {
     fun tasksPayload(tasks: List<GoalflowTask>): JSONArray = JSONArray().apply {
-        tasks.forEach { task ->
-            put(JSONObject().apply {
-                put("id", task.id)
-                put("cloudId", task.id)
-                put("title", task.title)
-                put("description", task.notes)
-                put("completed", task.status == TaskStatus.COMPLETED || task.status == TaskStatus.BROKEN_DOWN)
-                put("isFrog", task.isFrog)
-                put("beforeFrog", task.beforeFrog)
-                put("frogFailures", task.frogFailures)
-                put("createdAt", task.createdAt)
-                put("updatedAt", task.updatedAt)
-                put("completedAt", task.completedAt ?: JSONObject.NULL)
-                put("dateAssigned", task.scheduledFor)
-                put("scheduledFor", task.scheduledFor)
-                put("schedulePrecision", task.schedulePrecision.name.lowercase())
-                put("scheduledTime", task.scheduledTime ?: JSONObject.NULL)
-                put("plannedOrder", task.plannedOrder)
-                put("goalId", task.goalId ?: JSONObject.NULL)
-                put("habitId", task.habitId ?: JSONObject.NULL)
-                put("parentTaskId", task.parentTaskId ?: JSONObject.NULL)
-                put("lifecycleStatus", task.status.name.lowercase())
-                put("wontDo", task.status == TaskStatus.DROPPED)
-                put("source", task.source.name.lowercase())
-                put("deletedAt", task.deletedAt?.let { Instant.ofEpochMilli(it).toString() } ?: JSONObject.NULL)
-                put("hashtags", JSONArray())
-            })
-        }
+        tasks.forEach { put(taskPayload(it)) }
+    }
+
+    fun taskPayload(task: GoalflowTask): JSONObject = JSONObject().apply {
+        put("id", task.id)
+        put("cloudId", task.id)
+        put("title", task.title)
+        put("description", task.notes)
+        put("completed", task.status == TaskStatus.COMPLETED || task.status == TaskStatus.BROKEN_DOWN)
+        put("isFrog", task.isFrog)
+        put("beforeFrog", task.beforeFrog)
+        put("frogFailures", task.frogFailures)
+        put("createdAt", task.createdAt)
+        put("updatedAt", task.updatedAt)
+        put("completedAt", task.completedAt ?: JSONObject.NULL)
+        put("dateAssigned", task.scheduledFor)
+        put("scheduledFor", task.scheduledFor)
+        put("schedulePrecision", task.schedulePrecision.name.lowercase())
+        put("scheduledTime", task.scheduledTime ?: JSONObject.NULL)
+        put("plannedOrder", task.plannedOrder)
+        put("goalId", task.goalId ?: JSONObject.NULL)
+        put("habitId", task.habitId ?: JSONObject.NULL)
+        put("parentTaskId", task.parentTaskId ?: JSONObject.NULL)
+        put("lifecycleStatus", task.status.name.lowercase())
+        put("wontDo", task.status == TaskStatus.DROPPED)
+        put("source", task.source.name.lowercase())
+        put("deletedAt", task.deletedAt?.let { Instant.ofEpochMilli(it).toString() } ?: JSONObject.NULL)
+        put("hashtags", JSONArray())
     }
 
     fun goalsPayload(goals: List<GoalflowGoal>): JSONArray = JSONArray().apply {
-        goals.forEach { goal ->
-            put(JSONObject().apply {
-                put("id", goal.id)
-                put("name", goal.name)
-                put("description", goal.description)
-                put("deadline", goal.deadline ?: JSONObject.NULL)
-                put("completedTasks", goal.completedTasks)
-                put("color", goal.color)
-                put("createdAt", goal.createdAt)
-                put("excitement", goal.excitement ?: JSONObject.NULL)
-                put("roi", goal.roi ?: JSONObject.NULL)
-            })
-        }
+        goals.forEach { put(goalPayload(it)) }
     }
+
+    fun goalPayload(goal: GoalflowGoal): JSONObject = JSONObject().apply {
+        put("id", goal.id)
+        put("name", goal.name)
+        put("description", goal.description)
+        put("deadline", goal.deadline ?: JSONObject.NULL)
+        put("completedTasks", goal.completedTasks)
+        put("color", goal.color)
+        put("createdAt", goal.createdAt)
+        put("excitement", goal.excitement ?: JSONObject.NULL)
+        put("roi", goal.roi ?: JSONObject.NULL)
+    }
+
+    fun habitPayload(habit: GoalflowHabit): JSONObject = JSONObject().apply {
+        put("id", habit.id)
+        put("title", habit.title)
+        put("frequency", habit.frequency.name.lowercase())
+        put("specificDays", JSONArray(habit.specificDays.sorted()))
+        put("streak", habit.streak)
+        put("bestStreak", habit.bestStreak)
+        put("lastCompletedDate", habit.lastCompletedDate ?: JSONObject.NULL)
+        put("isHighPriority", habit.isHighPriority)
+        put("beforeFrog", habit.beforeFrog)
+        put("duration", habit.duration ?: JSONObject.NULL)
+        put("goalId", habit.goalId ?: JSONObject.NULL)
+        put("createdAt", habit.createdAt)
+    }
+
+    fun habitsPayload(habits: List<GoalflowHabit>): JSONArray = JSONArray().apply {
+        habits.forEach { put(habitPayload(it)) }
+    }
+
+    fun planPayload(plan: com.mariusschober.goalflow.nativeapp.domain.DailyPlan): JSONObject = JSONObject().apply {
+        put("localDate", plan.localDate)
+        put("confirmedAt", plan.confirmedAt)
+        put("taskIds", JSONArray(plan.taskIds))
+    }
+
+    fun parseTask(payload: String, strict: Boolean = true): GoalflowTask =
+        parseTasks(JSONArray().put(JSONObject(payload)).toString(), strict).single()
+
+    fun parseGoal(payload: String, strict: Boolean = true): GoalflowGoal =
+        parseGoals(JSONArray().put(JSONObject(payload)).toString(), strict).single()
 
     fun parseTasks(payload: String, strict: Boolean = false): List<GoalflowTask> {
         val array = JSONArray(payload)
@@ -160,6 +193,34 @@ object GoalflowJson {
                 )
             }
         }
+    }
+
+    fun parseHabit(payload: String, strict: Boolean = true): GoalflowHabit {
+        val item = JSONObject(payload)
+        val id = item.optString("id").trim()
+        val title = item.optString("title").trim()
+        if (id.isBlank() || title.isBlank()) throw IllegalArgumentException("Habit payload contains an invalid record.")
+        val days = item.optJSONArray("specificDays")?.let { values ->
+            buildSet { for (index in 0 until values.length()) values.optInt(index).takeIf { it in 1..7 }?.let(::add) }
+        }.orEmpty()
+        val frequency = when (item.optString("frequency").lowercase()) {
+            "specific_days", "specificdays" -> HabitFrequency.SPECIFIC_DAYS
+            else -> HabitFrequency.DAILY
+        }
+        return GoalflowHabit(
+            id = id,
+            title = title,
+            frequency = frequency,
+            specificDays = days,
+            streak = item.optInt("streak", 0).coerceAtLeast(0),
+            bestStreak = item.optInt("bestStreak", 0).coerceAtLeast(0),
+            lastCompletedDate = item.optNullableString("lastCompletedDate"),
+            isHighPriority = item.optBoolean("isHighPriority", false),
+            beforeFrog = item.optBoolean("beforeFrog", false),
+            duration = item.optNullableInt("duration"),
+            goalId = item.optNullableString("goalId"),
+            createdAt = item.optLong("createdAt", 0L)
+        )
     }
 
     private fun parseSource(value: String): TaskSource = when (value.lowercase()) {

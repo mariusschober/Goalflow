@@ -1,189 +1,393 @@
 package com.mariusschober.goalflow.nativeapp.sync
 
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.NativePushResult
+import com.mariusschober.goalflow.nativeapp.data.NativeRemoteRecord
+import com.mariusschober.goalflow.nativeapp.data.NativeServerConflict
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
-import com.mariusschober.goalflow.nativeapp.data.SyncMetaEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.net.HttpURLConnection
 import java.net.URL
 import java.nio.charset.StandardCharsets
 import java.time.Instant
-import java.util.UUID
 
 sealed interface SyncResult {
     data object Skipped : SyncResult
     data class Synced(val conflicts: Int) : SyncResult
 }
 
-/** Conservative adapter for the existing push/pull protocol. */
+data class NativeHttpResponse(val code: Int, val body: String)
+
+fun interface NativeSyncTransport {
+    fun request(path: String, token: String, method: String, body: String?): NativeHttpResponse
+}
+
+class AuthenticationExpiredDuringSync : IllegalStateException("Authentication expired during synchronization.")
+class NativeSyncProtocolException(message: String) : IllegalStateException(message)
+
+/**
+ * At-least-once sync adapter. Network responses never mutate Room piecemeal:
+ * the repository commits acknowledgements, conflicts, records, and cursors in
+ * explicit transactions. Therefore a timeout or process death only causes a
+ * retry of the same mutation id.
+ */
 class NativeSyncEngine(
     private val repository: GoalflowRepository,
-    private val sessionStore: SecureSessionStore
+    private val sessionProvider: NativeSessionProvider,
+    private val transport: NativeSyncTransport = NativeSyncTransport(::httpRequest),
+    private val cloudAvailable: () -> Boolean = { NativeConfig.canUseCloud }
 ) {
+    suspend fun resolveConflictWithCloud(conflict: SyncConflictEntity) = withContext(Dispatchers.IO) {
+        if (cloudAvailable() && conflict.mutationId != null) {
+            val session = sessionProvider.read() ?: throw AuthenticationExpiredDuringSync()
+            if (session.expiresAtMillis <= System.currentTimeMillis() + 60_000L) {
+                throw AuthenticationExpiredDuringSync()
+            }
+            repository.bindSyncAccount(verifiedUserId(session))
+            val response = transport.request(
+                "/api/v1/sync/conflicts/resolve",
+                session.accessToken,
+                "POST",
+                JSONObject()
+                    .put("mutationId", conflict.mutationId)
+                    .put("choice", "cloud")
+                    .toString()
+            )
+            ensureAuthorized(response)
+            if (response.code !in 200..299) {
+                throw NativeSyncProtocolException("The server conflict could not be resolved; both versions remain preserved.")
+            }
+        }
+        repository.resolveConflictWithCloud(conflict.id)
+    }
+
     suspend fun synchronize(): SyncResult = withContext(Dispatchers.IO) {
-        if (!NativeConfig.canUseCloud) return@withContext SyncResult.Skipped
-        val session = sessionStore.read() ?: return@withContext SyncResult.Skipped
-        val activeSession = if (session.expiresAtMillis > System.currentTimeMillis() + 60_000L) session else {
-            // The worker calls this only after the auth client has refreshed the
-            // token. Keeping the stale session out of request headers prevents
-            // accidental retries with an expired credential.
+        if (!cloudAvailable()) return@withContext SyncResult.Skipped
+        val session = sessionProvider.read() ?: return@withContext SyncResult.Skipped
+        if (session.expiresAtMillis <= System.currentTimeMillis() + 60_000L) {
             return@withContext SyncResult.Skipped
         }
+        repository.bindSyncAccount(verifiedUserId(session))
+
         var conflicts = 0
-        val pending = repository.pendingSyncMutations()
-        pending.chunked(50).forEach { batch ->
-            val mutationArray = JSONArray().apply {
-                batch.forEach { mutation ->
-                    put(JSONObject().apply {
-                        put("mutationId", mutation.mutationId)
-                        put("deviceId", mutation.deviceId)
-                        put("entityType", mutation.entityType)
-                        put("entityId", mutation.entityId)
-                        put("baseServerVersion", mutation.baseServerVersion ?: JSONObject.NULL)
-                        put("version", mutation.version)
-                        put("payload", parsePayload(mutation.payload))
-                        put("updatedAt", mutation.updatedAt)
-                        put("deletedAt", mutation.deletedAt ?: JSONObject.NULL)
-                    })
-                }
+        while (true) {
+            val batch = repository.readySyncMutations(50)
+            if (batch.isEmpty()) break
+            repository.markSyncAttempted(batch.map { it.mutationId })
+            val mutations = JSONArray().apply {
+                batch.forEach { mutation -> put(JSONObject().apply {
+                    put("mutationId", mutation.mutationId)
+                    put("deviceId", mutation.deviceId)
+                    put("entityType", mutation.entityType)
+                    put("entityId", mutation.entityId)
+                    put("baseServerVersion", mutation.baseServerVersion ?: JSONObject.NULL)
+                    put("version", mutation.version)
+                    put("payload", parseJsonValue(mutation.payload))
+                    put("updatedAt", mutation.updatedAt)
+                    put("deletedAt", mutation.deletedAt ?: JSONObject.NULL)
+                    mutation.resolvesConflictId
+                        ?.takeIf { it.matches(UUID_PATTERN) }
+                        ?.let { put("resolvesConflictId", it) }
+                }) }
             }
-            val response = request(
+            val response = transport.request(
                 "/api/v1/sync/push",
-                activeSession.accessToken,
+                session.accessToken,
                 "POST",
-                JSONObject().put("mutations", mutationArray).toString()
+                JSONObject().put("mutations", mutations).toString()
             )
-            if (response.code !in 200..299) throw SyncException("Sync push failed.")
-            val results = JSONObject(response.body).optJSONArray("results") ?: throw SyncException("Sync response was invalid.")
-            for (index in 0 until results.length()) {
-                val result = results.optJSONObject(index) ?: continue
-                val mutationId = result.optString("mutationId")
-                val mutation = batch.firstOrNull { it.mutationId == mutationId } ?: continue
-                repository.acknowledgeSyncMutation(mutationId)
-                val serverVersion = result.optLong("serverVersion", 0L)
-                val currentMeta = repository.syncMetadata(mutation.entityType)
-                repository.saveSyncMetadata(
-                    SyncMetaEntity(
-                        entityType = mutation.entityType,
-                        cursor = currentMeta?.cursor ?: 0L,
-                        localVersion = maxOf(currentMeta?.localVersion ?: 0L, mutation.version),
-                        serverVersion = serverVersion.takeIf { it > 0L } ?: currentMeta?.serverVersion,
-                        lastSuccessfulSync = currentMeta?.lastSuccessfulSync
-                    )
-                )
-                if (!result.optBoolean("accepted", false)) {
-                    conflicts += 1
-                    repository.recordSyncConflict(
-                        SyncConflictEntity(
-                            id = UUID.randomUUID().toString(),
-                            entityType = mutation.entityType,
-                            localPayload = mutation.payload,
-                            serverPayload = result.optJSONObject("record")?.opt("payload")?.toString().orEmpty(),
-                            serverVersion = serverVersion,
-                            createdAt = Instant.now().toString()
+            ensureAuthorized(response)
+            if (response.code !in 200..299) throw NativeSyncProtocolException("Sync push failed with HTTP ${response.code}.")
+            val body = parseObject(response.body, "Sync push response is not valid JSON.")
+            val array = body.optJSONArray("results")
+                ?: throw NativeSyncProtocolException("Sync push response has no result set.")
+            if (array.length() != batch.size) {
+                throw NativeSyncProtocolException("Sync push response has an incomplete acknowledgement set.")
+            }
+            val results = buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val result = array.optJSONObject(index)
+                        ?: throw NativeSyncProtocolException("Sync push response contains an invalid result.")
+                    val acceptedValue = result.opt("accepted")
+                    val mutationIdValue = result.opt("mutationId")
+                    val serverVersionValue = result.opt("serverVersion")
+                    if (acceptedValue !is Boolean || mutationIdValue !is String || mutationIdValue.isBlank()
+                        || serverVersionValue !is Number
+                        || (result.has("replayMismatch") && result.opt("replayMismatch") !is Boolean)
+                        || (result.has("serverMissing") && result.opt("serverMissing") !is Boolean)
+                    ) {
+                        throw NativeSyncProtocolException("Sync push response contains an ambiguous result.")
+                    }
+                    val record = result.optJSONObject("record")
+                    val recordVersion = record?.numberLong("version")
+                    val recordServerVersion = record?.numberLong("serverVersion")
+                        ?: record?.numberLong("server_version")
+                    add(
+                        NativePushResult(
+                            mutationId = mutationIdValue,
+                            accepted = acceptedValue,
+                            serverVersion = serverVersionValue.toLong(),
+                            conflictId = result.nullableString("conflictId"),
+                            replayMismatch = result.optBoolean("replayMismatch", false),
+                            serverMissing = result.optBoolean("serverMissing", false),
+                            serverPayload = record?.opt("payload")?.let(::jsonValueText).orEmpty(),
+                            serverDeletedAt = record?.nullableString("deletedAt")
+                                ?: record?.nullableString("deleted_at"),
+                            recordEntityType = record?.nullableString("entityType")
+                                ?: record?.nullableString("entity_type"),
+                            recordEntityId = record?.nullableString("entityId")
+                                ?: record?.nullableString("entity_id"),
+                            recordVersion = recordVersion,
+                            recordServerVersion = recordServerVersion,
+                            recordUpdatedAt = record?.nullableString("updatedAt")
+                                ?: record?.nullableString("updated_at")
                         )
                     )
                 }
             }
+            val expectedIds = batch.map { it.mutationId }.toSet()
+            if (results.map { it.mutationId }.toSet() != expectedIds || results.map { it.mutationId }.distinct().size != results.size) {
+                throw NativeSyncProtocolException("Sync push response acknowledged the wrong mutation ids.")
+            }
+            conflicts += repository.commitPushResults(batch, results)
         }
 
         var cursor = repository.syncMetadata(SYNC_CURSOR_KEY)?.cursor ?: 0L
-        var hasMore = true
-        while (hasMore) {
-            val response = request(
+        var hasMore: Boolean
+        do {
+            val response = transport.request(
                 "/api/v1/sync/pull?cursor=$cursor&limit=100",
-                activeSession.accessToken,
+                session.accessToken,
                 "GET",
                 null
             )
-            if (response.code !in 200..299) throw SyncException("Sync pull failed.")
-            val body = JSONObject(response.body)
-            val records = body.optJSONArray("records") ?: throw SyncException("Sync response was invalid.")
-            for (index in 0 until records.length()) {
-                val record = records.optJSONObject(index) ?: continue
-                val entityType = record.optString("entityType")
-                val payload = record.opt("payload")?.toString().orEmpty()
-                if (payload.isBlank()) continue
-                val pendingEntity = repository.pendingSyncMutations().firstOrNull { it.entityType == entityType }
-                if (pendingEntity != null && pendingEntity.deviceId != record.optString("deviceId")) {
-                    conflicts += 1
-                    continue
-                }
-                val serverVersion = record.optLong("serverVersion", 0L)
-                val currentMeta = repository.syncMetadata(entityType)
-                if (serverVersion > (currentMeta?.serverVersion ?: 0L)) {
-                    when (entityType) {
-                        "tasks" -> repository.applyRemoteTaskSnapshot(payload)
-                        "goals" -> repository.applyRemoteGoalSnapshot(payload)
+            ensureAuthorized(response)
+            if (response.code !in 200..299) throw NativeSyncProtocolException("Sync pull failed with HTTP ${response.code}.")
+            val body = parseObject(response.body, "Sync pull response is not valid JSON.")
+            val array = body.optJSONArray("records")
+                ?: throw NativeSyncProtocolException("Sync pull response has no record set.")
+            val nextCursorValue = body.opt("nextCursor")
+            val hasMoreValue = body.opt("hasMore")
+            if (nextCursorValue !is Number || hasMoreValue !is Boolean) {
+                throw NativeSyncProtocolException("Sync pull response has an invalid cursor envelope.")
+            }
+            val nextCursor = nextCursorValue.toLong()
+            hasMore = hasMoreValue
+            if (nextCursor < cursor || (hasMore && nextCursor == cursor)) {
+                throw NativeSyncProtocolException("Sync pull cursor did not make safe progress.")
+            }
+            val records = buildList(array.length()) {
+                for (index in 0 until array.length()) {
+                    val record = array.optJSONObject(index)
+                        ?: throw NativeSyncProtocolException("Sync pull response contains an invalid record.")
+                    val payload = record.opt("payload")
+                        ?: throw NativeSyncProtocolException("Sync pull record has no payload.")
+                    val entityType = record.opt("entityType")
+                    val entityId = record.opt("entityId")
+                    val version = record.opt("version")
+                    val serverVersion = record.opt("serverVersion")
+                    if (entityType !is String || entityType.isBlank()
+                        || entityId !is String || entityId.isBlank()
+                        || version !is Number || serverVersion !is Number
+                        || (record.has("deviceId") && record.opt("deviceId") !is String)
+                        || (record.has("updatedAt") && record.opt("updatedAt") !is String)
+                        || (record.has("deletedAt") && !record.isNull("deletedAt") && record.opt("deletedAt") !is String)
+                    ) {
+                        throw NativeSyncProtocolException("Sync pull response contains an ambiguous record.")
                     }
-                    repository.saveSyncMetadata(
-                        SyncMetaEntity(
+                    add(
+                        NativeRemoteRecord(
                             entityType = entityType,
-                            cursor = cursor,
-                            localVersion = maxOf(currentMeta?.localVersion ?: 0L, record.optLong("version", 0L)),
-                            serverVersion = serverVersion,
-                            lastSuccessfulSync = currentMeta?.lastSuccessfulSync
+                            entityId = entityId,
+                            version = version.toLong(),
+                            serverVersion = serverVersion.toLong(),
+                            deviceId = record.optString("deviceId"),
+                            payload = jsonValueText(payload),
+                            updatedAt = record.optString("updatedAt", Instant.EPOCH.toString()),
+                            deletedAt = record.nullableString("deletedAt")
                         )
                     )
                 }
             }
-            val nextCursor = body.optLong("nextCursor", cursor)
-            cursor = maxOf(cursor, nextCursor)
-            hasMore = body.optBoolean("hasMore", false)
-            repository.saveSyncMetadata(
-                SyncMetaEntity(
-                    entityType = SYNC_CURSOR_KEY,
-                    cursor = cursor,
-                    localVersion = 0L,
-                    serverVersion = null,
-                    lastSuccessfulSync = null
-                )
-            )
-        }
+            val highestReturned = records.maxOfOrNull { it.serverVersion } ?: cursor
+            if (nextCursor != highestReturned) {
+                throw NativeSyncProtocolException("Sync pull cursor would skip or discard remote information.")
+            }
+            conflicts += repository.applyRemotePage(records, nextCursor)
+            cursor = nextCursor
+        } while (hasMore)
 
-        val now = Instant.now().toString()
-        listOf("tasks", "goals").forEach { entityType ->
-            val meta = repository.syncMetadata(entityType)
-            if (meta != null) repository.saveSyncMetadata(meta.copy(lastSuccessfulSync = now))
+        val conflictResponse = transport.request(
+            "/api/v1/sync/conflicts",
+            session.accessToken,
+            "GET",
+            null
+        )
+        ensureAuthorized(conflictResponse)
+        if (conflictResponse.code !in 200..299) {
+            throw NativeSyncProtocolException("Server conflicts could not be verified; existing local state was not changed.")
         }
+        val conflictBody = parseObject(conflictResponse.body, "Sync conflict response is not valid JSON.")
+        val conflictArray = conflictBody.optJSONArray("conflicts")
+            ?: throw NativeSyncProtocolException("Sync conflict response has no conflict set.")
+        val serverConflicts = buildList(conflictArray.length()) {
+            for (index in 0 until conflictArray.length()) {
+                val conflict = conflictArray.optJSONObject(index)
+                    ?: throw NativeSyncProtocolException("Sync conflict response contains an invalid conflict.")
+                fun value(camel: String, snake: String): Any? =
+                    if (conflict.has(camel)) conflict.opt(camel) else conflict.opt(snake)
+                fun string(camel: String, snake: String): String? =
+                    value(camel, snake).let { it as? String }?.takeIf(String::isNotBlank)
+                fun nullableDate(camel: String, snake: String): String? {
+                    val candidate = value(camel, snake)
+                    return when (candidate) {
+                        null, JSONObject.NULL -> null
+                        is String -> candidate.takeIf(String::isNotBlank)
+                        else -> throw NativeSyncProtocolException("Sync conflict contains an invalid timestamp.")
+                    }
+                }
+                val id = conflict.optString("id").takeIf(String::isNotBlank)
+                val entityType = string("entityType", "entity_type")
+                val entityId = string("entityId", "entity_id")
+                val mutationId = string("mutationId", "mutation_id")
+                val localPayloadPresent = conflict.has("localPayload") || conflict.has("local_payload")
+                val localPayload = if (localPayloadPresent) {
+                    jsonValueText(value("localPayload", "local_payload") ?: JSONObject.NULL)
+                } else null
+                val serverMissingValue = value("serverMissing", "server_missing")
+                if (serverMissingValue != null && serverMissingValue !== JSONObject.NULL && serverMissingValue !is Boolean) {
+                    throw NativeSyncProtocolException("Sync conflict contains an invalid missing-record flag.")
+                }
+                val serverMissing = serverMissingValue == true
+                val serverPayloadPresent = conflict.has("serverPayload") || conflict.has("server_payload")
+                val serverPayload = if (serverPayloadPresent) {
+                    jsonValueText(value("serverPayload", "server_payload") ?: JSONObject.NULL)
+                } else ""
+                val localVersionValue = value("localVersion", "local_version")
+                val localVersion = when (localVersionValue) {
+                    null, JSONObject.NULL -> 1L
+                    is Number -> localVersionValue.toLong().takeIf {
+                        it > 0L && localVersionValue.toDouble().isFinite()
+                            && localVersionValue.toDouble() == it.toDouble()
+                    }
+                    else -> null
+                }
+                val serverVersionNumber = value("serverVersion", "server_version") as? Number
+                val serverVersion = serverVersionNumber?.toLong()?.takeIf {
+                    it >= 0L && serverVersionNumber.toDouble().isFinite()
+                        && serverVersionNumber.toDouble() == it.toDouble()
+                }
+                val createdAt = string("createdAt", "created_at")
+                val localUpdatedAt = string("localUpdatedAt", "local_updated_at") ?: createdAt
+                if (id == null || !id.matches(UUID_PATTERN) || entityType == null || entityId == null
+                    || mutationId == null || !mutationId.matches(UUID_PATTERN) || localPayload == null
+                    || (!serverMissing && !serverPayloadPresent) || localVersion == null
+                    || serverVersion == null || createdAt == null || localUpdatedAt == null
+                ) {
+                    throw NativeSyncProtocolException("Sync conflict response contains incomplete recovery data.")
+                }
+                add(NativeServerConflict(
+                    id = id,
+                    entityType = entityType,
+                    entityId = entityId,
+                    mutationId = mutationId,
+                    localPayload = localPayload,
+                    localDeletedAt = nullableDate("localDeletedAt", "local_deleted_at"),
+                    localVersion = localVersion,
+                    localUpdatedAt = localUpdatedAt,
+                    serverPayload = serverPayload,
+                    serverDeletedAt = nullableDate("serverDeletedAt", "server_deleted_at"),
+                    serverVersion = serverVersion,
+                    serverMissing = serverMissing,
+                    createdAt = createdAt
+                ))
+            }
+        }
+        conflicts += repository.mergeServerConflicts(serverConflicts)
+
+        repository.markSyncSuccessful()
         SyncResult.Synced(conflicts)
     }
 
-    private fun parsePayload(payload: String): Any = runCatching { JSONArray(payload) }
-        .getOrElse { JSONObject(payload) }
-
-    private fun request(path: String, token: String, method: String, body: String?): HttpResponse {
-        val connection = (URL("${NativeConfig.apiOrigin}$path").openConnection() as HttpURLConnection).apply {
-            requestMethod = method
-            connectTimeout = 10_000
-            readTimeout = 20_000
-            useCaches = false
-            doInput = true
-            setRequestProperty("Accept", "application/json")
-            setRequestProperty("Cache-Control", "no-store")
-            setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            if (body != null) {
-                connection.doOutput = true
-                connection.setRequestProperty("Content-Type", "application/json")
-                connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
-            }
-            val code = connection.responseCode
-            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            HttpResponse(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
-        } finally {
-            connection.disconnect()
-        }
+    private fun ensureAuthorized(response: NativeHttpResponse) {
+        if (response.code == 401 || response.code == 403) throw AuthenticationExpiredDuringSync()
     }
 
-    private data class HttpResponse(val code: Int, val body: String)
-    private class SyncException(message: String) : IllegalStateException(message)
+    private fun verifiedUserId(session: NativeSession): String {
+        val response = transport.request("/api/v1/sync/status", session.accessToken, "GET", null)
+        ensureAuthorized(response)
+        if (response.code !in 200..299) {
+            throw NativeSyncProtocolException("The authenticated sync account could not be verified.")
+        }
+        val userId = parseObject(response.body, "Sync account response is not valid JSON.")
+            .optString("userId").trim()
+        if (!userId.matches(UUID_PATTERN)) {
+            throw NativeSyncProtocolException("The authenticated sync account has no stable identity.")
+        }
+        return userId
+    }
 
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"
+        val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
+
+        fun parseObject(value: String, message: String): JSONObject =
+            runCatching { JSONObject(value) }.getOrElse { throw NativeSyncProtocolException(message) }
+
+        fun parseJsonValue(value: String): Any = runCatching {
+            val token = JSONTokener(value)
+            val parsed = token.nextValue()
+            if (token.nextClean().code != 0) throw IllegalArgumentException("trailing JSON")
+            parsed
+        }.getOrElse { throw NativeSyncProtocolException("A pending mutation contains invalid JSON.") }
+
+        fun jsonValueText(value: Any): String = when (value) {
+            JSONObject.NULL -> "null"
+            is JSONObject, is JSONArray -> value.toString()
+            is String -> JSONObject.quote(value)
+            is Number -> runCatching { JSONObject.numberToString(value) }
+                .getOrElse { throw NativeSyncProtocolException("A sync payload contains an invalid number.") }
+            is Boolean -> value.toString()
+            else -> throw NativeSyncProtocolException("A sync payload is not valid JSON.")
+        }
+
+        fun JSONObject.nullableString(key: String): String? =
+            if (!has(key) || isNull(key)) null else optString(key).takeIf(String::isNotBlank)
+
+        fun JSONObject.numberLong(key: String): Long? {
+            val value = opt(key)
+            if (value !is Number) return null
+            val longValue = value.toLong()
+            return longValue.takeIf { value.toDouble().isFinite() && value.toDouble() == longValue.toDouble() }
+        }
+
+        fun httpRequest(path: String, token: String, method: String, body: String?): NativeHttpResponse {
+            val connection = (URL("${NativeConfig.apiOrigin}$path").openConnection() as HttpURLConnection).apply {
+                requestMethod = method
+                connectTimeout = 10_000
+                readTimeout = 20_000
+                useCaches = false
+                doInput = true
+                setRequestProperty("Accept", "application/json")
+                setRequestProperty("Cache-Control", "no-store")
+                setRequestProperty("Authorization", "Bearer $token")
+            }
+            return try {
+                if (body != null) {
+                    connection.doOutput = true
+                    connection.setRequestProperty("Content-Type", "application/json")
+                    connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
+                }
+                val code = connection.responseCode
+                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+                NativeHttpResponse(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
+            } finally {
+                connection.disconnect()
+            }
+        }
     }
 }

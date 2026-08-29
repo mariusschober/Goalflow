@@ -4,11 +4,13 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowGoal
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
+import com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngine
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -22,7 +24,10 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
-class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel() {
+class GoalflowViewModel(
+    private val repository: GoalflowRepository,
+    private val syncEngine: NativeSyncEngine
+) : ViewModel() {
     private val _today = MutableStateFlow(LocalDate.now().toString())
     val today: StateFlow<String> = _today.asStateFlow()
 
@@ -33,6 +38,12 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
     )
 
     val goals: StateFlow<List<GoalflowGoal>> = repository.goalStream.stateIn(
+        viewModelScope,
+        SharingStarted.WhileSubscribed(5_000),
+        emptyList()
+    )
+
+    val conflicts: StateFlow<List<SyncConflictEntity>> = repository.conflictStream.stateIn(
         viewModelScope,
         SharingStarted.WhileSubscribed(5_000),
         emptyList()
@@ -165,14 +176,35 @@ class GoalflowViewModel(private val repository: GoalflowRepository) : ViewModel(
         }
     }
 
+    fun resolveConflict(conflict: SyncConflictEntity, keepLocal: Boolean) {
+        viewModelScope.launch {
+            clearError()
+            runCatching {
+                if (keepLocal) repository.resolveConflictLocally(conflict.id)
+                else syncEngine.resolveConflictWithCloud(conflict)
+            }.onSuccess {
+                _notice.value = if (keepLocal) {
+                    "Local version queued for safe reconciliation"
+                } else {
+                    "Cloud version applied"
+                }
+            }.onFailure { failure ->
+                _error.value = failure.message ?: "The conflict remains preserved."
+            }
+        }
+    }
+
     fun clearNotice() { _notice.value = null }
     fun clearError() { _error.value = null }
 }
 
-class GoalflowViewModelFactory(private val repository: GoalflowRepository) : ViewModelProvider.Factory {
+class GoalflowViewModelFactory(
+    private val repository: GoalflowRepository,
+    private val syncEngine: NativeSyncEngine
+) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         require(modelClass.isAssignableFrom(GoalflowViewModel::class.java))
-        return GoalflowViewModel(repository) as T
+        return GoalflowViewModel(repository, syncEngine) as T
     }
 }

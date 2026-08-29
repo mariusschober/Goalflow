@@ -23,7 +23,6 @@ import { getTodayYYYYMMDD } from './utils/dateUtils';
 import { SyncStatus } from './components/SyncStatus';
 import { startCloudSync } from './services/cloudSync';
 import { PwaLifecycle } from './components/PwaLifecycle';
-import { authenticatedFetch, supabase } from './services/authService';
 
 type View = 'current' | 'planning' | 'goals' | 'stats' | 'done' | 'habits' | 'gamification';
 type Theme = 'light' | 'dark';
@@ -33,28 +32,6 @@ const StatsView = React.lazy(() => import('./components/StatsView').then(module 
 const GamificationView = React.lazy(() => import('./components/GamificationView').then(module => ({ default: module.GamificationView })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
 const ViewFallback = () => <div className="flex min-h-[40vh] items-center justify-center"><div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-600 border-t-transparent" /></div>;
-
-interface StoredDailyPlan {
-  date: string;
-  taskIds: string[];
-}
-
-const readStoredDailyPlan = (key: string): StoredDailyPlan => {
-  const value = localStorage.getItem(key);
-  if (!value) return { date: '', taskIds: [] };
-  try {
-    const parsed = JSON.parse(value) as Partial<StoredDailyPlan>;
-    if (typeof parsed.date === 'string' && Array.isArray(parsed.taskIds)) {
-      return { date: parsed.date, taskIds: parsed.taskIds.map(String) };
-    }
-  } catch {
-    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return { date: value, taskIds: [] };
-  }
-  return { date: '', taskIds: [] };
-};
-
-const writeStoredDailyPlan = (key: string, plan: StoredDailyPlan): void =>
-  localStorage.setItem(key, JSON.stringify(plan));
 
 interface AppProps {
   userEmail: string;
@@ -78,12 +55,7 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
   const [isBioCheckInOpen, setIsBioCheckInOpen] = useState(false);
   
   const [openAssessmentOnGoalsMount, setOpenAssessmentOnGoalsMount] = useState(false);
-  const dailyPlanStorageKey = `goalflow-daily-plan:${userKey}`;
-  const legacyDailyPlanStorageKey = `goalflow-daily-plan:${userEmail}`;
-  const [confirmedPlan, setConfirmedPlan] = useState<StoredDailyPlan>(() => {
-      const current = readStoredDailyPlan(dailyPlanStorageKey);
-      return current.date ? current : readStoredDailyPlan(legacyDailyPlanStorageKey);
-  });
+  const [planningSaveError, setPlanningSaveError] = useState<string | null>(null);
   
   const {
     isLoading, // Added loading state from hook
@@ -141,9 +113,15 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
     resetCircadianState,
     userSettings,
     updateUserSettings,
-    sortTodayTasksCircadian
+    sortTodayTasksCircadian,
+    dailyPlans,
+    confirmDailyPlan: persistDailyPlan
   } = useGoalflow(userKey, userEmail);
   const todayPlanTaskIds = useMemo(() => todayTasks.map(task => task.id), [todayTasks]);
+  const confirmedPlan = useMemo(
+      () => dailyPlans.find(plan => plan.localDate === currentLocalDay),
+      [dailyPlans, currentLocalDay]
+  );
 
   useEffect(() => {
       const timer = window.setInterval(() => {
@@ -160,11 +138,6 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
   }, [openAccountSetup]);
 
   useEffect(() => {
-      const legacyPlan = localStorage.getItem(legacyDailyPlanStorageKey);
-      if (!localStorage.getItem(dailyPlanStorageKey) && legacyPlan) localStorage.setItem(dailyPlanStorageKey, legacyPlan);
-  }, [dailyPlanStorageKey, legacyDailyPlanStorageKey]);
-
-  useEffect(() => {
       const params = new URLSearchParams(window.location.search);
       if (params.get('view') === 'current') setCurrentView('current');
       if (params.get('capture') === 'task' || params.get('capture') === 'share') {
@@ -177,25 +150,6 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
           window.history.replaceState({}, document.title, `${window.location.pathname}${remainingQuery ? `?${remainingQuery}` : ''}`);
       }
   }, []);
-
-  useEffect(() => {
-      setConfirmedPlan(readStoredDailyPlan(dailyPlanStorageKey));
-  }, [dailyPlanStorageKey]);
-
-  useEffect(() => {
-      if (!supabase || !navigator.onLine) return;
-      let active = true;
-      void authenticatedFetch(`/api/v1/current?date=${currentLocalDay}`).then(async response => {
-          if (!active || !response.ok) return;
-          const body = await response.json() as { gate?: string };
-          if (body.gate === 'ready' || body.gate === 'empty') {
-              const plan = { date: currentLocalDay, taskIds: todayPlanTaskIds };
-              writeStoredDailyPlan(dailyPlanStorageKey, plan);
-              setConfirmedPlan(plan);
-          }
-      }).catch(() => undefined);
-      return () => { active = false; };
-  }, [currentLocalDay, dailyPlanStorageKey, todayPlanTaskIds]);
 
   // Circadian Check Logic - Only active if checked in today
   const isCircadianActive = circadianState.lastCheckIn === getTodayYYYYMMDD();
@@ -241,9 +195,9 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
 
   const hasOverdue = overdueTasks.length > 0;
   const requiresMonthlyPlanning = overdueTasks.some(task => task.schedulePrecision === 'month');
-  const confirmedOpenTaskIds = confirmedPlan.taskIds.filter(taskId => todayPlanTaskIds.includes(taskId));
+  const confirmedOpenTaskIds = (confirmedPlan?.taskIds ?? []).filter(taskId => todayPlanTaskIds.includes(taskId));
   const dailyPlanConfirmed = !hasOverdue && (todayPlanTaskIds.length === 0 || (
-      confirmedPlan.date === currentLocalDay
+      confirmedPlan?.localDate === currentLocalDay
       && confirmedOpenTaskIds.length === todayPlanTaskIds.length
       && confirmedOpenTaskIds.every((taskId, index) => taskId === todayPlanTaskIds[index])
   ));
@@ -253,24 +207,13 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
           setCurrentView('planning');
           return;
       }
-      const plan = { date: currentLocalDay, taskIds: todayPlanTaskIds };
-      writeStoredDailyPlan(dailyPlanStorageKey, plan);
-      setConfirmedPlan(plan);
-      setCurrentView('current');
-      if (supabase && navigator.onLine) {
-          try {
-              const response = await authenticatedFetch('/api/v1/planning/daily/confirm', {
-                  method: 'POST', headers: { 'content-type': 'application/json' },
-                  body: JSON.stringify({ localDate: currentLocalDay, taskIds: todayTasks.map(task => task.cloudId || task.id) })
-              });
-              if (response.status === 409) {
-                  localStorage.removeItem(dailyPlanStorageKey);
-                  setConfirmedPlan({ date: '', taskIds: [] });
-                  setCurrentView('planning');
-              }
-          } catch {
-              // The local plan remains usable offline and is confirmed to the server on the next review.
-          }
+      try {
+          persistDailyPlan(currentLocalDay, todayPlanTaskIds);
+          setPlanningSaveError(null);
+          setCurrentView('current');
+      } catch (error) {
+          setPlanningSaveError(error instanceof Error ? error.message : 'The planning decision could not be saved durably.');
+          setCurrentView('planning');
       }
   };
 
@@ -327,12 +270,15 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
 
   const handleCompleteTask = (id: string, duration?: number, flowState?: FlowState, finalDescription?: string) => {
     const task = todayTasks.find(t => t.id === id) || upcomingTasks.find(t => t.id === id);
+    completeTask(id, duration, flowState, finalDescription);
+
+    // Completion feedback is emitted only after the synchronous durable WAL
+    // write succeeds. A storage rejection must never sound like success.
     if (task?.isFrog) {
         playFrogCompleteSound();
     } else {
         playCompleteSound();
     }
-    completeTask(id, duration, flowState, finalDescription);
 
     setShowCelebration(true);
     setTimeout(() => setShowCelebration(false), 3000);
@@ -582,6 +528,11 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
                 <p className="mb-3 text-sm text-gray-600 dark:text-gray-300">
                     {requiresMonthlyPlanning ? 'Assign every current-month task to an exact day before starting today.' : hasOverdue ? 'Resolve every overdue task before starting today.' : `Confirm today's order, then leave planning and focus on one task.`}
                 </p>
+                {planningSaveError && (
+                    <p role="alert" className="mb-3 rounded-lg border border-red-300 bg-red-50 p-3 text-sm text-red-800 dark:border-red-700 dark:bg-red-950/40 dark:text-red-200">
+                        {planningSaveError}
+                    </p>
+                )}
                 <button
                     type="button"
                     onClick={confirmDailyPlan}
