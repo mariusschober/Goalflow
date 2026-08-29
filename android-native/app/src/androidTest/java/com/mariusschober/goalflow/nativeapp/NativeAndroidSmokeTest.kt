@@ -24,7 +24,7 @@ class NativeAndroidSmokeTest {
     @Test
     fun current_surface_exposes_capture_action() {
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Current").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Current").onFirst().assertIsDisplayed()
         composeRule
             .onNodeWithContentDescription("Capture a scheduled commitment")
             .assertIsDisplayed()
@@ -82,6 +82,9 @@ class NativeAndroidSmokeTest {
         composeRule.onNodeWithText("Cancel").performClick()
         composeRule.onNodeWithText("Complete commitment").performClick()
         composeRule.waitForIdle()
+        composeRule.waitUntil(10_000) {
+            runBlocking { application.database.taskDao().get(task.id)?.status == "COMPLETED" }
+        }
         runBlocking {
             check(application.database.taskDao().get(task.id)?.status == "COMPLETED")
             application.database.taskDao().deleteAll()
