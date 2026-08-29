@@ -135,19 +135,6 @@ data class RawCollectionEntity(
     val deletedAt: String?
 )
 
-@Entity(
-    tableName = "task_events",
-    indices = [Index(value = ["taskId", "createdAt"])]
-)
-data class TaskEventEntity(
-    @PrimaryKey val id: String,
-    val taskId: String,
-    val eventType: String,
-    val localDate: String,
-    val metadata: String,
-    val createdAt: Long
-)
-
 @Dao
 interface TaskDao {
     @Query("SELECT * FROM tasks ORDER BY scheduledFor ASC, plannedOrder ASC, createdAt ASC, id ASC")

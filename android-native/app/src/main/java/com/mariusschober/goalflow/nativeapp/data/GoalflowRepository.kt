@@ -458,7 +458,6 @@ class GoalflowRepository(
                     JSONObject()
                         .put("schedulePrecision", schedulePrecision.name)
                         .put("scheduledFor", scheduledFor)
-                        .toString()
                 )
             }
         }
@@ -558,7 +557,6 @@ class GoalflowRepository(
                 JSONObject()
                     .put("schedulePrecision", SchedulePrecision.DAY.name)
                     .put("scheduledFor", scheduledFor)
-                    .toString()
             )
         }
         onMutation()
