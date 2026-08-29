@@ -799,8 +799,15 @@ private fun GoalflowSandboxGate(onGranted: () -> Unit) {
     val keyboardController = LocalSoftwareKeyboardController.current
 
     LaunchedEffect(Unit) {
-        focusRequester.requestFocus()
-        keyboardController?.show()
+        var focused = false
+        repeat(8) {
+            if (!focused) {
+                withFrameNanos { }
+                focused = runCatching { focusRequester.requestFocus() }.getOrDefault(false)
+            }
+            if (!focused) delay(40)
+        }
+        if (focused) keyboardController?.show()
     }
 
     fun submit() {
