@@ -2,7 +2,6 @@ package com.mariusschober.goalflow.nativeapp
 
 import android.content.Intent
 import androidx.compose.ui.test.assertIsDisplayed
-import org.json.JSONArray
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -106,12 +105,7 @@ class NativeAndroidSmokeTest {
                 val parent = application.database.taskDao().get(task.id)
                 val children = application.database.taskDao().getAll().filter { it.parentTaskId == task.id }
                 val plan = application.database.dailyPlanDao().get(today)
-                val planIds = plan?.taskIds?.let { raw ->
-                    runCatching {
-                        val json = JSONArray(raw)
-                        (0 until json.length()).map { index -> json.getString(index) }
-                    }.getOrNull()
-                }.orEmpty()
+                val planIds = plan?.taskIds?.split(",")?.filter(String::isNotBlank).orEmpty()
                 parent?.status == "BROKEN_DOWN" &&
                     parent.completedAt != null &&
                     children.size == 2 &&
@@ -123,10 +117,7 @@ class NativeAndroidSmokeTest {
             val parent = application.database.taskDao().get(task.id)
             val children = application.database.taskDao().getAll().filter { it.parentTaskId == task.id }
             val plan = application.database.dailyPlanDao().get(today)
-            val planIds = plan?.taskIds?.let { raw ->
-                val json = JSONArray(raw)
-                (0 until json.length()).map { index -> json.getString(index) }
-            }.orEmpty()
+            val planIds = plan?.taskIds?.split(",")?.filter(String::isNotBlank).orEmpty()
             check(parent?.status == "BROKEN_DOWN")
             check(parent?.completedAt != null)
             check(children.size == 2)
