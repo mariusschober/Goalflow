@@ -1601,7 +1601,7 @@ class GoalflowRepository(
             "goals" -> goals.delete(entityId)
             "habits" -> habits.delete(entityId)
             "daily_plans" -> plans.delete(entityId)
-            "task_events" -> taskEvents.delete(entityId)
+            "task_events" -> Unit // Append-only lifecycle history is never erased by a tombstone.
             in NATIVE_RAW_COLLECTION_TYPES -> rawCollections.delete(entityType)
             else -> throw IllegalArgumentException("This conflict type cannot be applied by the native client.")
         }
@@ -1859,14 +1859,18 @@ class GoalflowRepository(
                 else plans.insert(parsePlan(record.payload, record.entityId))
             }
             "task_events" -> {
-                if (trimmed.startsWith("[")) {
-                    taskEvents.insertAll(GoalflowTaskEventJson.parseEvents(record.payload, strict = true))
-                } else if (record.deletedAt != null) {
-                    taskEvents.delete(record.entityId)
+                if (record.deletedAt != null) {
+                    // Lifecycle history is append-only. A transport tombstone
+                    // must never erase a locally retained event.
+                } else if (trimmed.startsWith("[")) {
+                    val collision = GoalflowTaskEventJson.parseEvents(record.payload, strict = true)
+                        .map { event -> applyTaskEventInTransaction(event, record) }
+                        .any { it }
+                    if (collision) return true
                 } else {
                     val remote = GoalflowTaskEventJson.parseEvent(record.payload, strict = true)
                     require(remote.id == record.entityId) { "Task event sync identifier does not match its payload." }
-                    taskEvents.insert(remote)
+                    if (applyTaskEventInTransaction(remote, record)) return true
                 }
             }
             in NATIVE_RAW_COLLECTION_TYPES -> {
@@ -1925,6 +1929,40 @@ class GoalflowRepository(
                 parseJsonValue(record.payload)
             }
         }
+    }
+
+    /**
+     * Event identities are immutable. A remote replay of the same event is a
+     * no-op; a different payload becomes an explicit conflict instead of a
+     * silent Room REPLACE.
+     */
+    private suspend fun applyTaskEventInTransaction(
+        remote: TaskEventEntity,
+        record: NativeRemoteRecord
+    ): Boolean {
+        val local = taskEvents.get(remote.id)
+        if (local == null) {
+            taskEvents.insert(remote)
+            return false
+        }
+        if (jsonEquivalent(
+                GoalflowTaskEventJson.eventPayload(local).toString(),
+                GoalflowTaskEventJson.eventPayload(remote).toString()
+            )) return false
+        conflicts.insert(
+            SyncConflictEntity(
+                id = "event-identity:" + remote.id + ":" + record.serverVersion,
+                entityType = "task_events",
+                entityId = remote.id,
+                localPayload = GoalflowTaskEventJson.eventPayload(local).toString(),
+                localHistory = "[]",
+                serverPayload = record.payload,
+                serverDeletedAt = record.deletedAt,
+                serverVersion = record.serverVersion,
+                createdAt = Instant.now().toString()
+            )
+        )
+        return true
     }
 
     private fun parsePlan(payload: String, entityId: String): DailyPlanEntity {

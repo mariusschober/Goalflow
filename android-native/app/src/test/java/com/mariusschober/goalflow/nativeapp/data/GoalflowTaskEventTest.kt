@@ -65,6 +65,76 @@ class GoalflowTaskEventTest {
     }
 
     @Test
+    fun remoteEventTombstoneDoesNotEraseAppendOnlyHistory() = runTest {
+        val task = repository.createTask(
+            "Keep the history",
+            "",
+            SchedulePrecision.DAY,
+            LocalDate.now().toString(),
+            null,
+            false
+        )
+        val event = database.taskEventDao().getAll().single { it.taskId == task.id }
+        database.syncOutboxDao().deleteForEntity("task_events", event.id)
+
+        val conflicts = repository.applyRemotePage(
+            listOf(
+                NativeRemoteRecord(
+                    entityType = "task_events",
+                    entityId = event.id,
+                    version = 1,
+                    serverVersion = 100,
+                    deviceId = "device-cloud",
+                    payload = GoalflowTaskEventJson.eventPayload(event).toString(),
+                    updatedAt = java.time.Instant.now().toString(),
+                    deletedAt = java.time.Instant.now().toString()
+                )
+            ),
+            nextCursor = 100
+        )
+
+        assertEquals(0, conflicts)
+        assertEquals(event, database.taskEventDao().get(event.id))
+    }
+
+    @Test
+    fun remoteEventIdentityCollisionBecomesAnExplicitConflict() = runTest {
+        val task = repository.createTask(
+            "Keep the event identity",
+            "",
+            SchedulePrecision.DAY,
+            LocalDate.now().toString(),
+            null,
+            false
+        )
+        val local = database.taskEventDao().getAll().single { it.taskId == task.id }
+            .copy(eventType = "completed")
+        database.taskEventDao().insert(local)
+        database.syncOutboxDao().deleteForEntity("task_events", local.id)
+        val remote = local.copy(eventType = "dropped")
+
+        val conflicts = repository.applyRemotePage(
+            listOf(
+                NativeRemoteRecord(
+                    "task_events",
+                    local.id,
+                    1,
+                    101,
+                    "device-cloud",
+                    GoalflowTaskEventJson.eventPayload(remote).toString(),
+                    java.time.Instant.now().toString(),
+                    null
+                )
+            ),
+            101
+        )
+
+        assertEquals(1, conflicts)
+        assertEquals(local, database.taskEventDao().get(local.id))
+        assertEquals("task_events", database.syncConflictDao().getAll().single().entityType)
+    }
+
+    @Test
     fun frogsCannotBeSkipped() = runTest {
         val frog = repository.createTask("Frog", "", SchedulePrecision.DAY, LocalDate.now().toString(), null, true)
         try {
