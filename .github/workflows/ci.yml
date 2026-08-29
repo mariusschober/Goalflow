@@ -130,6 +130,10 @@ jobs:
             ${{ runner.os }}-gradle-native-
       - run: chmod +x android-native/gradlew
       - run: ./android-native/gradlew -p android-native test
+      - name: Compile native instrumentation tests
+        run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
+      - name: Compile native startup benchmark
+        run: ./android-native/gradlew -p android-native :benchmark:assembleProductionRelease
       - run: ./android-native/gradlew -p android-native lint
       - run: ./android-native/gradlew -p android-native assembleProductionDebug
       - run: ./android-native/gradlew -p android-native assembleProductionRelease

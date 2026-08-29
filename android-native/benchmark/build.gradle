@@ -1,0 +1,34 @@
+plugins {
+    id "com.android.test"
+    id "org.jetbrains.kotlin.android"
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+android {
+    namespace "com.mariusschober.goalflow.benchmark"
+    compileSdk 35
+
+    defaultConfig {
+        minSdk 26
+        targetSdk 35
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    flavorDimensions += "environment"
+    productFlavors {
+        production {
+            dimension "environment"
+        }
+    }
+
+    targetProjectPath ":app"
+}
+
+dependencies {
+    implementation "androidx.benchmark:benchmark-macro-junit4:1.3.4"
+    implementation "androidx.test.ext:junit:1.2.1"
+    implementation "androidx.test.uiautomator:uiautomator:2.3.0"
+}

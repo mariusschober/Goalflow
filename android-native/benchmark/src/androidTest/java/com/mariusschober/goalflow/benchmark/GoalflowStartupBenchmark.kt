@@ -1,0 +1,37 @@
+package com.mariusschober.goalflow.benchmark
+
+import androidx.benchmark.macro.FrameTimingMetric
+import androidx.benchmark.macro.MacrobenchmarkScope
+import androidx.benchmark.macro.MacrobenchmarkRule
+import androidx.benchmark.macro.StartupMode
+import androidx.benchmark.macro.StartupTimingMetric
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * Release-targeted performance guardrail for the product's first usable frame.
+ * Run on a physical/emulated device with:
+ * ./gradlew :benchmark:connectedProductionReleaseAndroidTest
+ */
+@RunWith(AndroidJUnit4::class)
+@LargeTest
+class GoalflowStartupBenchmark {
+    @get:Rule
+    val benchmarkRule = MacrobenchmarkRule()
+
+    @Test
+    fun cold_start_to_current() = benchmarkRule.measureRepeated(
+        packageName = "com.mariusschober.goalflow",
+        metrics = listOf(StartupTimingMetric(), FrameTimingMetric()),
+        iterations = 5,
+        startupMode = StartupMode.COLD,
+        setupBlock = {
+            pressHome()
+        }
+    ) {
+        startActivityAndWait()
+    }
+}
