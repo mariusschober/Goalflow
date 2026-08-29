@@ -60,7 +60,7 @@ class NativeSyncEngineTest {
             scheduledTime = null,
             isFrog = false
         )
-        val originalMutationId = repository.pendingSyncMutations().single().mutationId
+        val originalMutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
         var pushCalls = 0
         var committedMutationId: String? = null
         val transport = NativeSyncTransport { path, _, _, body ->
@@ -109,7 +109,7 @@ class NativeSyncEngineTest {
         } catch (_: SocketTimeoutException) {
             // The durable outbox is the recovery boundary.
         }
-        assertEquals(originalMutationId, repository.pendingSyncMutations().single().mutationId)
+        assertEquals(originalMutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
 
         engine.synchronize()
 
@@ -127,7 +127,7 @@ class NativeSyncEngineTest {
             scheduledTime = null,
             isFrog = false
         )
-        val mutationId = repository.pendingSyncMutations().single().mutationId
+        val mutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
         val engine = engine(NativeSyncTransport { path, _, _, _ ->
             if (path == "/api/v1/sync/push") NativeHttpResponse(401, "{}")
             else throw AssertionError("Unexpected request: $path")
@@ -140,7 +140,7 @@ class NativeSyncEngineTest {
             // Expected.
         }
 
-        assertEquals(mutationId, repository.pendingSyncMutations().single().mutationId)
+        assertEquals(mutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
     }
 
     @Test

@@ -137,7 +137,7 @@ class GoalflowRepositorySyncTest {
         assertEquals(1, database.goalDao().get(goal.id)?.completedTasks)
         assertEquals(1, database.habitDao().get(habit.id)?.streak)
         assertEquals(LocalDate.now().toString(), database.habitDao().get(habit.id)?.lastCompletedDate)
-        assertEquals(9, repository.pendingSyncMutations().size)
+        assertEquals(11, repository.pendingSyncMutations().size)
         assertEquals(
             mapOf("goals" to 2, "habits" to 2, "tasks" to 2, "progress" to 2, "stats" to 1, "task_events" to 2),
             repository.pendingSyncMutations().groupingBy { it.entityType }.eachCount()
@@ -396,7 +396,8 @@ class GoalflowRepositorySyncTest {
         )
 
         assertEquals(1, conflicts)
-        assertTrue(repository.pendingSyncMutations().isEmpty())
+        assertTrue(repository.pendingSyncMutations().none { it.entityType == "tasks" && it.entityId == local.id })
+        assertTrue(repository.pendingSyncMutations().any { it.entityType == "task_events" })
         assertEquals(20L, repository.syncMetadata("_cursor")?.cursor)
         val stored = database.syncConflictDao().getAll().single()
         assertEquals("Local version", org.json.JSONObject(stored.localPayload).getString("title"))
@@ -425,7 +426,8 @@ class GoalflowRepositorySyncTest {
             22
         )
 
-        assertTrue(repository.pendingSyncMutations().isEmpty())
+        assertTrue(repository.pendingSyncMutations().none { it.entityType == "tasks" && it.entityId == local.id })
+        assertTrue(repository.pendingSyncMutations().any { it.entityType == "task_events" })
         val conflict = database.syncConflictDao().getAll().single()
         assertEquals("Pending on this installation", org.json.JSONObject(conflict.localPayload).getString("title"))
         assertEquals("Earlier server state", org.json.JSONObject(conflict.serverPayload).getString("title"))

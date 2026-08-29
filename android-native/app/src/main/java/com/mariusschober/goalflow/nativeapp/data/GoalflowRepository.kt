@@ -1407,7 +1407,9 @@ class GoalflowRepository(
                                     createdAt = Instant.now().toString()
                                 )
                             )
+                            val predecessorIds = pending.map { it.mutationId }.toSet()
                             outbox.deleteForEntity(record.entityType, entityId)
+                            releaseDependentsInTransaction(predecessorIds, record.serverVersion)
                             conflictCount += 1
                         } else if (retainNewestRemoteConflictInTransaction(record, entityId, payload)) {
                             // Keep the current local UI side while updating the
@@ -1463,7 +1465,9 @@ class GoalflowRepository(
                             createdAt = Instant.now().toString()
                         )
                     )
+                    val predecessorIds = pending.map { it.mutationId }.toSet()
                     outbox.deleteForEntity(record.entityType, record.entityId)
+                    releaseDependentsInTransaction(predecessorIds, record.serverVersion)
                     conflictCount += 1
                 } else if (retainNewestRemoteConflictInTransaction(record, record.entityId, record.payload)) {
                     // Remote information is represented in the open conflict
@@ -1673,6 +1677,28 @@ class GoalflowRepository(
                 add(id to item.toString())
             }
         }
+    }
+
+    /**
+     * A task pull conflict removes the task mutation chain, but dependent
+     * append-only events must remain durable so local history is never stranded.
+     */
+    private suspend fun releaseDependentsInTransaction(
+        predecessorMutationIds: Set<String>,
+        baseServerVersion: Long?
+    ) {
+        if (predecessorMutationIds.isEmpty()) return
+        outbox.getAll()
+            .filter { it.dependsOnMutationId in predecessorMutationIds }
+            .forEach { dependent ->
+                outbox.insert(
+                    dependent.copy(
+                        baseServerVersion = baseServerVersion ?: dependent.baseServerVersion,
+                        dependsOnMutationId = null,
+                        attemptedAt = null
+                    )
+                )
+            }
     }
 
     private suspend fun recordTaskEventInTransaction(
