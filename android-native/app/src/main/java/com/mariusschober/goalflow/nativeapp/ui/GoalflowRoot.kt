@@ -1365,11 +1365,13 @@ private fun PlanningScreen(
                     )
                 }
                 if (insertionTargetIndex == queue.size && queue.isNotEmpty()) {
-                    Divider(
-                        modifier = Modifier.padding(horizontal = 12.dp),
-                        thickness = 3.dp,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    item {
+                        Divider(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            thickness = 3.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
                 if (gate is PlanningGate.DailyPlanningRequired) {
                     item {
