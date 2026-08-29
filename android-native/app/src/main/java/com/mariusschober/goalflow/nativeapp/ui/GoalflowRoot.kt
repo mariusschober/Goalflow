@@ -53,7 +53,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.Divider
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -530,7 +530,7 @@ fun GoalflowRoot(
                         tasks = tasks,
                         habits = habits,
                         stats = stats,
-                        progress = progress,
+                        progress = { progress },
                         onBack = { destination = RootDestination.GOALS }
                     )
                     RootDestination.SETTINGS -> SettingsScreen(
@@ -1353,7 +1353,7 @@ private fun PlanningScreen(
                 items(queue, key = { it.id }) { task ->
                     val index = queue.indexOfFirst { it.id == task.id }
                     if (insertionTargetIndex == index) {
-                        Divider(
+                        HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 12.dp),
                             thickness = 3.dp,
                             color = MaterialTheme.colorScheme.primary
@@ -1373,7 +1373,7 @@ private fun PlanningScreen(
                 }
                 if (insertionTargetIndex == queue.size && queue.isNotEmpty()) {
                     item {
-                        Divider(
+                        HorizontalDivider(
                             modifier = Modifier.padding(horizontal = 12.dp),
                             thickness = 3.dp,
                             color = MaterialTheme.colorScheme.primary

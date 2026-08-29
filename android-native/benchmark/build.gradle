@@ -25,6 +25,7 @@ android {
     }
 
     targetProjectPath ":app"
+    testBuildType "release"
 }
 
 dependencies {

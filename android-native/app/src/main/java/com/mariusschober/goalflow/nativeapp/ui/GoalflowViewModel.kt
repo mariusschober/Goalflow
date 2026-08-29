@@ -17,6 +17,7 @@ import com.mariusschober.goalflow.nativeapp.domain.GoalflowTrueNorth
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngine
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -31,6 +32,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class GoalflowViewModel(
     private val repository: GoalflowRepository,
     private val syncEngine: NativeSyncEngine

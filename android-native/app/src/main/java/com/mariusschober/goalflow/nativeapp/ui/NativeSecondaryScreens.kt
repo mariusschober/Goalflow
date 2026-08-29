@@ -24,7 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.background
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.Delete
@@ -733,7 +733,7 @@ fun NativeInsightsScreen(
     LazyColumn(modifier = Modifier.fillMaxSize(), contentPadding = PaddingValues(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         item {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) { Icon(Icons.Rounded.ArrowBack, contentDescription = "Back to goals") }
+                IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back to goals") }
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Insights", style = MaterialTheme.typography.headlineLarge)
                     Text("See the evidence of keeping promises", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -749,7 +749,7 @@ fun NativeInsightsScreen(
                         Text("Level ${progress.level}", style = MaterialTheme.typography.headlineMedium, modifier = Modifier.weight(1f))
                         Text("${progress.xp} / ${progress.xpToNextLevel} XP", style = MaterialTheme.typography.labelLarge)
                     }
-                    LinearProgressIndicator(progress = progressFraction, modifier = Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(50)))
+                    LinearProgressIndicator(progress = { progressFraction }, modifier = Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(50)))
                     Text("Progress is a quiet record of deliberate action.", color = MaterialTheme.colorScheme.onPrimaryContainer)
                 }
             }

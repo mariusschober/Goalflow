@@ -1,7 +1,6 @@
 package com.mariusschober.goalflow.benchmark
 
 import androidx.benchmark.macro.FrameTimingMetric
-import androidx.benchmark.macro.MacrobenchmarkScope
 import androidx.benchmark.macro.MacrobenchmarkRule
 import androidx.benchmark.macro.StartupMode
 import androidx.benchmark.macro.StartupTimingMetric
@@ -14,7 +13,7 @@ import org.junit.runner.RunWith
 /**
  * Release-targeted performance guardrail for the product's first usable frame.
  * Run on a physical/emulated device with:
- * ./gradlew :benchmark:connectedProductionReleaseAndroidTest
+ * ./gradlew :benchmark:connectedCheck
  */
 @RunWith(AndroidJUnit4::class)
 @LargeTest
