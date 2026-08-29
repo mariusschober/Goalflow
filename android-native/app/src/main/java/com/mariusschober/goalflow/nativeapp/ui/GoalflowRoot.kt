@@ -87,6 +87,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -270,6 +271,11 @@ fun GoalflowRoot(
         }
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    LaunchedEffect(Unit) {
+        withFrameNanos { }
+        NativeSyncScheduler.schedule(context)
     }
 
     BackHandler(enabled = destination != RootDestination.CURRENT && !captureOpen && editTask == null &&

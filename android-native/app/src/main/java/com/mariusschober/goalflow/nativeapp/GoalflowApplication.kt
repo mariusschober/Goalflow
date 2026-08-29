@@ -35,6 +35,7 @@ class GoalflowApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        runCatching { NativeSyncScheduler.schedule(this) }
+        // Cloud work is scheduled after the first usable UI frame. Room-backed
+        // local state must own startup and never wait behind WorkManager.
     }
 }
