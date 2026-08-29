@@ -530,7 +530,7 @@ fun GoalflowRoot(
                         tasks = tasks,
                         habits = habits,
                         stats = stats,
-                        progress = { progress },
+                        progress = progress,
                         onBack = { destination = RootDestination.GOALS }
                     )
                     RootDestination.SETTINGS -> SettingsScreen(
@@ -1100,7 +1100,7 @@ private fun FocusTimerSheet(
                 textAlign = TextAlign.Center
             )
             LinearProgressIndicator(
-                progress = progress,
+                progress = { progress },
                 modifier = Modifier.fillMaxWidth(),
                 color = MaterialTheme.colorScheme.primary
             )
