@@ -140,7 +140,7 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          target: google_apis
+          target: aosp_atd
           arch: x86
           profile: pixel_2
           disk-size: 2048M
