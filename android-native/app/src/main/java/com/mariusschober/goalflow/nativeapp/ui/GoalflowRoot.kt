@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -549,7 +550,7 @@ fun GoalflowRoot(
     }
 
     conflicts.firstOrNull { it.status !in setOf("resolved", "resolving_local") }?.let { conflict ->
-        val supportedLocally = conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans") ||
+        val supportedLocally = conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans", "task_events") ||
             (conflict.entityType in NATIVE_RAW_COLLECTION_TYPES && conflict.localPayload.isNotBlank())
         AlertDialog(
             onDismissRequest = {},
@@ -913,7 +914,8 @@ private fun CurrentScreen(
     onDrop: (GoalflowTask) -> Unit,
     onSkip: (GoalflowTask) -> Unit
 ) {
-    LazyColumn(
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    LazyColumn(state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
@@ -1277,6 +1279,8 @@ private fun PlanningScreen(
     onEdit: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
+    val listState = rememberSaveable(saver = LazyListState.Saver) { LazyListState() }
+    var insertionTargetIndex by rememberSaveable { mutableStateOf<Int?>(null) }
     val queue = (gate as? PlanningGate.DailyPlanningRequired)?.taskIds
         ?.mapNotNull { id -> tasks.find { it.id == id } }
         ?: (gate as? PlanningGate.Ready)?.queue.orEmpty()
@@ -1288,7 +1292,7 @@ private fun PlanningScreen(
         .orEmpty()
 
     LazyColumn(
-        modifier = Modifier.fillMaxSize(),
+        state = listState,        modifier = Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(24.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
@@ -1340,12 +1344,31 @@ private fun PlanningScreen(
                     )
                 }
                 items(queue, key = { it.id }) { task ->
+                    val index = queue.indexOfFirst { it.id == task.id }
+                    if (insertionTargetIndex == index) {
+                        Divider(
+                            modifier = Modifier.padding(horizontal = 12.dp),
+                            thickness = 3.dp,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                     PlannedTaskRow(
                         task = task,
                         isFirst = queue.firstOrNull()?.id == task.id,
                         isLast = queue.lastOrNull()?.id == task.id,
                         onMove = { direction -> onMove(today, task.id, direction) },
-                        onEdit = { onEdit(task) }
+                        onEdit = { onEdit(task) },
+                        onDragDirection = { direction ->
+                            insertionTargetIndex = (index + direction).coerceIn(0, queue.size)
+                        },
+                        onDragEnd = { insertionTargetIndex = null }
+                    )
+                }
+                if (insertionTargetIndex == queue.size && queue.isNotEmpty()) {
+                    Divider(
+                        modifier = Modifier.padding(horizontal = 12.dp),
+                        thickness = 3.dp,
+                        color = MaterialTheme.colorScheme.primary
                     )
                 }
                 if (gate is PlanningGate.DailyPlanningRequired) {
@@ -1427,7 +1450,9 @@ private fun PlannedTaskRow(
     isFirst: Boolean,
     isLast: Boolean,
     onMove: (Int) -> Unit,
-    onEdit: () -> Unit
+    onEdit: () -> Unit,
+    onDragDirection: (Int) -> Unit,
+    onDragEnd: () -> Unit
 ) {
     val localView = LocalView.current
     var dragging by remember(task.id) { mutableStateOf(false) }
@@ -1443,14 +1468,20 @@ private fun PlannedTaskRow(
                 onDragCancel = {
                     dragging = false
                     dragDistance = 0f
+                    onDragEnd()
                 },
                 onDragEnd = {
                     dragging = false
                     dragDistance = 0f
+                    onDragEnd()
                 },
                 onDrag = { change, dragAmount ->
                     change.consume()
                     dragDistance += dragAmount.y
+                    when {
+                        dragAmount.y > 0f -> onDragDirection(1)
+                        dragAmount.y < 0f -> onDragDirection(-1)
+                    }
                     while (dragDistance >= 48f) {
                         onMove(1)
                         dragDistance -= 48f
