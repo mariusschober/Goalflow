@@ -1,7 +1,7 @@
 package com.mariusschober.goalflow.nativeapp
 
-import androidx.compose.ui.test.assertExists
-import androidx.compose.ui.test.createAndroidComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -21,16 +21,16 @@ class NativeAndroidSmokeTest {
     @Test
     fun current_surface_exposes_capture_action() {
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Current").assertExists()
+        composeRule.onNodeWithText("Current").assertIsDisplayed()
         composeRule
             .onNodeWithContentDescription("Capture a scheduled commitment")
-            .assertExists()
+            .assertIsDisplayed()
     }
 
     @Test
     fun activity_recreation_keeps_current_destination() {
         composeRule.activityRule.scenario.recreate()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("Current").assertExists()
+        composeRule.onNodeWithText("Current").assertIsDisplayed()
     }
 }
