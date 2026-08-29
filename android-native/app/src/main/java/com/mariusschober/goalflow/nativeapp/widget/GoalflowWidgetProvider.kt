@@ -90,11 +90,11 @@ object GoalflowWidgetUpdater {
 
     fun refresh(context: Context) {
         val appContext = context.applicationContext
-        val manager = AppWidgetManager.getInstance(appContext)
-        val component = ComponentName(appContext, GoalflowWidgetProvider::class.java)
-        val ids = manager.getAppWidgetIds(component)
-        if (ids.isEmpty()) return
         scope.launch {
+            val manager = AppWidgetManager.getInstance(appContext)
+            val component = ComponentName(appContext, GoalflowWidgetProvider::class.java)
+            val ids = manager.getAppWidgetIds(component)
+            if (ids.isEmpty()) return@launch
             val application = appContext as GoalflowApplication
             render(manager, ids, appContext, application.repository.widgetSnapshot())
         }

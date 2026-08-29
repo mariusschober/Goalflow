@@ -1640,19 +1640,28 @@ private fun PlannedTaskRow(
                     fontWeight = FontWeight.SemiBold
                 )
                 timeline?.let { block ->
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            "${formatTimelineTime(block.start)}–${formatTimelineTime(block.end)}",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            formatDurationMinutes(block.durationMinutes),
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (block.overlapsPrevious) {
-                            Text("overlap", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(formatTimelineTime(block.start), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                            Box(
+                                Modifier
+                                    .padding(vertical = 2.dp)
+                                    .width(3.dp)
+                                    .height(block.durationMinutes.coerceIn(18, 72).dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+                            )
+                            Text(formatTimelineTime(block.end), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                formatDurationMinutes(block.durationMinutes),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            if (block.overlapsPrevious) {
+                                Text("overlap", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                            }
                         }
                     }
                 }
