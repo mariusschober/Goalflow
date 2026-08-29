@@ -132,7 +132,7 @@ fun GoalflowRoot() {
     val localView = LocalView.current
     val scope = rememberCoroutineScope()
     val goalflowViewModel: GoalflowViewModel = viewModel(
-        factory = GoalflowViewModelFactory(application.repository)
+        factory = GoalflowViewModelFactory(application.repository, application.syncEngine)
     )
     val tasks by goalflowViewModel.tasks.collectAsStateWithLifecycle()
     val goals by goalflowViewModel.goals.collectAsStateWithLifecycle()
@@ -141,6 +141,7 @@ fun GoalflowRoot() {
     val currentTask by goalflowViewModel.currentTask.collectAsStateWithLifecycle()
     val notice by goalflowViewModel.notice.collectAsStateWithLifecycle()
     val error by goalflowViewModel.error.collectAsStateWithLifecycle()
+    val conflicts by goalflowViewModel.conflicts.collectAsStateWithLifecycle()
     var destination by rememberSaveable { mutableStateOf(RootDestination.CURRENT) }
     var captureOpen by rememberSaveable { mutableStateOf(false) }
     var goalOpen by rememberSaveable { mutableStateOf(false) }
@@ -277,6 +278,35 @@ fun GoalflowRoot() {
                 }
             }
         }
+    }
+
+    conflicts.firstOrNull { it.status !in setOf("resolved", "resolving_local") }?.let { conflict ->
+        val supportedLocally = conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans")
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Sync conflict — both versions are safe") },
+            text = {
+                Text(if (supportedLocally) {
+                    "This ${conflict.entityType.removeSuffix("s")} was changed in two places. " +
+                        "Choose explicitly; Goalflow will not overwrite either version silently."
+                } else {
+                    "A cloud ${conflict.entityType} change cannot be displayed by this app version. " +
+                        "Its complete payload remains preserved until you explicitly keep the canonical cloud copy."
+                })
+            },
+            confirmButton = {
+                if (supportedLocally) {
+                    Button(onClick = { goalflowViewModel.resolveConflict(conflict, keepLocal = true) }) {
+                        Text("Keep this device")
+                    }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { goalflowViewModel.resolveConflict(conflict, keepLocal = false) }) {
+                    Text(if (supportedLocally) "Use cloud version" else "Keep canonical cloud copy")
+                }
+            }
+        )
     }
 
     if (captureOpen) {

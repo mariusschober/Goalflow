@@ -1,6 +1,6 @@
 
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo, type Dispatch, type SetStateAction } from 'react';
 import { Task, Stats, Session, Goal, UserProgress, FlowState, HashtagConfig, Habit, AccountabilityConfig, TrueNorthGoal, GamificationEvent, CircadianState } from '../types';
 import { getTodayYYYYMMDD } from '../utils/dateUtils';
 import { parseTitleForExtras } from '../utils/timeAndTagParser';
@@ -27,7 +27,156 @@ interface DailyTracking {
     dailyPostponeCount: number;
 }
 
+export interface DurableDailyPlan {
+    id: string;
+    localDate: string;
+    taskIds: string[];
+    confirmedAt: number;
+}
+
+const isRealLocalDate = (value: string): boolean => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+};
+
+const normalizeDailyPlans = (value: unknown): DurableDailyPlan[] => {
+    if (!Array.isArray(value)) throw new Error('Stored daily planning decisions are damaged. They were not discarded.');
+    const seen = new Set<string>();
+    return value.map((item, index) => {
+        if (!item || typeof item !== 'object' || Array.isArray(item)) {
+            throw new Error(`Stored daily planning decision ${index} is invalid.`);
+        }
+        const record = item as Record<string, unknown>;
+        const localDate = String(record.localDate ?? record.id ?? '');
+        const taskIds = record.taskIds;
+        const confirmedAt = Number(record.confirmedAt);
+        if (!isRealLocalDate(localDate) || record.id !== localDate || seen.has(localDate)
+            || !Array.isArray(taskIds) || taskIds.some(id => typeof id !== 'string' || !id)
+            || !Number.isSafeInteger(confirmedAt) || confirmedAt <= 0) {
+            throw new Error(`Stored daily planning decision ${index} is invalid or duplicated.`);
+        }
+        seen.add(localDate);
+        return { id: localDate, localDate, taskIds: taskIds.map(String), confirmedAt };
+    });
+};
+
+const parseLegacyDailyPlan = (raw: string, confirmedAt: number): DurableDailyPlan | null => {
+    let value: unknown;
+    try { value = JSON.parse(raw); } catch (_) { value = raw; }
+    if (typeof value === 'string') {
+        if (!isRealLocalDate(value)) throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+        return { id: value, localDate: value, taskIds: [], confirmedAt };
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+    }
+    const record = value as Record<string, unknown>;
+    const localDate = String(record.localDate ?? record.date ?? '');
+    if (!isRealLocalDate(localDate) || !Array.isArray(record.taskIds)
+        || record.taskIds.some(id => typeof id !== 'string' || !id)) {
+        throw new Error('A legacy daily planning decision is damaged. It was not discarded.');
+    }
+    return { id: localDate, localDate, taskIds: record.taskIds.map(String), confirmedAt };
+};
+
 const calculateXpToNextLevel = (level: number) => level * BASE_XP_FOR_LEVEL;
+
+const emptyStats = (): Stats => ({
+  tasksCompleted: 0,
+  frogsEaten: 0,
+  timeFocused: 0,
+  totalBreakMinutes: 0
+});
+
+/**
+ * A persistent state transition is staged in a synchronous, read-verified WAL
+ * before React is allowed to render it. Hydration and cloud application use
+ * the raw setter so they do not manufacture a second local mutation.
+ */
+const useDurableStoredState = <T,>(initialValue: T, storeName: string, userKey: string): [
+  T,
+  Dispatch<SetStateAction<T>>,
+  Dispatch<SetStateAction<T>>,
+  () => T
+] => {
+  const [value, setRawState] = useState<T>(initialValue);
+  const valueRef = useRef(value);
+
+  const setFromStorage = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const next = typeof action === 'function'
+      ? (action as (previous: T) => T)(valueRef.current)
+      : action;
+    valueRef.current = next;
+    setRawState(next);
+  }, []);
+
+  const setDurably = useCallback<Dispatch<SetStateAction<T>>>((action) => {
+    const previous = valueRef.current;
+    const next = typeof action === 'function'
+      ? (action as (current: T) => T)(previous)
+      : action;
+    storageService.stageLocalValue(storeName, userKey, previous, next);
+    valueRef.current = next;
+    setRawState(next);
+  }, [storeName, userKey]);
+
+  const getCurrent = useCallback(() => valueRef.current, []);
+  return [value, setDurably, setFromStorage, getCurrent];
+};
+
+/**
+ * Daily statistics are persisted as one date-keyed record. Keep that complete
+ * record and the active-day view in the same synchronous write-ahead
+ * transition so a process death cannot preserve a completion while silently
+ * losing its counters.
+ */
+const useDurableDailyStats = (userKey: string): [
+  Stats,
+  Dispatch<SetStateAction<Stats>>,
+  Record<string, Stats>,
+  (value: Record<string, Stats>) => void,
+  () => Record<string, Stats>
+] => {
+  const initial = emptyStats();
+  const [stats, setRawStats] = useState<Stats>(initial);
+  const [allStats, setRawAllStats] = useState<Record<string, Stats>>({});
+  const statsRef = useRef(initial);
+  const allStatsRef = useRef<Record<string, Stats>>({});
+  const statsDateRef = useRef(getTodayYYYYMMDD());
+
+  const setFromStorage = useCallback((value: Record<string, Stats>) => {
+    const nextAll = value || {};
+    const today = getTodayYYYYMMDD();
+    const nextStats = nextAll[today] || emptyStats();
+    allStatsRef.current = nextAll;
+    statsRef.current = nextStats;
+    statsDateRef.current = today;
+    setRawAllStats(nextAll);
+    setRawStats(nextStats);
+  }, []);
+
+  const setDurably = useCallback<Dispatch<SetStateAction<Stats>>>((action) => {
+    const today = getTodayYYYYMMDD();
+    const current = statsDateRef.current === today
+      ? statsRef.current
+      : allStatsRef.current[today] || emptyStats();
+    const next = typeof action === 'function'
+      ? (action as (previous: Stats) => Stats)(current)
+      : action;
+    const previousAll = allStatsRef.current;
+    const nextAll = { ...previousAll, [today]: next };
+    storageService.stageLocalValue(STORES.STATS, userKey, previousAll, nextAll);
+    allStatsRef.current = nextAll;
+    statsRef.current = next;
+    statsDateRef.current = today;
+    setRawAllStats(nextAll);
+    setRawStats(next);
+  }, [userKey]);
+
+  const getCurrent = useCallback(() => allStatsRef.current, []);
+  return [stats, setDurably, allStats, setFromStorage, getCurrent];
+};
 
 export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   // Keys for DB retrieval (User scoped)
@@ -36,22 +185,22 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   // --- State Definitions ---
   const [isLoading, setIsLoading] = useState(true);
   
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [habits, setHabits] = useState<Habit[]>([]);
-  const [trueNorthGoals, setTrueNorthGoals] = useState<TrueNorthGoal[]>([]);
-  const [amalgam, setAmalgam] = useState<string>("My world takes care of me");
-  const [hashtagConfigs, setHashtagConfigs] = useState<Record<string, HashtagConfig>>({});
-  const [stats, setStats] = useState<Stats>({ tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
-  const [allStats, setAllStats] = useState<{ [date: string]: Stats }>({});
+  const [tasks, setTasks, setTasksFromStorage, getTasks] = useDurableStoredState<Task[]>([], STORES.TASKS, USER_KEY);
+  const [goals, setGoals, setGoalsFromStorage, getGoals] = useDurableStoredState<Goal[]>([], STORES.GOALS, USER_KEY);
+  const [habits, setHabits, setHabitsFromStorage, getHabits] = useDurableStoredState<Habit[]>([], STORES.HABITS, USER_KEY);
+  const [trueNorthGoals, setTrueNorthGoals, setTrueNorthGoalsFromStorage, getTrueNorthGoals] = useDurableStoredState<TrueNorthGoal[]>([], STORES.TRUE_NORTH, USER_KEY);
+  const [amalgam, setAmalgam, setAmalgamFromStorage] = useDurableStoredState<string>("My world takes care of me", STORES.AMALGAM, USER_KEY);
+  const [hashtagConfigs, setHashtagConfigs, setHashtagConfigsFromStorage] = useDurableStoredState<Record<string, HashtagConfig>>({}, STORES.HASHTAGS, USER_KEY);
+  const [stats, setStats, allStats, setAllStatsFromStorage, getAllStats] = useDurableDailyStats(USER_KEY);
   
-  const [userProgress, setUserProgress] = useState<UserProgress>({ level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL });
-  const [dailyTracking, setDailyTracking] = useState<DailyTracking>({ date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 });
-  const [accountabilityConfig, setAccountabilityConfig] = useState<AccountabilityConfig>({ enabled: false, partners: [], scope: 'all', targetHashtags: [] });
-  const [circadianState, setCircadianState] = useState<CircadianState>({ 
+  const [userProgress, setUserProgress, setUserProgressFromStorage, getUserProgress] = useDurableStoredState<UserProgress>({ level: 1, xp: 0, xpToNextLevel: BASE_XP_FOR_LEVEL }, STORES.PROGRESS, USER_KEY);
+  const [dailyTracking, setDailyTracking, setDailyTrackingFromStorage, getDailyTracking] = useDurableStoredState<DailyTracking>({ date: getTodayYYYYMMDD(), planViewCount: 0, dailyPostponeCount: 0 }, STORES.TRACKING, USER_KEY);
+  const [accountabilityConfig, setAccountabilityConfig, setAccountabilityConfigFromStorage] = useDurableStoredState<AccountabilityConfig>({ enabled: false, partners: [], scope: 'all', targetHashtags: [] }, STORES.ACCOUNTABILITY, USER_KEY);
+  const [circadianState, setCircadianState, setCircadianStateFromStorage, getCircadianState] = useDurableStoredState<CircadianState>({
       lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 }
-  });
-  const [userSettings, setUserSettings] = useState<UserSettings>({ enableAi: false, penaltyMode: 'off' });
+  }, STORES.CIRCADIAN, USER_KEY);
+  const [userSettings, setUserSettings, setUserSettingsFromStorage] = useDurableStoredState<UserSettings>({ enableAi: false, penaltyMode: 'off' }, STORES.SETTINGS, USER_KEY);
+  const [dailyPlans, setDailyPlans, setDailyPlansFromStorage] = useDurableStoredState<DurableDailyPlan[]>([], STORES.DAILY_PLANS, USER_KEY);
   const cloudAppliedStores = useRef(new Set<string>());
 
   // Transient State
@@ -66,7 +215,8 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       try {
         await storageService.migrateUserKey(legacyUserKey, USER_KEY);
         const [
-            lTasks, lGoals, lHabits, lTrueNorth, lAmalgam, lHashtags, lAllStats, lProgress, lDaily, lAccountability, lCircadian, lSettings
+            lTasks, lGoals, lHabits, lTrueNorth, lAmalgam, lHashtags, lAllStats, lProgress, lDaily, lAccountability, lCircadian, lSettings,
+            lDailyPlans
         ] = await Promise.all([
             storageService.migrateFromLocalStorage<Task[]>(STORES.TASKS, USER_KEY, `goalflow_tasks_${legacyUserKey}`, []),
             storageService.migrateFromLocalStorage<Goal[]>(STORES.GOALS, USER_KEY, `goalflow_goals_${legacyUserKey}`, []),
@@ -80,6 +230,33 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
             storageService.migrateFromLocalStorage<AccountabilityConfig>(STORES.ACCOUNTABILITY, USER_KEY, `goalflow_accountability_${legacyUserKey}`, { enabled: false, partners: [], scope: 'all', targetHashtags: [] }),
             storageService.migrateFromLocalStorage<CircadianState>(STORES.CIRCADIAN, USER_KEY, `goalflow_circadian_${legacyUserKey}`, { lastCheckIn: '', score: 0, mode: 'maintenance', metrics: { sunrise: false, sleepHours: 0, energy: 0, clarity: 0, interest: 0 } }),
             storageService.migrateFromLocalStorage<UserSettings>(STORES.SETTINGS, USER_KEY, `goalflow_settings_${legacyUserKey}`, { enableAi: false, penaltyMode: 'off' }),
+            (async (): Promise<DurableDailyPlan[]> => {
+                const current = await storageService.get<unknown>(STORES.DAILY_PLANS, USER_KEY);
+                if (current !== undefined) return normalizeDailyPlans(current);
+                const migrationTime = Date.now();
+                const legacyKeys = Array.from(new Set([
+                    `goalflow-daily-plan:${USER_KEY}`,
+                    `goalflow-daily-plan:${legacyUserKey}`
+                ]));
+                const migrated = new Map<string, DurableDailyPlan>();
+                for (const legacyKey of legacyKeys) {
+                    const raw = window.localStorage.getItem(legacyKey);
+                    if (raw === null) continue;
+                    const plan = parseLegacyDailyPlan(raw, migrationTime);
+                    if (!plan) continue;
+                    const existing = migrated.get(plan.id);
+                    if (existing && JSON.stringify(existing.taskIds) !== JSON.stringify(plan.taskIds)) {
+                        throw new Error('Legacy daily planning decisions disagree. Neither was discarded.');
+                    }
+                    migrated.set(plan.id, plan);
+                }
+                const plans = Array.from(migrated.values());
+                if (plans.length) {
+                    storageService.stageLocalValue(STORES.DAILY_PLANS, USER_KEY, undefined, plans);
+                    await storageService.set(STORES.DAILY_PLANS, USER_KEY, plans);
+                }
+                return plans;
+            })(),
         ]);
 
         await storageService.createLocalSnapshot(USER_KEY, 'before-migration');
@@ -99,36 +276,33 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
                 lifecycleStatus: task.lifecycleStatus || (task.completed ? 'completed' : task.wontDo ? 'dropped' : 'open')
             } as Task;
         });
-        setTasks(normalizedTasks);
-        setGoals(lGoals);
-        setHabits(lHabits);
-        setTrueNorthGoals(lTrueNorth);
-        setAmalgam(lAmalgam);
-        setHashtagConfigs(lHashtags);
-        setAllStats(lAllStats);
-        
-        // Stats for Today
+        setTasksFromStorage(normalizedTasks);
+        setGoalsFromStorage(lGoals);
+        setHabitsFromStorage(lHabits);
+        setTrueNorthGoalsFromStorage(lTrueNorth);
+        setAmalgamFromStorage(lAmalgam);
+        setHashtagConfigsFromStorage(lHashtags);
+        setAllStatsFromStorage(lAllStats);
+
         const today = getTodayYYYYMMDD();
-        setStats(lAllStats[today] || { tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
 
         // Ensure Progress calculations
-        setUserProgress({ ...lProgress, xpToNextLevel: calculateXpToNextLevel(lProgress.level) });
+        setUserProgressFromStorage({ ...lProgress, xpToNextLevel: calculateXpToNextLevel(lProgress.level) });
         
         // Reset daily tracking if new day
         if (lDaily.date !== today) {
             setDailyTracking({ date: today, planViewCount: 0, dailyPostponeCount: 0 });
         } else {
-            setDailyTracking(lDaily);
+            setDailyTrackingFromStorage(lDaily);
         }
 
-        setAccountabilityConfig(lAccountability);
-        setCircadianState(lCircadian);
-        setUserSettings(lSettings);
-
+        setAccountabilityConfigFromStorage(lAccountability);
+        setCircadianStateFromStorage(lCircadian);
+        setUserSettingsFromStorage(lSettings);
+        setDailyPlansFromStorage(lDailyPlans);
+        setIsLoading(false);
       } catch (err) {
-          console.error("Failed to hydrate data", err);
-      } finally {
-          setIsLoading(false);
+          console.error("Failed to hydrate data. Persistence remains blocked so existing data is not overwritten.", err);
       }
     };
 
@@ -164,67 +338,68 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   useEffect(() => { if (!isLoading) persistLocalState(STORES.ACCOUNTABILITY, accountabilityConfig); }, [accountabilityConfig, isLoading, persistLocalState]);
   useEffect(() => { if (!isLoading) persistLocalState(STORES.CIRCADIAN, circadianState); }, [circadianState, isLoading, persistLocalState]);
   useEffect(() => { if (!isLoading) persistLocalState(STORES.SETTINGS, userSettings); }, [userSettings, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.STATS, allStats); }, [allStats, isLoading, persistLocalState]);
+  useEffect(() => { if (!isLoading) persistLocalState(STORES.DAILY_PLANS, dailyPlans); }, [dailyPlans, isLoading, persistLocalState]);
 
   useEffect(() => {
       const applyCloudChange = (event: Event) => {
           const { storeName, value } = (event as CustomEvent<{ storeName: string; value: any }>).detail;
           cloudAppliedStores.current.add(storeName);
-          if (storeName === STORES.TASKS) setTasks(value || []);
-          else if (storeName === STORES.GOALS) setGoals(value || []);
-          else if (storeName === STORES.HABITS) setHabits(value || []);
-          else if (storeName === STORES.TRUE_NORTH) setTrueNorthGoals(value || []);
-          else if (storeName === STORES.AMALGAM) setAmalgam(value || 'My world takes care of me');
-          else if (storeName === STORES.HASHTAGS) setHashtagConfigs(value || {});
-          else if (storeName === STORES.PROGRESS) setUserProgress(value);
-          else if (storeName === STORES.TRACKING) setDailyTracking(value);
-          else if (storeName === STORES.ACCOUNTABILITY) setAccountabilityConfig(value);
-          else if (storeName === STORES.CIRCADIAN) setCircadianState(value);
-          else if (storeName === STORES.SETTINGS) setUserSettings(value);
+          if (storeName === STORES.TASKS) setTasksFromStorage(value || []);
+          else if (storeName === STORES.GOALS) setGoalsFromStorage(value || []);
+          else if (storeName === STORES.HABITS) setHabitsFromStorage(value || []);
+          else if (storeName === STORES.TRUE_NORTH) setTrueNorthGoalsFromStorage(value || []);
+          else if (storeName === STORES.AMALGAM) setAmalgamFromStorage(value || 'My world takes care of me');
+          else if (storeName === STORES.HASHTAGS) setHashtagConfigsFromStorage(value || {});
+          else if (storeName === STORES.PROGRESS) setUserProgressFromStorage(value);
+          else if (storeName === STORES.TRACKING) setDailyTrackingFromStorage(value);
+          else if (storeName === STORES.ACCOUNTABILITY) setAccountabilityConfigFromStorage(value);
+          else if (storeName === STORES.CIRCADIAN) setCircadianStateFromStorage(value);
+          else if (storeName === STORES.SETTINGS) setUserSettingsFromStorage(value);
+          else if (storeName === STORES.DAILY_PLANS) setDailyPlansFromStorage(normalizeDailyPlans(value || []));
           else if (storeName === STORES.STATS) {
-              setAllStats(value || {});
-              setStats(value?.[getTodayYYYYMMDD()] || { tasksCompleted: 0, frogsEaten: 0, timeFocused: 0, totalBreakMinutes: 0 });
+              setAllStatsFromStorage(value || {});
           }
       };
       window.addEventListener('goalflow:cloud-change', applyCloudChange);
       return () => window.removeEventListener('goalflow:cloud-change', applyCloudChange);
-  }, []);
-
-  // Special Stats Persistence
-  useEffect(() => {
-      if (!isLoading) {
-          if (cloudAppliedStores.current.delete(STORES.STATS)) return;
-          const today = getTodayYYYYMMDD();
-          const updatedAllStats = { ...allStats, [today]: stats };
-          // Only update if changed deeply? No, React state update is enough signal.
-          // However, we avoid infinite loop by not setting AllStats in state here, just persisting it.
-          // But we need to keep `allStats` ref current for other logic if needed.
-          // Actually, let's update `allStats` state when `stats` changes, but do it carefully.
-          // Simplification: Just persist the merged object.
-          setAllStats(previous => previous[today] === stats ? previous : { ...previous, [today]: stats });
-          void persist(STORES.STATS, updatedAllStats);
-      }
-  }, [stats, isLoading, persist]); // Dep on stats updates the DB record
+  }, [setAllStatsFromStorage, setTasksFromStorage, setGoalsFromStorage, setHabitsFromStorage,
+      setTrueNorthGoalsFromStorage, setAmalgamFromStorage, setHashtagConfigsFromStorage,
+      setUserProgressFromStorage, setDailyTrackingFromStorage, setAccountabilityConfigFromStorage,
+      setCircadianStateFromStorage, setUserSettingsFromStorage, setDailyPlansFromStorage]);
 
   // --- Logic Exports ---
 
   const submitBioCheckIn = useCallback((data: CircadianState['metrics'], score: number, mode: CircadianState['mode'], solar?: { sunrise?: string, sunset?: string }) => {
-      // 1. Update Circadian State (Current Session Mode)
-      setCircadianState({
+      const previousCircadian = getCircadianState();
+      const nextCircadian: CircadianState = {
           lastCheckIn: getTodayYYYYMMDD(),
           metrics: data,
           score,
           mode,
           sunriseTime: solar?.sunrise,
           sunsetTime: solar?.sunset
+      };
+      const today = getTodayYYYYMMDD();
+      const previousAllStats = getAllStats();
+      const nextAllStats = {
+          ...previousAllStats,
+          [today]: {
+              ...(previousAllStats[today] || emptyStats()),
+              bioLog: data,
+              circadianScore: score
+          }
+      };
+      storageService.stageLocalValues(USER_KEY, [
+          { storeName: STORES.CIRCADIAN, previousValue: previousCircadian, nextValue: nextCircadian },
+          { storeName: STORES.STATS, previousValue: previousAllStats, nextValue: nextAllStats }
+      ]);
+      setCircadianStateFromStorage(nextCircadian);
+      setAllStatsFromStorage(nextAllStats);
+      void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+          console.error('Failed to flush the durable biological check-in transaction.', error);
       });
-
-      // 2. Persist to Stats (Historical Data)
-      setStats(prev => ({
-          ...prev,
-          bioLog: data,
-          circadianScore: score
-      }));
-  }, []);
+  }, [USER_KEY, getAllStats, getCircadianState, setAllStatsFromStorage, setCircadianStateFromStorage]);
 
   const resetCircadianState = useCallback(() => {
       setCircadianState(prev => ({ ...prev, lastCheckIn: '' }));
@@ -233,6 +408,23 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   const updateUserSettings = useCallback((updates: Partial<UserSettings>) => {
       setUserSettings(prev => ({ ...prev, ...updates }));
   }, []);
+
+  const confirmDailyPlan = useCallback((localDate: string, taskIds: string[]) => {
+      if (!isRealLocalDate(localDate) || taskIds.some(id => typeof id !== 'string' || !id)) {
+          throw new Error('The daily planning decision is invalid and was not saved.');
+      }
+      const plan: DurableDailyPlan = {
+          id: localDate,
+          localDate,
+          taskIds: [...taskIds],
+          confirmedAt: Date.now()
+      };
+      setDailyPlans(previous => [...previous.filter(item => item.id !== localDate), plan]);
+  }, [setDailyPlans]);
+
+  const clearDailyPlan = useCallback((localDate: string) => {
+      setDailyPlans(previous => previous.filter(item => item.id !== localDate));
+  }, [setDailyPlans]);
 
   // --- Habit Generation & Streak Break Logic (Simplified for brevity, logic remains same) ---
   useEffect(() => {
@@ -360,7 +552,8 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   };
 
   const rescheduleTask = (taskId: string, newDate: string): boolean => {
-      const task = tasks.find(t => t.id === taskId);
+      const currentTasks = getTasks();
+      const task = currentTasks.find(t => t.id === taskId);
       if (!task) return false;
       if (task.isFrog) return false;
 
@@ -370,13 +563,11 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
 
       let becomeFrog = false;
 
-      setDailyTracking(prev => {
-          let newPostponeCount = prev.dailyPostponeCount;
-          if (wasToday && isPushingToFuture) {
-              newPostponeCount++;
-          }
-          return { ...prev, dailyPostponeCount: newPostponeCount };
-      });
+      const previousTracking = getDailyTracking();
+      const nextTracking = {
+          ...previousTracking,
+          dailyPostponeCount: previousTracking.dailyPostponeCount + (wasToday && isPushingToFuture ? 1 : 0)
+      };
 
       const newRescheduleCount = (task.rescheduleCount || 0) + (isPushingToFuture ? 1 : 0);
       if (newRescheduleCount >= 2) {
@@ -384,17 +575,26 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
           setGamificationEvent({ type: 'penalty', amount: 0, message: "Task hardened into a Frog." });
       }
 
-      setTasks(prev => prev.map(t => t.id === taskId ? {
+      const nextTasks: Task[] = currentTasks.map(t => t.id === taskId ? {
           ...t,
           dateAssigned: newDate,
-          schedulePrecision: 'day',
+          schedulePrecision: 'day' as const,
           scheduledFor: newDate,
           plannedOrder: 0,
           session: undefined,
           rescheduleCount: newRescheduleCount,
           frogFailures: newRescheduleCount,
           isFrog: becomeFrog ? true : t.isFrog
-      } : t));
+      } : t);
+      storageService.stageLocalValues(USER_KEY, [
+          { storeName: STORES.TASKS, previousValue: currentTasks, nextValue: nextTasks },
+          { storeName: STORES.TRACKING, previousValue: previousTracking, nextValue: nextTracking }
+      ]);
+      setTasksFromStorage(nextTasks);
+      setDailyTrackingFromStorage(nextTracking);
+      void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+          console.error('Failed to flush the durable reschedule transaction.', error);
+      });
       return true;
   };
 
@@ -547,23 +747,33 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   }, [hashtagConfigs, tasks]);
 
   const deleteTask = useCallback((taskId: string) => {
-    setTasks(prev => {
-        const task = prev.find(t => t.id === taskId);
-        if (task && task.habitId) {
-             setHabits(h => h.map(hb => hb.id === task.habitId ? { ...hb, streak: 0 } : hb));
-        }
-        // Keep a tombstone in the synced snapshot. Filtering the row locally
-        // would make a cloud reconciliation recreate it on the next reload.
-        return prev.map(t => t.id === taskId ? {
-            ...t,
+    const previousTasks = getTasks();
+    const task = previousTasks.find(candidate => candidate.id === taskId);
+    if (!task || task.deletedAt) return;
+    const previousHabits = getHabits();
+    const nextTasks = previousTasks.map(candidate => candidate.id === taskId ? {
+            // Keep a tombstone in the synced collection. Filtering the row
+            // locally would let an old client resurrect it.
+            ...candidate,
             completed: true,
             wontDo: true,
             lifecycleStatus: 'archived' as const,
             deletedAt: new Date().toISOString(),
-            completedAt: t.completedAt || Date.now()
-        } : t);
+            completedAt: candidate.completedAt || Date.now()
+        } : candidate);
+    const nextHabits = task.habitId
+        ? previousHabits.map(habit => habit.id === task.habitId ? { ...habit, streak: 0 } : habit)
+        : previousHabits;
+    storageService.stageLocalValues(USER_KEY, [
+        { storeName: STORES.TASKS, previousValue: previousTasks, nextValue: nextTasks },
+        { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits }
+    ]);
+    setTasksFromStorage(nextTasks);
+    if (nextHabits !== previousHabits) setHabitsFromStorage(nextHabits);
+    void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+        console.error('Failed to flush the durable task deletion transaction.', error);
     });
-  }, []);
+  }, [USER_KEY, getHabits, getTasks, setHabitsFromStorage, setTasksFromStorage]);
 
   const markWontDo = useCallback((taskId: string) => {
       setTasks(prev => prev.map(t => t.id === taskId ? { ...t, completed: true, wontDo: true, lifecycleStatus: 'dropped', completedAt: Date.now() } : t));
@@ -584,55 +794,90 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
 
   const completeTask = useCallback((taskId: string, actualDuration?: number, flowState?: FlowState, finalDescription?: string) => {
     if (completedTaskIds.current.has(taskId)) return;
-    const task = tasks.find(t => t.id === taskId);
+    const previousTasks = getTasks();
+    const task = previousTasks.find(t => t.id === taskId);
     if (!task || task.completed || task.wontDo || task.deletedAt) return;
+    const nextTasks: Task[] = previousTasks.map(t => t.id === taskId ? {
+        ...t, completed: true, lifecycleStatus: 'completed' as const, completedAt: Date.now(), actualDuration, flowState, description: finalDescription || t.description
+    } : t);
+    const today = getTodayYYYYMMDD();
+    const previousAllStats = getAllStats();
+    const currentStats = previousAllStats[today] || emptyStats();
+    const nextAllStats = {
+        ...previousAllStats,
+        [today]: {
+            ...currentStats,
+            tasksCompleted: currentStats.tasksCompleted + 1,
+            frogsEaten: currentStats.frogsEaten + (task.isFrog ? 1 : 0),
+            timeFocused: currentStats.timeFocused + (actualDuration || task.duration || 0)
+        }
+    };
+    const previousGoals = getGoals();
+    const nextGoals = task.goalId
+        ? previousGoals.map(goal => goal.id === task.goalId
+            ? { ...goal, completedTasks: goal.completedTasks + 1 }
+            : goal)
+        : previousGoals;
+    const previousHabits = getHabits();
+    let habitStreak = 0;
+    const nextHabits = task.habitId
+        ? previousHabits.map(habit => {
+            if (habit.id !== task.habitId) return habit;
+            habitStreak = habit.streak + 1;
+            return {
+                ...habit,
+                streak: habitStreak,
+                bestStreak: Math.max(habit.bestStreak, habitStreak),
+                lastCompletedDate: today
+            };
+        })
+        : previousHabits;
+
+    let earnedXp = task.isFrog ? XP_PER_TASK * XP_PER_FROG_MULTIPLIER : XP_PER_TASK;
+    if (task.habitId) earnedXp += habitStreak * 2;
+    if (task.goalId || task.habitId) earnedXp += XP_GOAL_SYNERGY_BONUS;
+    if (flowState === 'flow') earnedXp += 15;
+    if (flowState === 'high') earnedXp += 10;
+    const dayComplete = previousTasks.every(candidate => candidate.id === taskId
+        || candidate.dateAssigned !== today || candidate.completed || candidate.wontDo);
+    if (dayComplete) earnedXp += 50;
+    const previousProgress = getUserProgress();
+    const progressResult = checkLevelUp(
+        previousProgress.xp + earnedXp,
+        previousProgress.level,
+        previousProgress.xpToNextLevel
+    );
+    const nextProgress = {
+        level: progressResult.level,
+        xp: progressResult.xp,
+        xpToNextLevel: progressResult.next
+    };
+
+    storageService.stageLocalValues(USER_KEY, [
+        { storeName: STORES.TASKS, previousValue: previousTasks, nextValue: nextTasks },
+        { storeName: STORES.STATS, previousValue: previousAllStats, nextValue: nextAllStats },
+        { storeName: STORES.GOALS, previousValue: previousGoals, nextValue: nextGoals },
+        { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits },
+        { storeName: STORES.PROGRESS, previousValue: previousProgress, nextValue: nextProgress }
+    ]);
+    // React only sees the completion after the complete logical action exists
+    // in one read-verified WAL entry. A quota/error leaves every state untouched
+    // and the completion tap retryable.
+    setTasksFromStorage(nextTasks);
+    setAllStatsFromStorage(nextAllStats);
+    if (nextGoals !== previousGoals) setGoalsFromStorage(nextGoals);
+    if (nextHabits !== previousHabits) setHabitsFromStorage(nextHabits);
+    setUserProgressFromStorage(nextProgress);
     completedTaskIds.current.add(taskId);
-    setTasks(prev => prev.map(t => t.id === taskId ? { 
-        ...t, completed: true, lifecycleStatus: 'completed', completedAt: Date.now(), actualDuration, flowState, description: finalDescription || t.description
-    } : t));
-
-    if(task) {
-        setStats(prev => ({
-            ...prev,
-            tasksCompleted: prev.tasksCompleted + 1,
-            frogsEaten: prev.frogsEaten + (task.isFrog ? 1 : 0),
-            timeFocused: prev.timeFocused + (actualDuration || task.duration || 0),
-        }));
-
-        if (task.goalId) {
-            setGoals(prev => prev.map(g => g.id === task.goalId ? { ...g, completedTasks: g.completedTasks + 1 } : g));
-        }
-        
-        let habitStreak = 0;
-        if (task.habitId) {
-            setHabits(prev => prev.map(h => {
-                if (h.id === task.habitId) {
-                    habitStreak = h.streak + 1;
-                    return { ...h, streak: habitStreak, bestStreak: Math.max(h.bestStreak, habitStreak), lastCompletedDate: getTodayYYYYMMDD() };
-                }
-                return h;
-            }));
-        }
-
-        let earnedXp = task.isFrog ? XP_PER_TASK * XP_PER_FROG_MULTIPLIER : XP_PER_TASK;
-        if (task.habitId) earnedXp += (habitStreak * 2);
-        if (task.goalId || task.habitId) earnedXp += XP_GOAL_SYNERGY_BONUS;
-        if (flowState === 'flow') earnedXp += 15; 
-        if (flowState === 'high') earnedXp += 10;
-
-        const remainingToday = tasks.filter(t => t.id !== taskId && t.dateAssigned === getTodayYYYYMMDD() && !t.completed && !t.wontDo);
-        if (remainingToday.length === 0) {
-            earnedXp += 50;
-            setTimeout(() => setGamificationEvent({ type: 'reward', amount: 50, message: "Day Complete!" }), 500);
-        }
-
-        setUserProgress(prev => {
-            const { xp, level, next, leveledUp } = checkLevelUp(prev.xp + earnedXp, prev.level, prev.xpToNextLevel);
-            if (leveledUp) setJustLeveledUp(true);
-            return { level, xp, xpToNextLevel: next };
-        });
+    if (progressResult.leveledUp) setJustLeveledUp(true);
+    if (dayComplete) {
+        setTimeout(() => setGamificationEvent({ type: 'reward', amount: 50, message: "Day Complete!" }), 500);
     }
-  }, [tasks, habits]);
+    void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+        console.error('Failed to flush the durable completion transaction.', error);
+    });
+  }, [getAllStats, getGoals, getHabits, getTasks, getUserProgress, setAllStatsFromStorage,
+      setGoalsFromStorage, setHabitsFromStorage, setTasksFromStorage, setUserProgressFromStorage, USER_KEY]);
 
   const trackBreakTime = useCallback((minutes: number) => {
       setStats(prev => ({ ...prev, totalBreakMinutes: (prev.totalBreakMinutes || 0) + minutes }));
@@ -644,21 +889,46 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
           ...habitData, title: cleanTitle, duration: habitData.duration || duration || 25, hashtags: [...(habitData.hashtags || []), ...hashtags],
           id: crypto.randomUUID(), streak: 0, bestStreak: 0, createdAt: Date.now(), beforeFrog: !!habitData.beforeFrog
       };
-      setHabits(prev => [...prev, newHabit]);
-      setUserProgress(prev => {
-          const newXp = prev.xp + XP_HABIT_SETUP_BONUS;
-          if (newXp >= prev.xpToNextLevel) {
-              setJustLeveledUp(true);
-              return { level: prev.level + 1, xp: newXp - prev.xpToNextLevel, xpToNextLevel: calculateXpToNextLevel(prev.level + 1) };
+      const previousHabits = getHabits();
+      const nextHabits = [...previousHabits, newHabit];
+      const previousProgress = getUserProgress();
+      const newXp = previousProgress.xp + XP_HABIT_SETUP_BONUS;
+      const leveledUp = newXp >= previousProgress.xpToNextLevel;
+      const nextProgress = leveledUp
+          ? {
+              level: previousProgress.level + 1,
+              xp: newXp - previousProgress.xpToNextLevel,
+              xpToNextLevel: calculateXpToNextLevel(previousProgress.level + 1)
           }
-          return { ...prev, xp: newXp };
+          : { ...previousProgress, xp: newXp };
+      storageService.stageLocalValues(USER_KEY, [
+          { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits },
+          { storeName: STORES.PROGRESS, previousValue: previousProgress, nextValue: nextProgress }
+      ]);
+      setHabitsFromStorage(nextHabits);
+      setUserProgressFromStorage(nextProgress);
+      if (leveledUp) setJustLeveledUp(true);
+      void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+          console.error('Failed to flush the durable habit creation transaction.', error);
       });
-  }, []);
+  }, [USER_KEY, getHabits, getUserProgress, setHabitsFromStorage, setUserProgressFromStorage]);
 
   const deleteHabit = useCallback((id: string) => {
-      setHabits(prev => prev.filter(h => h.id !== id));
-      setTasks(prev => prev.map(t => t.habitId === id ? { ...t, habitId: undefined } : t));
-  }, []);
+      const previousHabits = getHabits();
+      if (!previousHabits.some(habit => habit.id === id)) return;
+      const previousTasks = getTasks();
+      const nextHabits = previousHabits.filter(habit => habit.id !== id);
+      const nextTasks = previousTasks.map(task => task.habitId === id ? { ...task, habitId: undefined } : task);
+      storageService.stageLocalValues(USER_KEY, [
+          { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits },
+          { storeName: STORES.TASKS, previousValue: previousTasks, nextValue: nextTasks }
+      ]);
+      setHabitsFromStorage(nextHabits);
+      setTasksFromStorage(nextTasks);
+      void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+          console.error('Failed to flush the durable habit deletion transaction.', error);
+      });
+  }, [USER_KEY, getHabits, getTasks, setHabitsFromStorage, setTasksFromStorage]);
 
   const updateHabit = useCallback((id: string, updates: any) => {
       let parsed = { ...updates };
@@ -679,10 +949,25 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
 
   const updateGoal = useCallback((id: string, updates: any) => setGoals(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g)), []);
   const deleteGoal = useCallback((id: string) => {
-    setGoals(prev => prev.filter(g => g.id !== id));
-    setTasks(prev => prev.map(t => t.goalId === id ? { ...t, goalId: undefined } : t));
-    setHabits(prev => prev.map(h => h.goalId === id ? { ...h, goalId: undefined } : h));
-  }, []);
+    const previousGoals = getGoals();
+    if (!previousGoals.some(goal => goal.id === id)) return;
+    const previousTasks = getTasks();
+    const previousHabits = getHabits();
+    const nextGoals = previousGoals.filter(goal => goal.id !== id);
+    const nextTasks = previousTasks.map(task => task.goalId === id ? { ...task, goalId: undefined } : task);
+    const nextHabits = previousHabits.map(habit => habit.goalId === id ? { ...habit, goalId: undefined } : habit);
+    storageService.stageLocalValues(USER_KEY, [
+        { storeName: STORES.GOALS, previousValue: previousGoals, nextValue: nextGoals },
+        { storeName: STORES.TASKS, previousValue: previousTasks, nextValue: nextTasks },
+        { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits }
+    ]);
+    setGoalsFromStorage(nextGoals);
+    setTasksFromStorage(nextTasks);
+    setHabitsFromStorage(nextHabits);
+    void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+        console.error('Failed to flush the durable goal deletion transaction.', error);
+    });
+  }, [USER_KEY, getGoals, getHabits, getTasks, setGoalsFromStorage, setHabitsFromStorage, setTasksFromStorage]);
 
   const addTrueNorthGoal = useCallback((data: any) => {
     const id = crypto.randomUUID();
@@ -691,10 +976,26 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   }, []);
   const updateTrueNorthGoal = useCallback((id: string, updates: any) => setTrueNorthGoals(prev => prev.map(g => g.id === id ? { ...g, ...updates } : g)), []);
   const deleteTrueNorthGoal = useCallback((id: string) => {
-    setTrueNorthGoals(prev => prev.filter(g => g.id !== id));
-    setTasks(prev => prev.map(t => t.goalId === id ? { ...t, goalId: undefined } : t));
-    setHabits(prev => prev.map(h => h.goalId === id ? { ...h, goalId: undefined } : h));
-  }, []);
+    const previousTrueNorthGoals = getTrueNorthGoals();
+    if (!previousTrueNorthGoals.some(goal => goal.id === id)) return;
+    const previousTasks = getTasks();
+    const previousHabits = getHabits();
+    const nextTrueNorthGoals = previousTrueNorthGoals.filter(goal => goal.id !== id);
+    const nextTasks = previousTasks.map(task => task.goalId === id ? { ...task, goalId: undefined } : task);
+    const nextHabits = previousHabits.map(habit => habit.goalId === id ? { ...habit, goalId: undefined } : habit);
+    storageService.stageLocalValues(USER_KEY, [
+        { storeName: STORES.TRUE_NORTH, previousValue: previousTrueNorthGoals, nextValue: nextTrueNorthGoals },
+        { storeName: STORES.TASKS, previousValue: previousTasks, nextValue: nextTasks },
+        { storeName: STORES.HABITS, previousValue: previousHabits, nextValue: nextHabits }
+    ]);
+    setTrueNorthGoalsFromStorage(nextTrueNorthGoals);
+    setTasksFromStorage(nextTasks);
+    setHabitsFromStorage(nextHabits);
+    void storageService.flushPendingLocalChanges(USER_KEY).catch(error => {
+        console.error('Failed to flush the durable True North deletion transaction.', error);
+    });
+  }, [USER_KEY, getHabits, getTasks, getTrueNorthGoals, setHabitsFromStorage,
+      setTasksFromStorage, setTrueNorthGoalsFromStorage]);
 
   const updateAmalgam = useCallback((text: string) => setAmalgam(text), []);
   const updateHashtagConfig = useCallback((tag: string, updates: any) => setHashtagConfigs(prev => ({ ...prev, [tag]: { ...prev[tag], ...updates } })), []);
@@ -788,6 +1089,7 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
   return {
     isLoading,
     tasks, goals, habits, trueNorthGoals, amalgam,
+    dailyPlans, confirmDailyPlan, clearDailyPlan,
     currentTask, todayTasks, upcomingTasks, overdueTasks, recentCompletedTasks, allCompletedTasks, 
     stats, userProgress, hashtagConfigs, accountabilityConfig, justLeveledUp, setJustLeveledUp,
     gamificationEvent, setGamificationEvent, planningWarning, setPlanningWarning,

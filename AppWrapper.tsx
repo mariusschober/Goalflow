@@ -76,7 +76,7 @@ const AppWrapper: React.FC = () => {
   const identity = localUser || displayIdentity(session!);
   const userKey = localUser || session!.user.id;
   return <>
-    <App userEmail={identity} userKey={userKey} openAccountSetup={recoveryEmailRequired} onLogout={() => {
+    <App key={userKey} userEmail={identity} userKey={userKey} openAccountSetup={recoveryEmailRequired} onLogout={() => {
       if (testBuild) {
         authService.clearTestAccess();
         setTestUnlocked(false);

@@ -1,6 +1,7 @@
 package com.mariusschober.goalflow.nativeapp.data
 
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
+import com.mariusschober.goalflow.nativeapp.domain.GoalflowHabit
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -20,10 +21,41 @@ class GoalflowBackupTest {
 
     @Test
     fun `encrypted backup round trips`() {
-        val payload = GoalflowBackupPayload(listOf(task), emptyList(), emptyList())
+        val payload = GoalflowBackupPayload(
+            tasks = listOf(task),
+            goals = emptyList(),
+            plans = emptyList(),
+            habits = listOf(GoalflowHabit(id = "habit-1", title = "Keep habit", createdAt = 3L)),
+            outbox = listOf(
+                SyncOutboxEntity(
+                    mutationId = "00000000-0000-4000-8000-000000000001",
+                    deviceId = "device-a",
+                    entityType = "tasks",
+                    entityId = task.id,
+                    baseServerVersion = null,
+                    version = 1,
+                    payload = GoalflowJson.taskPayload(task).toString(),
+                    updatedAt = "2026-08-27T00:00:00Z",
+                    deletedAt = null
+                )
+            ),
+            syncMeta = listOf(SyncMetaEntity("tasks:${task.id}", 0, 1, null, null)),
+            conflicts = listOf(
+                SyncConflictEntity(
+                    id = "conflict-1",
+                    entityType = "tasks",
+                    entityId = task.id,
+                    localPayload = GoalflowJson.taskPayload(task).toString(),
+                    serverPayload = "{}",
+                    serverVersion = 2,
+                    createdAt = "2026-08-27T00:00:00Z"
+                )
+            ),
+            ownerUserId = "00000000-0000-4000-8000-000000000001"
+        )
         val restored = GoalflowBackup.decrypt(GoalflowBackup.encrypt(payload, PASSWORD), PASSWORD)
 
-        assertEquals(payload.tasks, restored.tasks)
+        assertEquals(payload, restored)
     }
 
     @Test

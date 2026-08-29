@@ -3,7 +3,9 @@ package com.mariusschober.goalflow.nativeapp.data
 import android.content.Context
 import androidx.room.Dao
 import androidx.room.Database
+import androidx.room.ColumnInfo
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
@@ -74,7 +76,10 @@ data class HabitEntity(
     val createdAt: Long
 )
 
-@Entity(tableName = "sync_outbox")
+@Entity(
+    tableName = "sync_outbox",
+    indices = [Index(value = ["entityType", "entityId", "version"])]
+)
 data class SyncOutboxEntity(
     @PrimaryKey val mutationId: String,
     val deviceId: String,
@@ -84,7 +89,10 @@ data class SyncOutboxEntity(
     val version: Long,
     val payload: String,
     val updatedAt: String,
-    val deletedAt: String?
+    val deletedAt: String?,
+    val dependsOnMutationId: String? = null,
+    val resolvesConflictId: String? = null,
+    val attemptedAt: String? = null
 )
 
 @Entity(tableName = "sync_meta")
@@ -96,14 +104,29 @@ data class SyncMetaEntity(
     val lastSuccessfulSync: String?
 )
 
-@Entity(tableName = "sync_conflicts")
+@Entity(
+    tableName = "sync_conflicts",
+    indices = [Index(value = ["entityType", "entityId", "status"])]
+)
 data class SyncConflictEntity(
     @PrimaryKey val id: String,
     val entityType: String,
+    @ColumnInfo(defaultValue = "'singleton'") val entityId: String = "singleton",
+    val mutationId: String? = null,
     val localPayload: String,
+    val localDeletedAt: String? = null,
+    @ColumnInfo(defaultValue = "'[]'") val localHistory: String = "[]",
     val serverPayload: String,
+    val serverDeletedAt: String? = null,
     val serverVersion: Long,
-    val createdAt: String
+    val createdAt: String,
+    @ColumnInfo(defaultValue = "'unresolved'") val status: String = "unresolved"
+)
+
+@Entity(tableName = "local_account")
+data class LocalAccountEntity(
+    @PrimaryKey val bindingKey: String = "owner",
+    val userId: String
 )
 
 @Dao
@@ -113,6 +136,9 @@ interface TaskDao {
 
     @Query("SELECT * FROM tasks")
     suspend fun getAll(): List<TaskEntity>
+
+    @Query("SELECT * FROM tasks WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): TaskEntity?
 
     @Query("SELECT COALESCE(MAX(plannedOrder), -1) FROM tasks WHERE scheduledFor = :scheduledFor AND schedulePrecision = :precision")
     suspend fun maxOrder(scheduledFor: String, precision: String): Int
@@ -131,6 +157,9 @@ interface TaskDao {
 
     @Query("DELETE FROM tasks")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM tasks WHERE id = :id")
+    suspend fun delete(id: String)
 }
 
 @Dao
@@ -147,8 +176,14 @@ interface GoalDao {
     @Query("SELECT * FROM goals")
     suspend fun getAll(): List<GoalEntity>
 
+    @Query("SELECT * FROM goals WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): GoalEntity?
+
     @Query("DELETE FROM goals")
     suspend fun deleteAll()
+
+    @Query("DELETE FROM goals WHERE id = :id")
+    suspend fun delete(id: String)
 }
 
 @Dao
@@ -183,23 +218,50 @@ interface HabitDao {
     @Query("SELECT * FROM habits")
     suspend fun getAll(): List<HabitEntity>
 
+    @Query("SELECT * FROM habits WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): HabitEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(habit: HabitEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(habits: List<HabitEntity>)
+
+    @Query("DELETE FROM habits WHERE id = :id")
+    suspend fun delete(id: String)
+
+    @Query("DELETE FROM habits")
+    suspend fun deleteAll()
 }
 
 @Dao
 interface SyncOutboxDao {
+    @Query("SELECT * FROM sync_outbox WHERE mutationId = :mutationId LIMIT 1")
+    suspend fun get(mutationId: String): SyncOutboxEntity?
+
     @Query("SELECT * FROM sync_outbox ORDER BY version ASC, mutationId ASC")
     suspend fun getAll(): List<SyncOutboxEntity>
+
+    @Query("SELECT * FROM sync_outbox WHERE entityType = :entityType AND entityId = :entityId ORDER BY version ASC, mutationId ASC")
+    suspend fun getForEntity(entityType: String, entityId: String): List<SyncOutboxEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(mutation: SyncOutboxEntity)
 
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(mutations: List<SyncOutboxEntity>)
+
     @Query("DELETE FROM sync_outbox WHERE mutationId = :mutationId")
     suspend fun delete(mutationId: String)
 
-    @Query("DELETE FROM sync_outbox WHERE entityType = :entityType")
-    suspend fun deleteForEntity(entityType: String)
+    @Query("DELETE FROM sync_outbox WHERE entityType = :entityType AND entityId = :entityId")
+    suspend fun deleteForEntity(entityType: String, entityId: String)
+
+    @Query("UPDATE sync_outbox SET attemptedAt = :attemptedAt WHERE mutationId IN (:mutationIds)")
+    suspend fun markAttempted(mutationIds: List<String>, attemptedAt: String)
+
+    @Query("DELETE FROM sync_outbox")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -207,8 +269,17 @@ interface SyncMetaDao {
     @Query("SELECT * FROM sync_meta WHERE entityType = :entityType LIMIT 1")
     suspend fun get(entityType: String): SyncMetaEntity?
 
+    @Query("SELECT * FROM sync_meta")
+    suspend fun getAll(): List<SyncMetaEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(meta: SyncMetaEntity)
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(meta: List<SyncMetaEntity>)
+
+    @Query("DELETE FROM sync_meta")
+    suspend fun deleteAll()
 }
 
 @Dao
@@ -216,11 +287,38 @@ interface SyncConflictDao {
     @Query("SELECT * FROM sync_conflicts ORDER BY createdAt ASC, id ASC")
     fun observeAll(): Flow<List<SyncConflictEntity>>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Query("SELECT * FROM sync_conflicts ORDER BY createdAt ASC, id ASC")
+    suspend fun getAll(): List<SyncConflictEntity>
+
+    @Query("SELECT * FROM sync_conflicts WHERE entityType = :entityType AND entityId = :entityId AND status NOT IN ('resolved', 'resolving_local') ORDER BY createdAt ASC LIMIT 1")
+    suspend fun getUnresolved(entityType: String, entityId: String): SyncConflictEntity?
+
+    @Query("SELECT * FROM sync_conflicts WHERE id = :id LIMIT 1")
+    suspend fun get(id: String): SyncConflictEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(conflict: SyncConflictEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAll(conflicts: List<SyncConflictEntity>)
+
+    @Update
+    suspend fun update(conflict: SyncConflictEntity)
 
     @Query("DELETE FROM sync_conflicts WHERE id = :id")
     suspend fun delete(id: String)
+
+    @Query("DELETE FROM sync_conflicts")
+    suspend fun deleteAll()
+}
+
+@Dao
+interface LocalAccountDao {
+    @Query("SELECT * FROM local_account WHERE bindingKey = 'owner' LIMIT 1")
+    suspend fun get(): LocalAccountEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(account: LocalAccountEntity)
 }
 
 @Database(
@@ -231,9 +329,10 @@ interface SyncConflictDao {
         HabitEntity::class,
         SyncOutboxEntity::class,
         SyncMetaEntity::class,
-        SyncConflictEntity::class
+        SyncConflictEntity::class,
+        LocalAccountEntity::class
     ],
-    version = 2,
+    version = 4,
     exportSchema = false
 )
 abstract class GoalflowDatabase : RoomDatabase() {
@@ -244,6 +343,7 @@ abstract class GoalflowDatabase : RoomDatabase() {
     abstract fun syncOutboxDao(): SyncOutboxDao
     abstract fun syncMetaDao(): SyncMetaDao
     abstract fun syncConflictDao(): SyncConflictDao
+    abstract fun localAccountDao(): LocalAccountDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -255,10 +355,32 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE sync_outbox ADD COLUMN dependsOnMutationId TEXT")
+                database.execSQL("ALTER TABLE sync_outbox ADD COLUMN resolvesConflictId TEXT")
+                database.execSQL("ALTER TABLE sync_outbox ADD COLUMN attemptedAt TEXT")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN entityId TEXT NOT NULL DEFAULT 'singleton'")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN mutationId TEXT")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN localDeletedAt TEXT")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN localHistory TEXT NOT NULL DEFAULT '[]'")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN serverDeletedAt TEXT")
+                database.execSQL("ALTER TABLE sync_conflicts ADD COLUMN status TEXT NOT NULL DEFAULT 'unresolved'")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_sync_outbox_entityType_entityId_version ON sync_outbox (entityType, entityId, version)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_sync_conflicts_entityType_entityId_status ON sync_conflicts (entityType, entityId, status)")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE TABLE IF NOT EXISTS local_account (bindingKey TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL)")
+            }
+        }
+
         fun create(context: Context): GoalflowDatabase = Room.databaseBuilder(
             context,
             GoalflowDatabase::class.java,
             "goalflow-native.db"
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
     }
 }

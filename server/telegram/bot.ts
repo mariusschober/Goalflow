@@ -4,6 +4,11 @@ import type { Logger } from "../logger";
 import type { SpeechProvider } from "../speech/types";
 import { buildTodayQueue, getPlanningGate, type DailyPlan, type ScheduledTask } from "../../src/domain/scheduling";
 import { parseTelegramCapture } from "./capture";
+import { v5 as uuidv5 } from "uuid";
+
+const TELEGRAM_MUTATION_NAMESPACE = "af6e79e1-c616-4c61-bc96-7207d02c9a95";
+const mutationIdForUpdate = (updateId: number, operation: string): string =>
+  uuidv5(`${updateId}:${operation}`, TELEGRAM_MUTATION_NAMESPACE);
 
 interface TelegramUser { id: number; username?: string }
 interface TelegramChat { id: number }
@@ -60,6 +65,16 @@ const identityFor = async (database: SupabaseClient, telegramUserId: number) => 
   return data;
 };
 
+const existingApiReceipt = async (database: SupabaseClient, userId: string, mutationId: string) => {
+  const { data, error } = await database.from("api_mutation_receipts")
+    .select("operation,response")
+    .eq("user_id", userId)
+    .eq("mutation_id", mutationId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as { operation?: string; response?: Record<string, unknown> } | null;
+};
+
 const localDateFor = async (database: SupabaseClient, userId: string): Promise<string> => {
   const { data } = await database.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
   const timeZone = String(data?.timezone ?? "UTC");
@@ -80,24 +95,48 @@ const loadQueue = async (database: SupabaseClient, userId: string, today: string
   return { tasks, gate: getPlanningGate(tasks, today, plan), queue: buildTodayQueue(tasks, today) };
 };
 
-const createTask = async (database: SupabaseClient, userId: string, capture: ReturnType<typeof parseTelegramCapture>) => {
-  const { data, error } = await database.from("tasks").insert({
-    user_id: userId, title: capture.title, schedule_precision: capture.schedulePrecision,
-    scheduled_for: capture.schedulePrecision === "month" ? `${capture.scheduledFor}-01` : capture.scheduledFor,
-    source: "telegram"
-  }).select("*").single();
+const createTask = async (
+  database: SupabaseClient,
+  userId: string,
+  capture: ReturnType<typeof parseTelegramCapture>,
+  today: string,
+  mutationId: string,
+  taskId = mutationId
+) => {
+  const { data, error } = await database.rpc("goalflow_create_task_idempotent", {
+    target_user_id: userId,
+    target_mutation_id: mutationId,
+    target_local_date: today,
+    task_payload: {
+      taskId,
+      title: capture.title,
+      notes: "",
+      tags: [],
+      schedulePrecision: capture.schedulePrecision,
+      scheduledFor: capture.scheduledFor,
+      plannedOrder: 0,
+      isFrog: false,
+      beforeFrog: false,
+      source: "telegram",
+      estimatedMinutes: 25
+    }
+  });
   if (error) throw error;
-  await database.from("task_events").insert({ user_id: userId, task_id: data.id, event_type: "created", local_date: capture.scheduledFor.length === 10 ? capture.scheduledFor : new Date().toISOString().slice(0, 10) });
   return data;
 };
 
-const captureText = async (config: AppConfig, database: SupabaseClient, userId: string, chatId: number, text: string, today: string) => {
+const captureText = async (
+  config: AppConfig, database: SupabaseClient, userId: string, chatId: number,
+  text: string, today: string, updateId: number
+) => {
   const capture = parseTelegramCapture(text, today);
-  const task = await createTask(database, userId, capture);
+  const task = await createTask(
+    database, userId, capture, today, mutationIdForUpdate(updateId, "capture-task")
+  );
   const dateLabel = capture.schedulePrecision === "day" ? capture.scheduledFor : `month ${capture.scheduledFor}`;
   await send(config, chatId, `<b>Added:</b> ${escapeHtml(capture.title)}\nScheduled for ${dateLabel}.`, {
     inline_keyboard: [[
-      { text: "Undo", callback_data: `undo:${task.id}` },
+      { text: "Undo", callback_data: `undo:${task.id}:${task.revision}` },
       { text: "Change date", callback_data: `date:${task.id}` }
     ]]
   });
@@ -105,9 +144,24 @@ const captureText = async (config: AppConfig, database: SupabaseClient, userId: 
 
 const handleVoice = async (
   config: AppConfig, database: SupabaseClient, speech: SpeechProvider | undefined,
-  userId: string, message: TelegramMessage, today: string
+  userId: string, message: TelegramMessage, today: string, updateId: number
 ) => {
   if (!speech) { await send(config, message.chat.id, "Voice capture is not configured yet. Send the task as text."); return; }
+  const captureId = mutationIdForUpdate(updateId, "voice-capture");
+  const { data: existingCapture, error: existingError } = await database.from("telegram_captures")
+    .select("id,title,schedule_precision,scheduled_for,state,expires_at")
+    .eq("id", captureId).eq("user_id", userId).maybeSingle();
+  if (existingError) throw existingError;
+  if (existingCapture) {
+    if (existingCapture.state !== "pending") return;
+    await send(config, message.chat.id, `<b>I heard:</b> ${escapeHtml(String(existingCapture.title))}\nConfirm before I add it.`, {
+      inline_keyboard: [[
+        { text: "Add task", callback_data: `confirm:${captureId}` },
+        { text: "Cancel", callback_data: `cancel:${captureId}` }
+      ]]
+    });
+    return;
+  }
   const voice = message.voice!;
   if ((voice.file_size ?? 0) > config.TELEGRAM_MAX_VOICE_BYTES) {
     await send(config, message.chat.id, "That voice note is too large. Keep it under 19 MB."); return;
@@ -123,7 +177,7 @@ const handleVoice = async (
   audio = undefined;
   const capture = parseTelegramCapture(transcript, today);
   const { data, error } = await database.from("telegram_captures").insert({
-    user_id: userId, telegram_chat_id: message.chat.id, kind: "voice", title: capture.title,
+    id: captureId, user_id: userId, telegram_chat_id: message.chat.id, kind: "voice", title: capture.title,
     transcript, schedule_precision: capture.schedulePrecision,
     scheduled_for: capture.schedulePrecision === "month" ? `${capture.scheduledFor}-01` : capture.scheduledFor,
     expires_at: new Date(Date.now() + 15 * 60_000).toISOString()
@@ -155,10 +209,17 @@ export const createTelegramProcessor = (
   const today = await localDateFor(database, userId);
 
   if (callback?.data) {
-    const [action, id] = callback.data.split(":");
+    const [action, id, revisionText] = callback.data.split(":");
     if (action === "undo") {
-      await database.from("tasks").update({ status: "dropped" }).eq("id", id).eq("user_id", userId).eq("source", "telegram").eq("status", "open");
-      await answerCallback(config, callback.id, "Task removed"); return;
+      const expected = Number(revisionText);
+      if (!Number.isSafeInteger(expected) || expected <= 0) {
+        await answerCallback(config, callback.id, "Task changed; open Goalflow before removing it."); return;
+      }
+      const { data: dropped, error: dropError } = await database.from("tasks").update({ status: "dropped" })
+        .eq("id", id).eq("user_id", userId).eq("source", "telegram").eq("status", "open")
+        .eq("revision", expected).select("id").maybeSingle();
+      if (dropError) throw dropError;
+      await answerCallback(config, callback.id, dropped ? "Task removed" : "Task changed; nothing was removed."); return;
     }
     if (action === "date") {
       await answerCallback(config, callback.id);
@@ -180,19 +241,41 @@ export const createTelegramProcessor = (
           : String(pending.scheduled_for).slice(0, 10),
         defaultedToToday: false
       };
-      await createTask(database, userId, capture);
-      await database.from("telegram_captures").update({ state: "confirmed" }).eq("id", id);
+      await createTask(
+        database,
+        userId,
+        capture,
+        today,
+        mutationIdForUpdate(update.update_id, "confirm-voice-task"),
+        id
+      );
+      const { error: confirmError } = await database.from("telegram_captures")
+        .update({ state: "confirmed" }).eq("id", id).eq("user_id", userId).eq("state", "pending");
+      if (confirmError) throw confirmError;
       await answerCallback(config, callback.id, "Task added"); return;
     }
   }
 
-  if (message.voice) { await handleVoice(config, database, speech, userId, message, today); return; }
+  if (message.voice) { await handleVoice(config, database, speech, userId, message, today, update.update_id); return; }
   const text = message.text?.trim(); if (!text) return;
   const [commandWithBot, ...parts] = text.split(/\s+/); const command = commandWithBot.toLowerCase().split("@")[0];
   if (command === "/start" || command === "/help") {
     await send(config, message.chat.id, "<b>Goalflow</b>\n/current - one task\n/today - today's ordered queue\n/add Task title - capture\n/done - complete Current\n/skip - rotate Current\nSend plain text or a voice note to capture quickly."); return;
   }
   if (command === "/current" || command === "/today" || command === "/done" || command === "/skip") {
+    const commandMutationId = command === "/done"
+      ? mutationIdForUpdate(update.update_id, "complete-current")
+      : command === "/skip"
+        ? mutationIdForUpdate(update.update_id, "skip-current")
+        : undefined;
+    if (commandMutationId) {
+      const receipt = await existingApiReceipt(database, userId, commandMutationId);
+      if (receipt?.response) {
+        const title = escapeHtml(String(receipt.response.title ?? "task"));
+        await send(config, message.chat.id, command === "/done" ? `Completed: ${title}` : `Moved to the end of today: ${title}`);
+        return;
+      }
+    }
     const { gate, queue } = await loadQueue(database, userId, today);
     if (command === "/today") {
       await send(config, message.chat.id, queue.length ? queue.map((task, index) => `${index + 1}. ${task.isFrog ? "🐸 " : ""}${escapeHtml(task.title)}`).join("\n") : "Nothing is scheduled for today."); return;
@@ -205,10 +288,22 @@ export const createTelegramProcessor = (
       await send(config, message.chat.id, `<b>Current</b>\n${escapeHtml(current.title)}${current.notes ? `\n${escapeHtml(current.notes)}` : ""}\n${gate.queue.length} remaining today.`); return;
     }
     if (command === "/done") {
-      const { error } = await database.rpc('goalflow_complete_task', { target_user_id: userId, target_task_id: current.id, target_local_date: today });
+      const { error } = await database.rpc('goalflow_complete_task_idempotent', {
+        target_user_id: userId,
+        target_mutation_id: mutationIdForUpdate(update.update_id, "complete-current"),
+        target_task_id: current.id,
+        target_local_date: today,
+        target_expected_revision: current.version
+      });
       await send(config, message.chat.id, error ? 'The task could not be completed.' : `Completed: ${escapeHtml(current.title)}`); return;
     }
-    const { error } = await database.rpc("goalflow_skip_task", { target_user_id: userId, target_task_id: current.id, target_day: today });
+    const { error } = await database.rpc("goalflow_skip_task_idempotent", {
+      target_user_id: userId,
+      target_mutation_id: mutationIdForUpdate(update.update_id, "skip-current"),
+      target_task_id: current.id,
+      target_day: today,
+      target_expected_revision: current.version
+    });
     if (error) await send(config, message.chat.id, current.isFrog ? "A frog cannot be skipped. Complete it, break it down, or drop it explicitly." : "This task could not be skipped.");
     else await send(config, message.chat.id, `Moved to the end of today: ${escapeHtml(current.title)}`);
     return;
@@ -219,15 +314,29 @@ export const createTelegramProcessor = (
       await send(config, message.chat.id, "Use <code>/move TASK_ID YYYY-MM-DD</code>.");
       return;
     }
+    const moveMutationId = mutationIdForUpdate(update.update_id, "move-task");
+    const existingMove = await existingApiReceipt(database, userId, moveMutationId);
+    if (existingMove?.response) {
+      await send(config, message.chat.id, `Moved to ${String(existingMove.response.scheduled_for).slice(0, 10)}.`); return;
+    }
+    const { data: taskToMove, error: taskError } = await database.from("tasks")
+      .select("revision,status,deleted_at").eq("id", id).eq("user_id", userId).maybeSingle();
+    if (taskError) throw taskError;
+    if (!taskToMove || taskToMove.status !== "open" || taskToMove.deleted_at) {
+      await send(config, message.chat.id, "The task no longer exists or is no longer open."); return;
+    }
     const parsed = parseTelegramCapture(`Move ${date ?? ""}`, today);
-    const { error } = await database.rpc('goalflow_reschedule_task', {
-      target_user_id: userId, target_task_id: id, target_local_date: today,
-      target_schedule_precision: 'day', target_scheduled_for: parsed.scheduledFor, target_scheduled_time: null
+    const { error } = await database.rpc('goalflow_reschedule_task_idempotent', {
+      target_user_id: userId,
+      target_mutation_id: moveMutationId,
+      target_task_id: id, target_local_date: today,
+      target_schedule_precision: 'day', target_scheduled_for: parsed.scheduledFor, target_scheduled_time: null,
+      target_expected_revision: Number(taskToMove.revision)
     });
     await send(config, message.chat.id, error ? "The task could not be moved." : `Moved to ${parsed.scheduledFor}.`); return;
   }
   const captureTextValue = command === "/add" ? parts.join(" ") : text;
-  try { await captureText(config, database, userId, message.chat.id, captureTextValue, today); }
+  try { await captureText(config, database, userId, message.chat.id, captureTextValue, today, update.update_id); }
   catch (error) {
     logger.warn("telegram.capture_rejected", { updateId: update.update_id, userId, category: error instanceof Error ? error.name : "unknown" });
     await send(config, message.chat.id, error instanceof Error ? escapeHtml(error.message) : "The task could not be added.");
