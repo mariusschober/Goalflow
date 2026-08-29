@@ -18,6 +18,7 @@ import com.mariusschober.goalflow.nativeapp.domain.TaskStatus
 import com.mariusschober.goalflow.nativeapp.domain.assertSchedule
 import com.mariusschober.goalflow.nativeapp.domain.buildTodayQueue
 import com.mariusschober.goalflow.nativeapp.domain.isRealLocalDay
+import com.mariusschober.goalflow.nativeapp.domain.planningGate
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
