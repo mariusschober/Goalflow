@@ -10,6 +10,23 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
+/** Semantic surfaces keep the native palette coherent while allowing capture
+ * and focus to have a distinct emotional temperature. */
+object GoalflowTokens {
+    val captureSurfaceLight = Color(0xFFEAF3ED)
+    val captureSurfaceDark = Color(0xFF1E2B24)
+    val focusSurfaceLight = Color(0xFF17392C)
+    val focusSurfaceDark = Color(0xFF0C2118)
+    val frogSurfaceLight = Color(0xFFFFE7A3)
+    val frogSurfaceDark = Color(0xFF574500)
+    val frogAccentLight = Color(0xFF8A6814)
+    val frogAccentDark = Color(0xFFFFD76C)
+}
+
+@Composable
+fun goalflowCaptureSurface(): Color =
+    if (isSystemInDarkTheme()) GoalflowTokens.captureSurfaceDark else GoalflowTokens.captureSurfaceLight
+
 private val GoalflowLightColors = lightColorScheme(
     primary = Color(0xFF315C4B),
     onPrimary = Color.White,

@@ -39,8 +39,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
       - uses: gitleaks/gitleaks-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -112,7 +110,7 @@ jobs:
   native-android:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -138,6 +136,15 @@ jobs:
       - run: ./android-native/gradlew -p android-native assembleProductionDebug
       - run: ./android-native/gradlew -p android-native assembleProductionRelease
       - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Run native emulator journey
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: ./android-native/gradlew -p android-native connectedProductionDebugAndroidTest
       - name: Upload native production debug APK
         uses: actions/upload-artifact@v4
         with:
@@ -150,3 +157,4 @@ jobs:
           name: goalflow-native-sandbox-debug-apk
           path: android-native/app/build/outputs/apk/sandbox/debug/*.apk
           if-no-files-found: error
+

@@ -129,7 +129,8 @@ data class BreakdownChild(
     val notes: String = "",
     val schedulePrecision: SchedulePrecision = SchedulePrecision.DAY,
     val scheduledFor: String,
-    val scheduledTime: String? = null
+    val scheduledTime: String? = null,
+    val duration: Int = 25
 )
 
 sealed interface PlanningGate {

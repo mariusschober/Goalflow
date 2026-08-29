@@ -8,6 +8,7 @@ import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngine
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
 import com.mariusschober.goalflow.nativeapp.sync.SecureSessionStore
+import com.mariusschober.goalflow.nativeapp.widget.GoalflowWidgetUpdater
 import java.util.UUID
 
 class GoalflowApplication : Application() {
@@ -26,9 +27,11 @@ class GoalflowApplication : Application() {
     val sessionStore: SecureSessionStore by lazy { SecureSessionStore(this) }
     val preferences: GoalflowPreferences by lazy { GoalflowPreferences(this) }
     val focusSessionStore: GoalflowFocusSessionStore by lazy { GoalflowFocusSessionStore(this) }
+    val soundController: GoalflowSoundController by lazy { GoalflowSoundController() }
     val repository: GoalflowRepository by lazy {
         GoalflowRepository(database, deviceId) {
             runCatching { NativeSyncScheduler.schedule(this) }
+            GoalflowWidgetUpdater.refresh(this)
         }
     }
     val syncEngine: NativeSyncEngine by lazy { NativeSyncEngine(repository, sessionStore) }

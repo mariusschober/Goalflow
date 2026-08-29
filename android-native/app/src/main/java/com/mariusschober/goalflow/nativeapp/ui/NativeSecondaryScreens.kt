@@ -260,7 +260,7 @@ private fun HabitEditorSheet(
     var selectedDays by rememberSaveable(key) { mutableStateOf(initial?.specificDays?.sorted().orEmpty()) }
     var highPriority by rememberSaveable(key) { mutableStateOf(initial?.isHighPriority ?: false) }
     var beforeFrog by rememberSaveable(key) { mutableStateOf(initial?.beforeFrog ?: false) }
-    var duration by rememberSaveable(key) { mutableStateOf(initial?.duration?.toString().orEmpty()) }
+    var duration by rememberSaveable(key) { mutableStateOf(initial?.duration) }
     var goalId by rememberSaveable(key) { mutableStateOf(initial?.goalId.orEmpty()) }
     var goalMenuOpen by remember { mutableStateOf(false) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
@@ -300,13 +300,11 @@ private fun HabitEditorSheet(
                     }
                 }
             }
-            OutlinedTextField(
+            GoalflowDurationField(
                 value = duration,
-                onValueChange = { duration = it.filter(Char::isDigit).take(4) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Focus minutes (optional)") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+                onValueChange = { duration = it },
+                label = "Focus time (optional)",
+                optional = true
             )
             Box {
                 OutlinedButton(onClick = { goalMenuOpen = true }, modifier = Modifier.fillMaxWidth()) {
@@ -326,7 +324,7 @@ private fun HabitEditorSheet(
                 onClick = {
                     if (!saving) {
                         val cleanTitle = title.trim()
-                        val parsedDuration = duration.toIntOrNull()
+                        val parsedDuration = duration
                         when {
                             cleanTitle.isBlank() -> localError = "A habit needs a clear title."
                             frequencyName == HabitFrequency.SPECIFIC_DAYS.name && selectedDays.isEmpty() -> localError = "Choose at least one weekday."
@@ -662,7 +660,7 @@ private fun TrueNorthEditorSheet(initial: GoalflowTrueNorth?, error: String?, on
     var importance by rememberSaveable(key) { mutableStateOf(initial?.importance?.toFloat() ?: 5f) }
     var anchorHabit by rememberSaveable(key) { mutableStateOf(initial?.anchorHabit.orEmpty()) }
     var anchorTask by rememberSaveable(key) { mutableStateOf(initial?.anchorTask.orEmpty()) }
-    var duration by rememberSaveable(key) { mutableStateOf(initial?.anchorHabitDuration?.toString() ?: "15") }
+    var duration by rememberSaveable(key) { mutableStateOf(initial?.anchorHabitDuration ?: 15) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(error) {
@@ -680,17 +678,23 @@ private fun TrueNorthEditorSheet(initial: GoalflowTrueNorth?, error: String?, on
             Text("Importance: ${importance.toInt()}/10", style = MaterialTheme.typography.labelLarge)
             Slider(value = importance, onValueChange = { importance = it }, valueRange = 1f..10f, steps = 8)
             OutlinedTextField(value = anchorHabit, onValueChange = { anchorHabit = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Anchor habit (optional)") }, singleLine = true)
-            if (anchorHabit.isNotBlank()) OutlinedTextField(value = duration, onValueChange = { duration = it.filter(Char::isDigit).take(4) }, modifier = Modifier.fillMaxWidth(), label = { Text("Anchor habit minutes") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number))
+            if (anchorHabit.isNotBlank()) {
+                GoalflowDurationField(
+                    value = duration,
+                    onValueChange = { duration = it ?: 15 },
+                    label = "Anchor habit time"
+                )
+            }
             OutlinedTextField(value = anchorTask, onValueChange = { anchorTask = it }, modifier = Modifier.fillMaxWidth(), label = { Text("First milestone (optional)") }, singleLine = true)
             (error ?: localError)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             Button(onClick = {
                 if (!saving) {
                     when {
                         vision.trim().isBlank() -> localError = "A vision needs a clear outcome."
-                        anchorHabit.isNotBlank() && (duration.toIntOrNull() ?: 0) !in 1..1_440 -> localError = "Anchor duration must be between 1 and 1,440 minutes."
+                        anchorHabit.isNotBlank() && duration !in 1..1_440 -> localError = "Anchor duration must be between 1 and 1,440 minutes."
                         else -> {
                             saving = true
-                            onSave(NativeTrueNorthDraft(vision.trim(), moneyGoal, tangible.trim().takeIf(String::isNotBlank), sensory.trim(), planB.trim(), importance.toInt().coerceIn(1, 10), anchorHabit.trim().takeIf(String::isNotBlank), anchorTask.trim().takeIf(String::isNotBlank), duration.toIntOrNull()?.coerceIn(1, 1_440)))
+                            onSave(NativeTrueNorthDraft(vision.trim(), moneyGoal, tangible.trim().takeIf(String::isNotBlank), sensory.trim(), planB.trim(), importance.toInt().coerceIn(1, 10), anchorHabit.trim().takeIf(String::isNotBlank), anchorTask.trim().takeIf(String::isNotBlank), duration.coerceIn(1, 1_440)))
                         }
                     }
                 }
@@ -872,7 +876,7 @@ fun NativeTaskEditorSheet(
     var notes by rememberSaveable(key) { mutableStateOf(task.notes) }
     var precisionName by rememberSaveable(key) { mutableStateOf(task.schedulePrecision.name) }
     var scheduledFor by rememberSaveable(key) { mutableStateOf(task.scheduledFor) }
-    var scheduledTime by rememberSaveable(key) { mutableStateOf(task.scheduledTime.orEmpty()) }
+    var scheduledTime by rememberSaveable(key) { mutableStateOf<String?>(task.scheduledTime) }
     var frog by rememberSaveable(key) { mutableStateOf(task.isFrog) }
     var selectedGoalId by rememberSaveable(key) { mutableStateOf(task.goalId) }
     var showDatePicker by rememberSaveable(key) { mutableStateOf(false) }
@@ -881,12 +885,12 @@ fun NativeTaskEditorSheet(
             .getOrDefault(25)
             .coerceIn(1, 1_440)
     }
-    var duration by rememberSaveable(key) { mutableStateOf(initialDuration.toString()) }
+    var duration by rememberSaveable(key) { mutableStateOf(initialDuration) }
     var goalMenuOpen by rememberSaveable(key) { mutableStateOf(false) }
     var saving by rememberSaveable(key) { mutableStateOf(false) }
     var localError by rememberSaveable(key) { mutableStateOf<String?>(null) }
     LaunchedEffect(error) { if (error != null) saving = false }
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
+    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = goalflowCaptureSurface()) {
         Column(modifier = Modifier.fillMaxWidth().imePadding().navigationBarsPadding().verticalScroll(rememberScrollState()).padding(horizontal = 24.dp).padding(bottom = 28.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text("Edit commitment", style = MaterialTheme.typography.headlineMedium)
             OutlinedTextField(value = title, onValueChange = { title = it }, modifier = Modifier.fillMaxWidth(), label = { Text("What needs to happen?") }, singleLine = true)
@@ -917,22 +921,17 @@ fun NativeTaskEditorSheet(
                 }
             }
             if (precisionName == SchedulePrecision.DAY.name) {
-                OutlinedTextField(
+                GoalflowTimeField(
                     value = scheduledTime,
-                    onValueChange = { scheduledTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Time (HH:mm, optional)") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Done)
+                    onValueChange = { scheduledTime = it },
+                    label = "Time (optional)",
+                    optional = true
                 )
             }
-            OutlinedTextField(
+            GoalflowDurationField(
                 value = duration,
-                onValueChange = { duration = it.filter(Char::isDigit).take(4); localError = null },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Estimated minutes") },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number, imeAction = ImeAction.Next)
+                onValueChange = { duration = it ?: 25; localError = null },
+                label = "Estimated time"
             )
             if (goals.isNotEmpty()) {
                 GoalPicker(
@@ -948,7 +947,7 @@ fun NativeTaskEditorSheet(
             Button(onClick = {
                 if (!saving) {
                     if (title.trim().isBlank()) localError = "A commitment needs a clear title."
-                    else if (duration.toIntOrNull() == null || duration.toInt() !in 1..1_440) localError = "Duration must be between 1 and 1,440 minutes."
+                    else if (duration !in 1..1_440) localError = "Duration must be between 1 and 1,440 minutes."
                     else {
                         saving = true
                         onSave(
@@ -956,10 +955,10 @@ fun NativeTaskEditorSheet(
                             notes.trim(),
                             SchedulePrecision.valueOf(precisionName),
                             scheduledFor,
-                            scheduledTime.trim().takeIf { precisionName == SchedulePrecision.DAY.name && it.isNotBlank() },
+                            scheduledTime?.takeIf { precisionName == SchedulePrecision.DAY.name && it.isNotBlank() },
                             frog,
                             selectedGoalId,
-                            duration.toInt()
+                            duration
                         )
                     }
                 }

@@ -239,6 +239,15 @@ class GoalflowViewModel(
         }
     }
 
+    fun promoteTaskToFrog(task: GoalflowTask) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.promoteTaskToFrog(task.id) }
+                .onSuccess { _notice.value = "Marked as a frog" }
+                .onFailure { failure -> _error.value = failure.message ?: "The commitment could not become a frog." }
+        }
+    }
+
     fun breakDownTask(task: GoalflowTask, children: List<BreakdownChild>, onComplete: () -> Unit) {
         viewModelScope.launch {
             clearError()

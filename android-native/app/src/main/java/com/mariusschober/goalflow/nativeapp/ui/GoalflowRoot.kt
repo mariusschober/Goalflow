@@ -9,6 +9,7 @@ import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -92,6 +94,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
@@ -102,6 +105,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -280,9 +285,13 @@ fun GoalflowRoot(
     }
 
     BackHandler(enabled = destination != RootDestination.CURRENT && !captureOpen && editTask == null &&
-        datePickerForTask == null && breakdownTask == null && backupAction == null && !signInOpen) {
+        datePickerForTask == null && breakdownTask == null && backupAction == null && !signInOpen && focusTask == null) {
         destination = if (destination == RootDestination.INSIGHTS) RootDestination.GOALS else RootDestination.CURRENT
     }
+
+    // A focus session is an intentional single-task room. Back never silently
+    // abandons it; the only exits are completion or an explicit breakdown.
+    BackHandler(enabled = focusTask != null) { }
 
     val exportLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.CreateDocument("application/json")
@@ -378,11 +387,8 @@ fun GoalflowRoot(
                         today = today,
                         gate = gate,
                         currentTask = currentTask,
-                        circadian = circadian,
                         onCapture = { openCapture() },
                         onPlanning = { destination = RootDestination.PLANNING },
-                        onCheckIn = { circadianOpen = true },
-                        onResetCircadian = goalflowViewModel::resetCircadian,
                         onFocus = {
                             localView.performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                             focusStartedAt = application.focusSessionStore.beginOrResume(it.id).startedAtMillis
@@ -391,6 +397,7 @@ fun GoalflowRoot(
                         onComplete = { task ->
                             goalflowViewModel.completeTask(task) {
                                 localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                                application.soundController.playCompletion(task.isFrog)
                             }
                         },
                         onBreakDown = { breakdownTask = it },
@@ -408,6 +415,8 @@ fun GoalflowRoot(
                         today = today,
                         gate = gate,
                         tasks = tasks,
+                        circadian = circadian,
+                        onCheckIn = { circadianOpen = true },
                         onCapture = { openCapture() },
                         onMove = { date, taskId, direction ->
                             localView.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
@@ -422,9 +431,14 @@ fun GoalflowRoot(
                         onComplete = { task ->
                             goalflowViewModel.completeTask(task) {
                                 localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                                application.soundController.playCompletion(task.isFrog)
                             }
                         },
                         onBreakDown = { breakdownTask = it },
+                        onPromoteFrog = { task ->
+                            localView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                            goalflowViewModel.promoteTaskToFrog(task)
+                        },
                         onDrop = { task -> goalflowViewModel.dropTask(task) },
                         onEdit = { editTask = it }
                     )
@@ -636,7 +650,7 @@ fun GoalflowRoot(
                 ?: application.focusSessionStore.read()?.startedAtMillis
                 ?: System.currentTimeMillis(),
             error = error,
-            onDismiss = { focusTask = null },
+            onBreakDown = { breakdownTask = it },
             onComplete = { actualDuration, flowState ->
                 goalflowViewModel.completeTask(task, actualDuration, flowState) {
                     // Keep the timer anchor until the task transaction has
@@ -645,6 +659,7 @@ fun GoalflowRoot(
                     focusTask = null
                     focusStartedAt = null
                     localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                    application.soundController.playCompletion(task.isFrog)
                 }
             }
         )
@@ -694,12 +709,17 @@ fun GoalflowRoot(
                 goalflowViewModel.clearError()
                 breakdownTask = null
             },
-            onConfirm = { titles ->
+            onConfirm = { children ->
                 val todayForChildren = today
                 goalflowViewModel.breakDownTask(
                     task,
-                    titles.map { title -> BreakdownChild(title = title, scheduledFor = todayForChildren) }
-                ) { breakdownTask = null }
+                    children.map { child -> child.copy(scheduledFor = todayForChildren) }
+                ) {
+                    breakdownTask = null
+                    application.focusSessionStore.clear()
+                    focusTask = null
+                    focusStartedAt = null
+                }
             }
         )
     }
@@ -909,11 +929,8 @@ private fun CurrentScreen(
     today: String,
     gate: PlanningGate,
     currentTask: GoalflowTask?,
-    circadian: GoalflowCircadianState,
     onCapture: () -> Unit,
     onPlanning: () -> Unit,
-    onCheckIn: () -> Unit,
-    onResetCircadian: () -> Unit,
     onFocus: (GoalflowTask) -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
@@ -936,14 +953,6 @@ private fun CurrentScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-        }
-        item {
-            CircadianStatusCard(
-                today = today,
-                state = circadian,
-                onCheckIn = onCheckIn,
-                onReset = onResetCircadian
-            )
         }
         item {
             when (gate) {
@@ -1047,10 +1056,9 @@ private fun FocusTimerSheet(
     task: GoalflowTask,
     startedAtMillis: Long,
     error: String?,
-    onDismiss: () -> Unit,
+    onBreakDown: (GoalflowTask) -> Unit,
     onComplete: (actualDurationMinutes: Int, flowState: String?) -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val startedAt = rememberSaveable(task.id, startedAtMillis) { startedAtMillis }
     var now by remember(task.id) { mutableStateOf(System.currentTimeMillis()) }
     var flowState by rememberSaveable(task.id) { mutableStateOf("") }
@@ -1075,43 +1083,49 @@ private fun FocusTimerSheet(
         if (error != null) completing = false
     }
 
-    ModalBottomSheet(
-        onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.imePadding()
+    Surface(
+        modifier = Modifier.fillMaxSize().zIndex(10f),
+        color = MaterialTheme.colorScheme.primaryContainer
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth()
-                .navigationBarsPadding()
+                .fillMaxSize()
+                .safeDrawingPadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 24.dp)
-                .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(horizontal = 24.dp, vertical = 24.dp)
+                .navigationBarsPadding(),
+            verticalArrangement = Arrangement.spacedBy(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("Focus", style = MaterialTheme.typography.headlineMedium)
-            Text(task.title, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text("FOCUS SESSION", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("One thing. Right now.", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
+            Text(
+                if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title,
+                style = MaterialTheme.typography.headlineLarge,
+                fontWeight = FontWeight.SemiBold,
+                textAlign = TextAlign.Center
+            )
             Text(
                 String.format(Locale.ROOT, "%02d:%02d", minutes, seconds),
-                style = MaterialTheme.typography.displayMedium,
+                style = MaterialTheme.typography.displayLarge,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
             )
             LinearProgressIndicator(
                 progress = { progress },
-                modifier = Modifier.fillMaxWidth(),
-                color = MaterialTheme.colorScheme.primary
+                modifier = Modifier.fillMaxWidth().height(10.dp),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
             )
             Text(
                 if (elapsedSeconds >= plannedSeconds) "Planned focus reached. Finish when the commitment is truly done."
                 else "$plannedMinutes minute target · keep the next action small and visible.",
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-            Text("How did the session feel?", style = MaterialTheme.typography.labelLarge)
+            Text("How did the session feel?", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 listOf("distracted" to "Distracted", "good" to "Good", "flow" to "Flow").forEach { (value, label) ->
                     if (flowState == value) {
@@ -1130,13 +1144,25 @@ private fun FocusTimerSheet(
                     }
                 },
                 enabled = !completing,
-                modifier = Modifier.fillMaxWidth().height(58.dp)
+                modifier = Modifier.fillMaxWidth().height(60.dp)
             ) {
                 Icon(Icons.Rounded.Check, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text(if (completing) "Saving…" else "Complete commitment")
             }
-            TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) { Text("Keep working") }
+            OutlinedButton(
+                onClick = { if (!completing) onBreakDown(task) },
+                enabled = !completing,
+                modifier = Modifier.fillMaxWidth().height(56.dp)
+            ) {
+                Text("Stop and break down")
+            }
+            Text(
+                "This session stays open until you complete it or turn it into smaller actions.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                textAlign = TextAlign.Center
+            )
         }
     }
 }
@@ -1208,7 +1234,11 @@ private fun CurrentTaskCard(
 ) {
     Card(
         colors = CardDefaults.cardColors(
-            containerColor = if (task.isFrog) MaterialTheme.colorScheme.secondaryContainer else MaterialTheme.colorScheme.surface
+            containerColor = when {
+                task.isExplicitFrogName() -> MaterialTheme.colorScheme.primaryContainer
+                task.isFrog -> MaterialTheme.colorScheme.secondaryContainer
+                else -> MaterialTheme.colorScheme.surface
+            }
         ),
         border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.25f)),
         shape = RoundedCornerShape(30.dp)
@@ -1220,16 +1250,20 @@ private fun CurrentTaskCard(
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (task.isFrog) {
-                    Icon(Icons.Rounded.Flag, contentDescription = "Frog", tint = MaterialTheme.colorScheme.secondary)
-                    Text("FROG", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
+                if (task.isFrog || task.isExplicitFrogName()) {
+                    if (task.isExplicitFrogName()) {
+                        Text("🐸", style = MaterialTheme.typography.titleLarge)
+                    } else {
+                        Icon(Icons.Rounded.Flag, contentDescription = "Frog", tint = MaterialTheme.colorScheme.secondary)
+                    }
+                    Text("FROG", style = MaterialTheme.typography.labelLarge, color = if (task.isExplicitFrogName()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
                 } else {
                     Text("DO THIS NOW", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
                 }
                 Spacer(Modifier.weight(1f))
                 Text("$remaining remaining", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(task.title, style = MaterialTheme.typography.headlineMedium)
+            Text(if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title, style = MaterialTheme.typography.headlineMedium)
             if (task.notes.isNotBlank()) {
                 Text(task.notes, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
@@ -1258,14 +1292,14 @@ private fun CurrentTaskCard(
                 Text("Start focus session")
             }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
-                if (!task.isFrog) {
+                if (!task.isFrog && !task.isExplicitFrogName()) {
                     TextButton(
                         onClick = { onSkip(task) },
                         modifier = Modifier.semantics { contentDescription = "Skip ${task.title} for now" }
                     ) { Text("Skip for now") }
                 }
                 TextButton(onClick = { onBreakDown(task) }) { Text("Break down") }
-                TextButton(onClick = { onDrop(task) }) { Text("Drop explicitly") }
+                TextButton(onClick = { onDrop(task) }) { Text("Drop") }
             }
         }
     }
@@ -1276,6 +1310,8 @@ private fun PlanningScreen(
     today: String,
     gate: PlanningGate,
     tasks: List<GoalflowTask>,
+    circadian: GoalflowCircadianState,
+    onCheckIn: () -> Unit,
     onCapture: () -> Unit,
     onMove: (String, String, Int) -> Unit,
     onConfirm: (String, List<String>) -> Unit,
@@ -1283,6 +1319,7 @@ private fun PlanningScreen(
     onReschedule: (GoalflowTask, String) -> Unit,
     onComplete: (GoalflowTask) -> Unit,
     onBreakDown: (GoalflowTask) -> Unit,
+    onPromoteFrog: (GoalflowTask) -> Unit,
     onEdit: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
@@ -1297,6 +1334,7 @@ private fun PlanningScreen(
     val overdueTasks = (gate as? PlanningGate.DailyPlanningRequired)?.overdueTaskIds
         ?.mapNotNull { id -> tasks.find { it.id == id } }
         .orEmpty()
+    val timelineById = buildGoalflowTimeline(queue).associateBy { it.taskId }
 
     LazyColumn(
         state = listState,        modifier = Modifier.fillMaxSize(),
@@ -1312,6 +1350,36 @@ private fun PlanningScreen(
                 FloatingActionButton(onClick = onCapture, modifier = Modifier.size(52.dp)) {
                     Icon(Icons.Rounded.Add, contentDescription = "Capture commitment")
                 }
+            }
+        }
+        item {
+            val rhythmLabel = if (circadian.lastCheckIn == today) {
+                "${circadian.mode.replaceFirstChar { it.uppercase(Locale.getDefault()) }} ${circadian.score}%"
+            } else {
+                "Daily rhythm"
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(50))
+                    .background(MaterialTheme.colorScheme.tertiaryContainer)
+                    .clickable(onClick = onCheckIn)
+                    .padding(horizontal = 14.dp, vertical = 9.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Box(Modifier.size(8.dp).clip(CircleShape).background(MaterialTheme.colorScheme.tertiary))
+                Text(
+                    rhythmLabel,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
+                Spacer(Modifier.weight(1f))
+                Text(
+                    if (circadian.lastCheckIn == today) "Adjust" else "Set",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onTertiaryContainer
+                )
             }
         }
         if (monthlyTasks.isNotEmpty()) {
@@ -1361,10 +1429,13 @@ private fun PlanningScreen(
                     }
                     PlannedTaskRow(
                         task = task,
+                        timeline = timelineById[task.id],
                         isFirst = queue.firstOrNull()?.id == task.id,
                         isLast = queue.lastOrNull()?.id == task.id,
                         onMove = { direction -> onMove(today, task.id, direction) },
                         onEdit = { onEdit(task) },
+                        onPromoteFrog = { onPromoteFrog(task) },
+                        onBreakDown = { onBreakDown(task) },
                         onDragDirection = { direction ->
                             insertionTargetIndex = (index + direction).coerceIn(0, queue.size)
                         },
@@ -1416,23 +1487,33 @@ private fun OverdueTaskRow(
     onBreakDown: (GoalflowTask) -> Unit,
     onDrop: (GoalflowTask) -> Unit
 ) {
-    Card(shape = RoundedCornerShape(20.dp)) {
+    Card(
+        colors = CardDefaults.cardColors(
+            containerColor = if (task.isExplicitFrogName()) MaterialTheme.colorScheme.primaryContainer
+            else MaterialTheme.colorScheme.surface
+        ),
+        shape = RoundedCornerShape(20.dp)
+    ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(18.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (task.isFrog) {
-                    Icon(Icons.Rounded.Flag, contentDescription = "Frog", tint = MaterialTheme.colorScheme.secondary)
-                    Text("FROG", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.secondary)
+                if (task.isFrog || task.isExplicitFrogName()) {
+                    if (task.isExplicitFrogName()) {
+                        Text("🐸", style = MaterialTheme.typography.titleMedium)
+                    } else {
+                        Icon(Icons.Rounded.Flag, contentDescription = "Frog", tint = MaterialTheme.colorScheme.secondary)
+                    }
+                    Text("FROG", style = MaterialTheme.typography.labelLarge, color = if (task.isExplicitFrogName()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondary)
                 } else {
                     Text("OVERDUE", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.error)
                 }
                 Spacer(Modifier.weight(1f))
                 Text(task.scheduledFor, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            if (task.isFrog) {
+            Text(if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            if (task.isFrog || task.isExplicitFrogName()) {
                 Text(
                     "This frog cannot be moved forward. Complete it, break it down, or drop it explicitly.",
                     style = MaterialTheme.typography.bodySmall,
@@ -1456,18 +1537,51 @@ private fun OverdueTaskRow(
 @Composable
 private fun PlannedTaskRow(
     task: GoalflowTask,
+    timeline: GoalflowTimelineBlock?,
     isFirst: Boolean,
     isLast: Boolean,
     onMove: (Int) -> Unit,
     onEdit: () -> Unit,
+    onPromoteFrog: () -> Unit,
+    onBreakDown: () -> Unit,
     onDragDirection: (Int) -> Unit,
     onDragEnd: () -> Unit
 ) {
     val localView = LocalView.current
     var dragging by remember(task.id) { mutableStateOf(false) }
     var dragDistance by remember(task.id) { mutableStateOf(0f) }
+    var swipeHandled by remember(task.id) { mutableStateOf(false) }
     Card(
-        modifier = Modifier.pointerInput(task.id) {
+        modifier = Modifier
+            .semantics {
+                customActions = listOf(
+                    CustomAccessibilityAction("Mark as frog") {
+                        onPromoteFrog()
+                        true
+                    },
+                    CustomAccessibilityAction("Break down") {
+                        onBreakDown()
+                        true
+                    }
+                )
+            }
+            .pointerInput("swipe-${task.id}") {
+                var horizontalDistance = 0f
+                detectHorizontalDragGestures(
+                    onDragEnd = { horizontalDistance = 0f; swipeHandled = false },
+                    onDragCancel = { horizontalDistance = 0f; swipeHandled = false },
+                    onHorizontalDrag = { change, amount ->
+                        change.consume()
+                        horizontalDistance += amount
+                        if (!swipeHandled && kotlin.math.abs(horizontalDistance) >= 80f) {
+                            swipeHandled = true
+                            localView.performHapticFeedback(HapticFeedbackConstants.CONFIRM)
+                            if (horizontalDistance > 0f) onPromoteFrog() else onBreakDown()
+                        }
+                    }
+                )
+            }
+            .pointerInput(task.id) {
             detectDragGesturesAfterLongPress(
                 onDragStart = {
                     dragging = true
@@ -1505,6 +1619,8 @@ private fun PlannedTaskRow(
         border = if (dragging) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         colors = CardDefaults.cardColors(
             containerColor = if (dragging) MaterialTheme.colorScheme.primaryContainer
+            else if (task.isExplicitFrogName()) MaterialTheme.colorScheme.primaryContainer
+            else if (task.isFrog) MaterialTheme.colorScheme.secondaryContainer
             else MaterialTheme.colorScheme.surface
         ),
         shape = RoundedCornerShape(20.dp)
@@ -1518,8 +1634,29 @@ private fun PlannedTaskRow(
             Text("${task.plannedOrder + 1}", style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.primary)
             Spacer(Modifier.width(16.dp))
             Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(task.title, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.SemiBold)
-                if (task.isFrog) Text("Frog", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.secondary)
+                Text(
+                    if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = FontWeight.SemiBold
+                )
+                timeline?.let { block ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "${formatTimelineTime(block.start)}–${formatTimelineTime(block.end)}",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            formatDurationMinutes(block.durationMinutes),
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (block.overlapsPrevious) {
+                            Text("overlap", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                }
+                if (task.isFrog || task.isExplicitFrogName()) Text("🐸 Frog", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
             }
             IconButton(onClick = onEdit) { Icon(Icons.Rounded.MoreHoriz, contentDescription = "Edit ${task.title}") }
             IconButton(onClick = { onMove(-1) }, enabled = !isFirst, modifier = Modifier.semantics { contentDescription = "Move ${task.title} up" }) {
@@ -1775,10 +1912,10 @@ private fun CaptureSheet(
     var notes by rememberSaveable(formKey) { mutableStateOf("") }
     var precision by rememberSaveable(formKey) { mutableStateOf(SchedulePrecision.DAY) }
     var selectedDate by rememberSaveable(formKey) { mutableStateOf(LocalDate.now().toString()) }
-    var scheduledTime by rememberSaveable(formKey) { mutableStateOf("") }
+    var scheduledTime by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
     var frog by rememberSaveable(formKey) { mutableStateOf(false) }
     var selectedGoalId by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
-    var duration by rememberSaveable(formKey) { mutableStateOf("25") }
+    var duration by rememberSaveable(formKey) { mutableStateOf(25) }
     var showDatePicker by rememberSaveable(formKey) { mutableStateOf(false) }
     var goalMenuOpen by rememberSaveable(formKey) { mutableStateOf(false) }
     var saving by rememberSaveable(formKey) { mutableStateOf(false) }
@@ -1797,11 +1934,6 @@ private fun CaptureSheet(
 
     fun submit() {
         if (saving || title.isBlank()) return
-        val minutes = duration.toIntOrNull()
-        if (minutes == null || minutes !in 1..1_440) {
-            localError = "Duration must be between 1 and 1,440 minutes."
-            return
-        }
         saving = true
         localError = null
         focusManager.clearFocus()
@@ -1810,17 +1942,17 @@ private fun CaptureSheet(
             notes,
             precision,
             if (precision == SchedulePrecision.DAY) selectedDate else selectedDate.substring(0, 7),
-            scheduledTime.trim().takeIf { precision == SchedulePrecision.DAY && it.isNotBlank() },
+            scheduledTime?.takeIf { precision == SchedulePrecision.DAY && it.isNotBlank() },
             frog,
             selectedGoalId,
-            minutes
+            duration
         )
     }
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = goalflowCaptureSurface(),
         modifier = Modifier.imePadding()
     ) {
         Column(
@@ -1870,25 +2002,17 @@ private fun CaptureSheet(
                 Text(if (precision == SchedulePrecision.DAY) formatDate(selectedDate) else formatMonth(selectedDate.substring(0, 7)))
             }
             if (precision == SchedulePrecision.DAY) {
-                OutlinedTextField(
+                GoalflowTimeField(
                     value = scheduledTime,
-                    onValueChange = { scheduledTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Time (optional, HH:mm)") },
-                    singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(keyboardType = KeyboardType.Ascii, imeAction = ImeAction.Next)
+                    onValueChange = { scheduledTime = it },
+                    label = "Time (optional)",
+                    optional = true
                 )
             }
-            OutlinedTextField(
+            GoalflowDurationField(
                 value = duration,
-                onValueChange = { duration = it.filter(Char::isDigit).take(4); localError = null },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Estimated minutes") },
-                singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    keyboardType = KeyboardType.Number,
-                    imeAction = ImeAction.Next
-                )
+                onValueChange = { duration = it ?: 25; localError = null },
+                label = "Estimated time"
             )
             if (goals.isNotEmpty()) {
                 GoalPicker(
@@ -1936,8 +2060,8 @@ private fun CircadianCheckInSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val today = LocalDate.now().toString()
-    var wakeTime by rememberSaveable { mutableStateOf(initial.wakeTime ?: "07:00") }
-    var firstMealTime by rememberSaveable { mutableStateOf(initial.firstMealTime ?: "08:00") }
+    var wakeTime by rememberSaveable { mutableStateOf<String?>(initial.wakeTime ?: "07:00") }
+    var firstMealTime by rememberSaveable { mutableStateOf<String?>(initial.firstMealTime ?: "08:00") }
     var morningLight by rememberSaveable { mutableStateOf(initial.sunrise) }
     var eatingWindow by rememberSaveable { mutableStateOf((initial.eatingWindow ?: 10).toFloat()) }
     var sleepHours by rememberSaveable { mutableStateOf(initial.sleepHours.coerceIn(0, 24).toFloat()) }
@@ -1966,7 +2090,7 @@ private fun CircadianCheckInSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = goalflowCaptureSurface(),
         modifier = Modifier.imePadding()
     ) {
         Column(
@@ -1983,16 +2107,11 @@ private fun CircadianCheckInSheet(
                 "A quick check-in tunes the order around the person who has to do it. It is saved locally first.",
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            OutlinedTextField(
+            GoalflowTimeField(
                 value = wakeTime,
-                onValueChange = { wakeTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("Wake time (HH:mm)") },
-                singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    keyboardType = KeyboardType.Ascii,
-                    imeAction = ImeAction.Next
-                )
+                onValueChange = { wakeTime = it },
+                label = "Wake time",
+                optional = false
             )
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Checkbox(checked = morningLight, onCheckedChange = { morningLight = it })
@@ -2013,16 +2132,11 @@ private fun CircadianCheckInSheet(
                 steps = 9,
                 modifier = Modifier.fillMaxWidth()
             )
-            OutlinedTextField(
+            GoalflowTimeField(
                 value = firstMealTime,
-                onValueChange = { firstMealTime = it.filter { char -> char.isDigit() || char == ':' }.take(5) },
-                modifier = Modifier.fillMaxWidth(),
-                label = { Text("First meal (HH:mm)") },
-                singleLine = true,
-                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                    keyboardType = KeyboardType.Ascii,
-                    imeAction = ImeAction.Next
-                )
+                onValueChange = { firstMealTime = it },
+                label = "First meal",
+                optional = false
             )
             Text("Sleep: ${sleepHours.toInt()} hours", fontWeight = FontWeight.SemiBold)
             Slider(
@@ -2079,9 +2193,9 @@ private fun CircadianCheckInSheet(
                                 energy = currentState.toInt(),
                                 clarity = currentState.toInt(),
                                 interest = initial.interest.coerceIn(1, 10),
-                                wakeTime = wakeTime.trim(),
+                                wakeTime = wakeTime?.trim(),
                                 eatingWindow = eatingWindow.toInt(),
-                                firstMealTime = firstMealTime.trim()
+                                firstMealTime = firstMealTime?.trim()
                             )
                         )
                     }
@@ -2124,46 +2238,75 @@ private fun BreakdownDialog(
     task: GoalflowTask,
     error: String?,
     onDismiss: () -> Unit,
-    onConfirm: (List<String>) -> Unit
+    onConfirm: (List<BreakdownChild>) -> Unit
 ) {
     var titles by rememberSaveable(task.id) { mutableStateOf(listOf("")) }
+    var durations by rememberSaveable(task.id) { mutableStateOf(listOf(25)) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Break down commitment") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Text(
                     "Close “${task.title}” by naming the next executable actions. Each one is scheduled for today.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 titles.forEachIndexed { index, title ->
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedTextField(
-                            value = title,
-                            onValueChange = { value ->
-                                titles = titles.toMutableList().also { it[index] = value }
-                            },
-                            modifier = Modifier.weight(1f),
-                            label = { Text("Next action ${index + 1}") },
-                            singleLine = true,
-                            keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Next)
-                        )
-                        if (titles.size > 1) {
-                            TextButton(onClick = { titles = titles.filterIndexed { itemIndex, _ -> itemIndex != index } }) {
-                                Text("Remove")
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            OutlinedTextField(
+                                value = title,
+                                onValueChange = { value ->
+                                    titles = titles.toMutableList().also { it[index] = value }
+                                },
+                                modifier = Modifier.weight(1f),
+                                label = { Text("Next action ${index + 1}") },
+                                singleLine = true,
+                                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(imeAction = ImeAction.Next)
+                            )
+                            if (titles.size > 1) {
+                                TextButton(onClick = {
+                                    titles = titles.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                    durations = durations.filterIndexed { itemIndex, _ -> itemIndex != index }
+                                }) { Text("Remove") }
                             }
                         }
+                        GoalflowDurationField(
+                            value = durations.getOrElse(index) { 25 },
+                            onValueChange = { value ->
+                                durations = durations.toMutableList().also { it[index] = value ?: 25 }
+                            },
+                            label = "Time for action ${index + 1}"
+                        )
                     }
                 }
                 if (titles.size < 5) {
-                    TextButton(onClick = { titles = titles + "" }) { Text("Add another action") }
+                    TextButton(onClick = {
+                        titles = titles + ""
+                        durations = durations + 25
+                    }) { Text("Add another action") }
                 }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             Button(
-                onClick = { onConfirm(titles.map(String::trim).filter(String::isNotBlank)) },
+                onClick = {
+                    onConfirm(
+                        titles.mapIndexedNotNull { index, value ->
+                            value.trim().takeIf(String::isNotBlank)?.let { cleanTitle ->
+                                BreakdownChild(
+                                    title = cleanTitle,
+                                    scheduledFor = LocalDate.now().toString(),
+                                    duration = durations.getOrElse(index) { 25 }
+                                )
+                            }
+                        }
+                    )
+                },
                 enabled = titles.any { it.isNotBlank() }
             ) { Text("Create next actions") }
         },

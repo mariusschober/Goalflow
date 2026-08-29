@@ -17,6 +17,8 @@ import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
 import com.mariusschober.goalflow.nativeapp.ui.GoalflowRoot
 
+const val GOALFLOW_CAPTURE_ACTION = "com.mariusschober.goalflow.CAPTURE"
+
 class MainActivity : ComponentActivity() {
     private lateinit var authClient: NativeAuthClient
     private var pendingCaptureText by mutableStateOf<String?>(null)
@@ -53,7 +55,7 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
-        val shortcutCapture = intent?.action == ACTION_CAPTURE
+        val shortcutCapture = intent?.action == GOALFLOW_CAPTURE_ACTION
         if (sharedText != null || shortcutCapture) {
             pendingCaptureText = sharedText?.take(MAX_SHARED_TEXT_LENGTH)
             pendingCaptureRequest += 1
@@ -67,13 +69,12 @@ class MainActivity : ComponentActivity() {
                 .setShortLabel("Capture")
                 .setLongLabel("Capture a commitment")
                 .setIcon(Icon.createWithResource(this, R.drawable.ic_launcher_foreground))
-                .setIntent(Intent(ACTION_CAPTURE).setClass(this, MainActivity::class.java))
+                .setIntent(Intent(GOALFLOW_CAPTURE_ACTION).setClass(this, MainActivity::class.java))
                 .build()
         )
     }
 
     private companion object {
-        const val ACTION_CAPTURE = "com.mariusschober.goalflow.CAPTURE"
         const val MAX_SHARED_TEXT_LENGTH = 4_000
     }
 }

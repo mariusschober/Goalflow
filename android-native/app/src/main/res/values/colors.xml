@@ -4,4 +4,7 @@
     <color name="goalflow_yellow">#E2B93B</color>
     <color name="goalflow_green">#315C4B</color>
     <color name="goalflow_ink">#1F2421</color>
+    <color name="goalflow_widget_surface">#FFFDF8</color>
+    <color name="goalflow_widget_stroke">#D8D5CA</color>
+    <color name="goalflow_widget_track">#D9E9DE</color>
 </resources>

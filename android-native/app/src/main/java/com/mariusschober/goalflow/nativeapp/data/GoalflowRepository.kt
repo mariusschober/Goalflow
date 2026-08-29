@@ -67,6 +67,12 @@ data class NativeReorderResult(
     val hadConfirmedPlan: Boolean
 )
 
+data class NativeWidgetSnapshot(
+    val completedCount: Int,
+    val plannedCount: Int,
+    val currentTask: GoalflowTask?
+)
+
 /** Web-owned collections retained losslessly until a native editor exists. */
 val NATIVE_RAW_COLLECTION_TYPES = setOf(
     "stats", "progress", "hashtags", "accountability", "truenorth", "amalgam",
@@ -108,6 +114,20 @@ class GoalflowRepository(
         rawCollections.observe(entityType).map { it?.payload }
 
     fun planStream(localDate: String): Flow<DailyPlan?> = plans.observe(localDate).map { row -> row?.let(::toDomain) }
+
+    suspend fun widgetSnapshot(localDate: String = LocalDate.now().toString()): NativeWidgetSnapshot {
+        val planned = tasks.getAll().map(::toDomain).filter { task ->
+            task.deletedAt == null &&
+                task.schedulePrecision == SchedulePrecision.DAY &&
+                task.scheduledFor == localDate &&
+                task.status in setOf(TaskStatus.OPEN, TaskStatus.COMPLETED)
+        }
+        return NativeWidgetSnapshot(
+            completedCount = planned.count { it.status == TaskStatus.COMPLETED },
+            plannedCount = planned.size,
+            currentTask = buildTodayQueue(planned, localDate).firstOrNull()
+        )
+    }
 
     suspend fun createTask(
         title: String,
@@ -396,6 +416,34 @@ class GoalflowRepository(
         if (changed) onMutation()
     }
 
+    /** Makes a commitment a frog and invalidates today's confirmation gate. */
+    suspend fun promoteTaskToFrog(id: String) {
+        val changed = database.withTransaction {
+            val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
+            if (current.status != TaskStatus.OPEN.name) return@withTransaction false
+            if (current.isFrog) return@withTransaction false
+            val today = LocalDate.now().toString()
+            val updated = current.copy(isFrog = true, updatedAt = System.currentTimeMillis())
+            tasks.update(updated)
+            enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
+            recordTaskEventInTransaction(id, "promoted_to_frog", current.scheduledFor)
+            if (current.schedulePrecision == SchedulePrecision.DAY.name && current.scheduledFor == today) {
+                val previousPlan = plans.get(today)
+                plans.delete(today)
+                if (previousPlan != null) {
+                    enqueueRecordInTransaction(
+                        "daily_plans",
+                        today,
+                        GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
+                        Instant.now().toString()
+                    )
+                }
+            }
+            true
+        }
+        if (changed) onMutation()
+    }
+
     /** Edits an existing commitment while retaining fields from newer clients. */
     suspend fun updateTask(
         id: String,
@@ -474,18 +522,25 @@ class GoalflowRepository(
                 ?: throw SchedulingException("Task not found.")
             if (parent.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be broken down.")
             val now = System.currentTimeMillis()
-            val created = children.mapIndexed { index, child ->
+            val nextOrderBySchedule = mutableMapOf<Pair<String, String>, Int>()
+            val created = buildList {
+                children.forEach { child ->
                 val title = child.title.trim()
                 if (title.isBlank()) throw SchedulingException("Each next action needs a title.")
+                if (child.duration !in 1..1_440) throw SchedulingException("Each next action needs 1 to 1,440 minutes.")
                 assertSchedule(child.schedulePrecision, child.scheduledFor, today, child.scheduledTime)
-                GoalflowTask(
+                val scheduleKey = child.scheduledFor to child.schedulePrecision.name
+                val order = nextOrderBySchedule[scheduleKey]
+                    ?: (tasks.maxOrder(child.scheduledFor, child.schedulePrecision.name) + 1)
+                nextOrderBySchedule[scheduleKey] = order + 1
+                add(GoalflowTask(
                     id = UUID.randomUUID().toString(),
                     title = title,
                     notes = child.notes.trim(),
                     schedulePrecision = child.schedulePrecision,
                     scheduledFor = child.scheduledFor,
                     scheduledTime = child.scheduledTime,
-                    plannedOrder = parent.plannedOrder + index,
+                    plannedOrder = order,
                     status = TaskStatus.OPEN,
                     isFrog = false,
                     beforeFrog = false,
@@ -493,8 +548,13 @@ class GoalflowRepository(
                     goalId = parent.goalId,
                     parentTaskId = parent.id,
                     createdAt = now,
-                    updatedAt = now
-                )
+                    updatedAt = now,
+                    extraJson = JSONObject()
+                        .put("duration", child.duration.coerceIn(1, 1_440))
+                        .put("hashtags", JSONArray())
+                        .toString()
+                ))
+                }
             }
             val updatedParent = parent.copy(status = TaskStatus.BROKEN_DOWN.name, updatedAt = now)
             require(created.map { it.id }.toSet().size == created.size) {
@@ -505,6 +565,16 @@ class GoalflowRepository(
             }
             tasks.update(updatedParent)
             tasks.insertAll(created.map(::toEntity))
+            val previousPlan = plans.get(today)
+            plans.delete(today)
+            if (previousPlan != null) {
+                enqueueRecordInTransaction(
+                    "daily_plans",
+                    today,
+                    GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
+                    Instant.now().toString()
+                )
+            }
             enqueueRecordInTransaction("tasks", parent.id, GoalflowJson.taskPayload(toDomain(updatedParent)).toString())
             recordTaskEventInTransaction(parent.id, "broken_down", today)
             created.forEach { child ->
