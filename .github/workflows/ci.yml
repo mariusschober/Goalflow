@@ -156,7 +156,8 @@ jobs:
           disable-animations: true
           script: |
             sleep 45
-            ./android-native/gradlew -p android-native connectedProductionDebugAndroidTest
+            ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
+            ./android-native/gradlew -p android-native :benchmark:connectedProductionReleaseAndroidTest
       - name: Upload native production debug APK
         uses: actions/upload-artifact@v4
         with:
