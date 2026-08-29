@@ -1340,18 +1340,12 @@ class GoalflowRepository(
                             status = if (result.replayMismatch) "replay_mismatch" else "unresolved"
                         )
                     )
+                    val predecessorIds = chain.map { it.mutationId }.toSet() + mutation.mutationId
                     outbox.deleteForEntity(mutation.entityType, mutation.entityId)
-                    outbox.getAll()
-                        .filter { it.dependsOnMutationId == mutation.mutationId }
-                        .forEach { dependent ->
-                            outbox.insert(
-                                dependent.copy(
-                                    baseServerVersion = result.serverVersion.takeIf { it > 0L },
-                                    dependsOnMutationId = null,
-                                    attemptedAt = null
-                                )
-                            )
-                        }
+                    releaseDependentsInTransaction(
+                        predecessorMutationIds = predecessorIds,
+                        baseServerVersion = result.serverVersion.takeIf { it > 0L }
+                    )
                     conflictCount += 1
                 }
             }
@@ -1581,7 +1575,11 @@ class GoalflowRepository(
                     )
                 )
             }
+            val predecessorIds = outbox.getForEntity(conflict.entityType, conflict.entityId)
+                .map { it.mutationId }
+                .toSet()
             outbox.deleteForEntity(conflict.entityType, conflict.entityId)
+            releaseDependentsInTransaction(predecessorIds, conflict.serverVersion)
             conflicts.delete(conflict.id)
             val key = syncMetaKey(conflict.entityType, conflict.entityId)
             val current = syncMeta.get(key)

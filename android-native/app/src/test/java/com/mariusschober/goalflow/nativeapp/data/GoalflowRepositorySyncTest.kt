@@ -362,6 +362,7 @@ class GoalflowRepositorySyncTest {
         )
 
         assertTrue(repository.pendingSyncMutations().none { it.entityType == "tasks" && it.entityId == task.id })
+        assertTrue(repository.pendingSyncMutations().any { it.entityType == "task_events" && it.entityId.isNotBlank() })
         val conflict = database.syncConflictDao().getAll().single()
         assertEquals(task.id, conflict.entityId)
         assertEquals(1, JSONArray(conflict.localHistory).length())
