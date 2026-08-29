@@ -116,16 +116,20 @@ class GoalflowRepository(
     fun planStream(localDate: String): Flow<DailyPlan?> = plans.observe(localDate).map { row -> row?.let(::toDomain) }
 
     suspend fun widgetSnapshot(localDate: String = LocalDate.now().toString()): NativeWidgetSnapshot {
-        val planned = tasks.getAll().map(::toDomain).filter { task ->
+        val allTasks = tasks.getAll().map(::toDomain)
+        val planned = allTasks.filter { task ->
             task.deletedAt == null &&
                 task.schedulePrecision == SchedulePrecision.DAY &&
                 task.scheduledFor == localDate &&
                 task.status in setOf(TaskStatus.OPEN, TaskStatus.COMPLETED)
         }
+        val gate = planningGate(allTasks, localDate, plans.get(localDate)?.let(::toDomain))
         return NativeWidgetSnapshot(
             completedCount = planned.count { it.status == TaskStatus.COMPLETED },
             plannedCount = planned.size,
-            currentTask = buildTodayQueue(planned, localDate).firstOrNull()
+            currentTask = (gate as? com.mariusschober.goalflow.nativeapp.domain.PlanningGate.Ready)
+                ?.queue
+                ?.firstOrNull()
         )
     }
 
