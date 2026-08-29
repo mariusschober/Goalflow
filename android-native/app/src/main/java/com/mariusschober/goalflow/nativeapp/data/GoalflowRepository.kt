@@ -575,7 +575,7 @@ class GoalflowRepository(
                         )
                     )
                 }
-            )
+            }
             val updatedParent = parent.copy(
                 status = TaskStatus.BROKEN_DOWN.name,
                 completedAt = now,
@@ -599,9 +599,18 @@ class GoalflowRepository(
                 previousQueue.any { it.id == parent.id } &&
                 todayChildren.size == created.size
             val plannedIds = if (canPreserveConfirmedPlan) {
-                previousQueue.flatMap { task ->
-                    if (task.id == parent.id) todayChildren.map { it.id } else listOf(task.id)
-                }
+                // Keep the queue's existing precedence rules (including frog
+                // grouping) while replacing the broken-down parent.
+                val replacementCandidates = previousQueue
+                    .filter { it.id != parent.id }
+                    .plus(
+                        todayChildren.mapIndexed { index, child ->
+                            child.copy(plannedOrder = parent.plannedOrder + index)
+                        }
+                    )
+                replacementCandidates
+                    .sortedWith(com.mariusschober.goalflow.nativeapp.domain.goalflowTaskComparator)
+                    .map { it.id }
             } else {
                 emptyList()
             }

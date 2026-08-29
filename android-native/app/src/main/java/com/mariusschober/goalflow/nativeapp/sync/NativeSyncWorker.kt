@@ -12,6 +12,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.ExistingPeriodicWorkPolicy
 import com.mariusschober.goalflow.nativeapp.GoalflowApplication
+import com.mariusschober.goalflow.nativeapp.widget.GoalflowWidgetUpdater
 import java.util.concurrent.TimeUnit
 
 class NativeSyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -22,10 +23,18 @@ class NativeSyncWorker(context: Context, params: WorkerParameters) : CoroutineWo
             val session = NativeAuthClient(application.sessionStore).currentSession()
             if (session != null) application.syncEngine.synchronize()
         }.fold(
-            onSuccess = { Result.success() },
+            onSuccess = {
+                // A pull can change the current task without any foreground
+                // activity. Keep the home-screen surface truthful as well.
+                GoalflowWidgetUpdater.refresh(application)
+                Result.success()
+            },
             // Pending Room mutations are never discarded. WorkManager keeps an
             // exponential retry alive through network flapping and restarts.
-            onFailure = { Result.retry() }
+            onFailure = {
+                GoalflowWidgetUpdater.refresh(application)
+                Result.retry()
+            }
         )
     }
 }
