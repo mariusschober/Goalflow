@@ -234,7 +234,7 @@ class GoalflowViewModel(
         viewModelScope.launch {
             clearError()
             runCatching { repository.dropTask(task.id) }
-                .onSuccess { _notice.value = "Commitment dropped explicitly" }
+                .onSuccess { _notice.value = "Commitment dropped" }
                 .onFailure { failure -> _error.value = failure.message ?: "The commitment could not be dropped." }
         }
     }

@@ -21,11 +21,27 @@ object GoalflowTokens {
     val frogSurfaceDark = Color(0xFF574500)
     val frogAccentLight = Color(0xFF8A6814)
     val frogAccentDark = Color(0xFFFFD76C)
+    val focusOnSurfaceLight = Color(0xFFE7F5EB)
+    val focusOnSurfaceDark = Color(0xFFD9E9DE)
+    val focusAccentLight = Color(0xFFA3E3B6)
+    val focusAccentDark = Color(0xFFA7D0B8)
 }
 
 @Composable
 fun goalflowCaptureSurface(): Color =
     if (isSystemInDarkTheme()) GoalflowTokens.captureSurfaceDark else GoalflowTokens.captureSurfaceLight
+
+@Composable
+fun goalflowFocusSurface(): Color =
+    if (isSystemInDarkTheme()) GoalflowTokens.focusSurfaceDark else GoalflowTokens.focusSurfaceLight
+
+@Composable
+fun goalflowFocusOnSurface(): Color =
+    if (isSystemInDarkTheme()) GoalflowTokens.focusOnSurfaceDark else GoalflowTokens.focusOnSurfaceLight
+
+@Composable
+fun goalflowFocusAccent(): Color =
+    if (isSystemInDarkTheme()) GoalflowTokens.focusAccentDark else GoalflowTokens.focusAccentLight
 
 private val GoalflowLightColors = lightColorScheme(
     primary = Color(0xFF315C4B),

@@ -2,6 +2,7 @@ package com.mariusschober.goalflow.nativeapp
 
 import android.content.Intent
 import androidx.compose.ui.test.assertIsDisplayed
+import org.json.JSONArray
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
@@ -82,6 +83,17 @@ class NativeAndroidSmokeTest {
         composeRule.onNodeWithText("Start focus session").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("FOCUS SESSION").assertIsDisplayed()
+        check(composeRule.onAllNodesWithText("Planning").fetchSemanticsNodes().isEmpty())
+
+        composeRule.activityRule.scenario.recreate()
+        composeRule.waitUntil(10_000) {
+            composeRule.onAllNodesWithText("FOCUS SESSION").fetchSemanticsNodes().isNotEmpty()
+        }
+        composeRule.onNodeWithText("FOCUS SESSION").assertIsDisplayed()
+        composeRule.activity.onBackPressedDispatcher.onBackPressed()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("FOCUS SESSION").assertIsDisplayed()
+
         composeRule.onNodeWithText("Stop and break down").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("Break down commitment").assertIsDisplayed()
@@ -93,17 +105,33 @@ class NativeAndroidSmokeTest {
             runBlocking {
                 val parent = application.database.taskDao().get(task.id)
                 val children = application.database.taskDao().getAll().filter { it.parentTaskId == task.id }
+                val plan = application.database.dailyPlanDao().get(today)
+                val planIds = plan?.taskIds?.let { raw ->
+                    runCatching {
+                        val json = JSONArray(raw)
+                        (0 until json.length()).map { index -> json.getString(index) }
+                    }.getOrNull()
+                }.orEmpty()
                 parent?.status == "BROKEN_DOWN" &&
+                    parent.completedAt != null &&
                     children.size == 2 &&
-                    children.all { it.status == "OPEN" && it.scheduledFor == today }
+                    children.all { it.status == "OPEN" && it.scheduledFor == today } &&
+                    planIds == children.sortedBy { it.plannedOrder }.map { it.id }
             }
         }
         runBlocking {
             val parent = application.database.taskDao().get(task.id)
             val children = application.database.taskDao().getAll().filter { it.parentTaskId == task.id }
+            val plan = application.database.dailyPlanDao().get(today)
+            val planIds = plan?.taskIds?.let { raw ->
+                val json = JSONArray(raw)
+                (0 until json.length()).map { index -> json.getString(index) }
+            }.orEmpty()
             check(parent?.status == "BROKEN_DOWN")
+            check(parent?.completedAt != null)
             check(children.size == 2)
             check(children.all { it.status == "OPEN" && it.scheduledFor == today })
+            check(planIds == children.sortedBy { it.plannedOrder }.map { it.id })
             application.database.taskDao().deleteAll()
             application.database.dailyPlanDao().deleteAll()
         }

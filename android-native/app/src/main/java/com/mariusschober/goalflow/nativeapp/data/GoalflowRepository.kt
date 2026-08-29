@@ -134,6 +134,13 @@ class GoalflowRepository(
         )
     }
 
+    /**
+     * Reads directly from Room so lifecycle recovery never mistakes a
+     * StateFlow's initial empty value for an empty database.
+     */
+    suspend fun taskSnapshot(id: String): GoalflowTask? =
+        tasks.get(id)?.let(::toDomain)
+
     suspend fun createTask(
         title: String,
         notes: String,
@@ -526,65 +533,128 @@ class GoalflowRepository(
             val parent = tasks.getAll().firstOrNull { it.id == id }
                 ?: throw SchedulingException("Task not found.")
             if (parent.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be broken down.")
+
+            // Capture the exact pre-breakdown order. If it was already confirmed,
+            // the new actions can replace the parent without asking the user to
+            // plan the same decision again.
+            val previousQueue = buildTodayQueue(tasks.getAll().map(::toDomain), today)
+            val previousPlan = plans.get(today)?.let(::toDomain)
             val now = System.currentTimeMillis()
             val nextOrderBySchedule = mutableMapOf<Pair<String, String>, Int>()
             val created = buildList {
                 children.forEach { child ->
-                val title = child.title.trim()
-                if (title.isBlank()) throw SchedulingException("Each next action needs a title.")
-                if (child.duration !in 1..1_440) throw SchedulingException("Each next action needs 1 to 1,440 minutes.")
-                assertSchedule(child.schedulePrecision, child.scheduledFor, today, child.scheduledTime)
-                val scheduleKey = child.scheduledFor to child.schedulePrecision.name
-                val order = nextOrderBySchedule[scheduleKey]
-                    ?: (tasks.maxOrder(child.scheduledFor, child.schedulePrecision.name) + 1)
-                nextOrderBySchedule[scheduleKey] = order + 1
-                add(GoalflowTask(
-                    id = UUID.randomUUID().toString(),
-                    title = title,
-                    notes = child.notes.trim(),
-                    schedulePrecision = child.schedulePrecision,
-                    scheduledFor = child.scheduledFor,
-                    scheduledTime = child.scheduledTime,
-                    plannedOrder = order,
-                    status = TaskStatus.OPEN,
-                    isFrog = false,
-                    beforeFrog = false,
-                    source = TaskSource.MANUAL,
-                    goalId = parent.goalId,
-                    parentTaskId = parent.id,
-                    createdAt = now,
-                    updatedAt = now,
-                    extraJson = JSONObject()
-                        .put("duration", child.duration.coerceIn(1, 1_440))
-                        .put("hashtags", JSONArray())
-                        .toString()
-                ))
+                    val title = child.title.trim()
+                    if (title.isBlank()) throw SchedulingException("Each next action needs a title.")
+                    if (child.duration !in 1..1_440) throw SchedulingException("Each next action needs 1 to 1,440 minutes.")
+                    assertSchedule(child.schedulePrecision, child.scheduledFor, today, child.scheduledTime)
+                    val scheduleKey = child.scheduledFor to child.schedulePrecision.name
+                    val order = nextOrderBySchedule[scheduleKey]
+                        ?: (tasks.maxOrder(child.scheduledFor, child.schedulePrecision.name) + 1)
+                    nextOrderBySchedule[scheduleKey] = order + 1
+                    add(
+                        GoalflowTask(
+                            id = UUID.randomUUID().toString(),
+                            title = title,
+                            notes = child.notes.trim(),
+                            schedulePrecision = child.schedulePrecision,
+                            scheduledFor = child.scheduledFor,
+                            scheduledTime = child.scheduledTime,
+                            plannedOrder = order,
+                            status = TaskStatus.OPEN,
+                            isFrog = false,
+                            beforeFrog = false,
+                            source = TaskSource.MANUAL,
+                            goalId = parent.goalId,
+                            parentTaskId = parent.id,
+                            createdAt = now,
+                            updatedAt = now,
+                            extraJson = JSONObject()
+                                .put("duration", child.duration.coerceIn(1, 1_440))
+                                .put("hashtags", JSONArray())
+                                .toString()
+                        )
+                    )
                 }
-            }
-            val updatedParent = parent.copy(status = TaskStatus.BROKEN_DOWN.name, updatedAt = now)
+            )
+            val updatedParent = parent.copy(
+                status = TaskStatus.BROKEN_DOWN.name,
+                completedAt = now,
+                updatedAt = now
+            )
             require(created.map { it.id }.toSet().size == created.size) {
                 "Generated task ids collided; no task was changed."
             }
             created.forEach { child ->
                 require(tasks.get(child.id) == null) { "Generated task id already exists; no task was overwritten." }
             }
+
+            val todayChildren = created.filter {
+                it.schedulePrecision == SchedulePrecision.DAY &&
+                    it.scheduledFor == today &&
+                    it.status == TaskStatus.OPEN
+            }
+            val previousQueueIds = previousQueue.map { it.id }
+            val canPreserveConfirmedPlan = previousPlan != null &&
+                previousPlan.taskIds == previousQueueIds &&
+                previousQueue.any { it.id == parent.id } &&
+                todayChildren.size == created.size
+            val plannedIds = if (canPreserveConfirmedPlan) {
+                previousQueue.flatMap { task ->
+                    if (task.id == parent.id) todayChildren.map { it.id } else listOf(task.id)
+                }
+            } else {
+                emptyList()
+            }
+            val plannedOrderById = plannedIds.withIndex().associate { it.value to it.index }
+            val reorderedExisting = if (canPreserveConfirmedPlan) {
+                tasks.getAll()
+                    .filter { row -> row.id != parent.id && plannedOrderById.containsKey(row.id) }
+                    .map { row ->
+                        row.copy(
+                            plannedOrder = plannedOrderById.getValue(row.id),
+                            updatedAt = now
+                        )
+                    }
+            } else {
+                emptyList()
+            }
+            val orderedCreated = created.map { child ->
+                plannedOrderById[child.id]?.let { order -> child.copy(plannedOrder = order) } ?: child
+            }
+
             tasks.update(updatedParent)
-            tasks.insertAll(created.map(::toEntity))
-            val previousPlan = plans.get(today)
-            plans.delete(today)
-            if (previousPlan != null) {
-                enqueueRecordInTransaction(
-                    "daily_plans",
-                    today,
-                    GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
-                    Instant.now().toString()
-                )
+            if (reorderedExisting.isNotEmpty()) tasks.updateAll(reorderedExisting)
+            tasks.insertAll(orderedCreated.map(::toEntity))
+            reorderedExisting.forEach { task ->
+                enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(toDomain(task)).toString())
             }
             enqueueRecordInTransaction("tasks", parent.id, GoalflowJson.taskPayload(toDomain(updatedParent)).toString())
             recordTaskEventInTransaction(parent.id, "broken_down", today)
-            created.forEach { child ->
+            orderedCreated.forEach { child ->
                 enqueueRecordInTransaction("tasks", child.id, GoalflowJson.taskPayload(child).toString())
                 recordTaskEventInTransaction(child.id, "created", child.scheduledFor)
+            }
+
+            if (canPreserveConfirmedPlan) {
+                val updatedPlan = com.mariusschober.goalflow.nativeapp.domain.DailyPlan(
+                    localDate = today,
+                    confirmedAt = now,
+                    taskIds = plannedIds
+                )
+                plans.insert(toEntity(updatedPlan))
+                enqueueRecordInTransaction(
+                    "daily_plans",
+                    today,
+                    GoalflowJson.planPayload(updatedPlan).toString()
+                )
+            } else if (previousPlan != null) {
+                plans.delete(today)
+                enqueueRecordInTransaction(
+                    "daily_plans",
+                    today,
+                    GoalflowJson.planPayload(previousPlan).toString(),
+                    Instant.now().toString()
+                )
             }
         }
         onMutation()

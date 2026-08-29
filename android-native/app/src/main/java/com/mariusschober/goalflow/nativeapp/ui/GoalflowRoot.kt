@@ -228,18 +228,36 @@ fun GoalflowRoot(
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // Room is the source of truth for recovery. Query it directly before
+    // observing the task stream so an initial empty StateFlow value cannot
+    // erase a valid session during process recreation.
+    LaunchedEffect(Unit) {
+        val storedFocus = application.focusSessionStore.read() ?: return@LaunchedEffect
+        val storedTask = application.repository.taskSnapshot(storedFocus.taskId)
+        if (storedTask == null || storedTask.status.name != "OPEN" || storedTask.deletedAt != null) {
+            application.focusSessionStore.clear()
+        } else {
+            focusStartedAt = storedFocus.startedAtMillis
+            focusTask = storedTask
+        }
+    }
+
     LaunchedEffect(tasks) {
         val storedFocus = application.focusSessionStore.read() ?: return@LaunchedEffect
-        val storedTask = tasks.firstOrNull { it.id == storedFocus.taskId }
-        if (storedTask == null || storedTask.status.name != "OPEN" || storedTask.deletedAt != null) {
+        // The first StateFlow value can be an empty placeholder. Only update
+        // recovery state once the task stream actually contains this task.
+        val currentTask = tasks.firstOrNull { it.id == storedFocus.taskId } ?: return@LaunchedEffect
+        if (currentTask.status.name != "OPEN" || currentTask.deletedAt != null) {
             application.focusSessionStore.clear()
             if (focusTask?.id == storedFocus.taskId) {
                 focusTask = null
                 focusStartedAt = null
             }
+        } else if (focusTask?.id == storedFocus.taskId) {
+            focusTask = currentTask
         } else if (focusTask == null) {
             focusStartedAt = storedFocus.startedAtMillis
-            focusTask = storedTask
+            focusTask = currentTask
         }
     }
 
@@ -250,6 +268,7 @@ fun GoalflowRoot(
     }
 
     fun openCapture(initialTitle: String = "") {
+        if (focusTask != null) return
         captureSeed = initialTitle
         captureFormKey += 1
         captureOpen = true
@@ -369,7 +388,8 @@ fun GoalflowRoot(
     }
 
     GoalflowTheme {
-        Scaffold(
+        if (focusTask == null) {
+            Scaffold(
             modifier = Modifier.fillMaxSize(),
             snackbarHost = { SnackbarHost(snackbarHostState) },
             bottomBar = {
@@ -568,9 +588,11 @@ fun GoalflowRoot(
                 }
             }
         }
+        }
     }
 
-    conflicts.firstOrNull { it.status !in setOf("resolved", "resolving_local") }?.let { conflict ->
+    if (focusTask == null) {
+        conflicts.firstOrNull { it.status !in setOf("resolved", "resolving_local") }?.let { conflict ->
         val supportedLocally = conflict.entityType in setOf("tasks", "goals", "habits", "daily_plans", "task_events") ||
             (conflict.entityType in NATIVE_RAW_COLLECTION_TYPES && conflict.localPayload.isNotBlank())
         AlertDialog(
@@ -598,6 +620,7 @@ fun GoalflowRoot(
                 }
             }
         )
+    }
     }
 
     if (captureOpen) {
@@ -1095,7 +1118,8 @@ private fun FocusTimerSheet(
 
     Surface(
         modifier = Modifier.fillMaxSize().zIndex(10f),
-        color = MaterialTheme.colorScheme.primaryContainer
+        color = goalflowFocusSurface(),
+        contentColor = goalflowFocusOnSurface()
     ) {
         Column(
             modifier = Modifier
@@ -1107,7 +1131,7 @@ private fun FocusTimerSheet(
             verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Text("FOCUS SESSION", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+            Text("FOCUS SESSION", style = MaterialTheme.typography.labelLarge, color = goalflowFocusAccent())
             Text("One thing. Right now.", style = MaterialTheme.typography.headlineMedium, textAlign = TextAlign.Center)
             Text(
                 if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title,
@@ -1118,24 +1142,24 @@ private fun FocusTimerSheet(
             Text(
                 String.format(Locale.ROOT, "%02d:%02d", minutes, seconds),
                 style = MaterialTheme.typography.displayLarge,
-                color = MaterialTheme.colorScheme.primary,
+                color = goalflowFocusAccent(),
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center
             )
             LinearProgressIndicator(
                 progress = { progress },
                 modifier = Modifier.fillMaxWidth().height(10.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.55f)
+                color = goalflowFocusAccent(),
+                trackColor = Color.White.copy(alpha = 0.28f)
             )
             Text(
                 if (elapsedSeconds >= plannedSeconds) "Planned focus reached. Finish when the commitment is truly done."
                 else "$plannedMinutes minute target · keep the next action small and visible.",
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = goalflowFocusOnSurface(),
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth()
             )
-            Text("How did the session feel?", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            Text("How did the session feel?", style = MaterialTheme.typography.labelLarge, color = goalflowFocusOnSurface())
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                 listOf("distracted" to "Distracted", "good" to "Good", "flow" to "Flow").forEach { (value, label) ->
                     if (flowState == value) {
@@ -1170,7 +1194,7 @@ private fun FocusTimerSheet(
             Text(
                 "This session stays open until you complete it or turn it into smaller actions.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = goalflowFocusOnSurface(),
                 textAlign = TextAlign.Center
             )
         }
@@ -1407,7 +1431,7 @@ private fun PlanningScreen(
                 item {
                     PlanningHeaderCard(
                         title = "Resolve overdue commitments",
-                        body = "Nothing disappears because it became inconvenient. Move ordinary work to today, complete it, break it down, or drop it explicitly."
+                        body = "Nothing disappears because it became inconvenient. Move ordinary work to today, complete it, break it down, or drop it."
                     )
                 }
                 items(overdueTasks, key = { it.id }) { task ->
@@ -1525,7 +1549,7 @@ private fun OverdueTaskRow(
             Text(if (task.isExplicitFrogName()) "🐸 ${task.title}" else task.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             if (task.isFrog || task.isExplicitFrogName()) {
                 Text(
-                    "This frog cannot be moved forward. Complete it, break it down, or drop it explicitly.",
+                    "This frog cannot be moved forward. Complete it, break it down, or drop it.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
