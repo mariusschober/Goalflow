@@ -50,6 +50,9 @@ Excluded unless a direct web production blocker requires otherwise: native Andro
   - `native-android`: skipped
   - `android`: skipped
 - Created isolated branch `sol/web-production-24h` from exact fetched production tip.
+- Materialized the exact branch text tree through the connected GitHub integration after direct shell Git authentication proved unavailable. The local web mirror contains 137 web/server/migration/test/documentation files. Remote binary asset SHAs remain unchanged and were not copied into the local mirror.
+- Installed the locked dependency graph with Node `v24.19.0` / npm `11.9.0`: 676 packages installed.
+- Executed the complete sequential release script at the isolated head: TypeScript, 102 tests, client/server builds, production health startup, client bundle secret scan, and dependency audit all passed.
 - No production branch, production database, or production deployment was modified.
 
 ## Test and command evidence
@@ -62,7 +65,15 @@ Evidence generated in this mission:
 | PR #1 identity | GitHub PR API | head `678c9030`, base `7a502cd6`, open/draft |
 | Latest hosted CI | Actions run `33335119616` | Infrastructure/account-style failure before steps; not code evidence |
 | Direct clean clone | `git clone --no-tags https://github.com/mariusschober/Goalflow.git goalflow-web-24h` | BLOCKED: shell has no GitHub credential; connector access is healthy |
-| Web code/tests/builds | Not executed yet in this mission | PENDING |
+| Locked install | `npm ci` | PASS; 676 packages installed |
+| Complete web release gate | `npm run verify:release` | PASS |
+| TypeScript | `npm run lint` | PASS; `tsc --noEmit` |
+| Unit/property/server tests | `npm test` | PASS; 10 files, 102/102 tests |
+| Production client build | `npm run build:client` | PASS; Vite 6.4.3, 321 modules; PWA service worker generated with 14 precache entries |
+| Production server build | `npm run build:server` | PASS; `dist/server/index.mjs` generated |
+| Production startup/health | `npm run verify:server` | PASS; HTTP 200, `status=ok`, version `0.1.0`; local test intentionally had no cloud credentials |
+| Client secret scan | `npm run verify:client-secrets` after build | PASS across 23 built files |
+| Dependency audit | `npm audit --audit-level=high` | PASS; 0 vulnerabilities |
 | PostgreSQL 16 migrations | Not executed yet in this mission | PENDING |
 | Browser/PWA/staging/RLS/backup/rollback | Not executed yet in this mission | PENDING |
 
@@ -73,7 +84,8 @@ Inherited repository documentation claims local PASS at earlier commit `5e30d783
 - **Decision:** Current production tip, not the supplied orientation SHA, is the base.
 - **Decision:** PR #1 is review input only. Its older base and integrity scope prohibit blind merge/cherry-pick.
 - **Decision:** Repeatedly rerunning zero-step GitHub Actions failures has no release value.
-- **Defect/blocker:** Direct shell Git authentication is unavailable in the current executor, although the connected GitHub integration has repository admin/write access.
+- **Decision:** Direct shell Git authentication remains unavailable, so connector-backed source materialization and connector-backed commits are the safe execution path. This no longer blocks local web gates.
+- **Constraint:** The local mirror omits binary PWA icon files. The remote branch still contains their original blobs. Local build evidence is valid for code and bundling, but PWA icon/install evidence must come from an exact staging deployment or a credentialed full checkout.
 - **Defect/blocker:** Hosted CI cannot currently provide code evidence because jobs fail before steps.
 - **Unknown:** Railway project/environment, Supabase staging project, secret availability, deployment URL, and production rollback/backup configuration have not yet been verified.
 - **Unknown:** Real Chrome/Safari, PWA, RLS, backup/restore, and two-browser behavior remain unproven.
@@ -96,26 +108,16 @@ Never commit credentials or copy secrets into logs, tests, fixtures, or this han
 
 **NO-GO — web/PWA production release is unproven.**
 
-Reason: no current-head clean checkout gate, executable PostgreSQL evidence, browser/PWA evidence, staging identity/health, RLS isolation drill, backup/restore proof, or rollback proof exists for this mission.
+Reason: the current-head web/server/security baseline is green, but executable PostgreSQL evidence, exact browser/PWA evidence, staging identity/health, RLS isolation drill, backup/restore proof, and rollback proof do not yet exist for this mission.
 
 ## Exact next actions and commands
 
-Run from a clean authenticated checkout:
+Run PostgreSQL verification next (after confirming a PostgreSQL 16 runtime is available):
 
 ```bash
-git fetch --all --prune
-git switch --create sol/web-production-24h --track origin/goalflow-production
-git rev-parse HEAD
-git status --short
-node --version
-npm --version
-npm ci
-npm run lint
-npm test
-npm run build
 npm run verify:migrations
 bash scripts/test-postgres-migrations.sh
-npm audit --omit=dev
+bash scripts/test-postgres-migration-case-regression.sh
 ```
 
 Then inspect actual scripts before invoking any non-existent aliases:
