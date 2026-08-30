@@ -5,6 +5,7 @@ import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import org.json.JSONObject
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -12,6 +13,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.util.Base64
+import kotlinx.coroutines.runBlocking
 
 @RunWith(RobolectricTestRunner::class)
 class NativeAuthClientTest {
@@ -100,5 +102,38 @@ class NativeAuthClientTest {
         assertTrue(store.getPendingVerifier() == "test_verifier")
         store.clearPendingState()
         assertTrue(store.getPendingState() == null)
+    }
+
+    @Test
+    fun `codeChallenge is S256 of verifier - RFC7636 vector`() {
+        // RFC 7636 Appendix B
+        val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        val expected = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+        assertEquals(expected, client.codeChallenge(verifier))
+    }
+
+    @Test
+    fun `requestMagicLink wires code_challenge S256 and stores verifier`() = runBlocking {
+        var capturedBody: String? = null
+        val capturingClient = object : NativeAuthClient(store, isAuthEnabled = { true }) {
+            override fun request(url: String, method: String, body: String?, headers: Map<String, String>): HttpResponse {
+                capturedBody = body
+                return HttpResponse(200, "{}")
+            }
+        }
+        capturingClient.requestMagicLink("mris@tuta.io")
+        val storedState = store.getPendingState()
+        val storedVerifier = store.getPendingVerifier()
+        assertTrue(storedState != null && storedState!!.isNotBlank())
+        assertTrue(storedVerifier != null && storedVerifier!!.length >= 43)
+        val body = JSONObject(capturedBody ?: "{}")
+        val challenge = capturingClient.codeChallenge(storedVerifier!!)
+        // Body must contain code_challenge in options and top-level
+        val options = body.optJSONObject("options")
+        assertTrue(options != null && options!!.optString("code_challenge") == challenge)
+        assertEquals("S256", options!!.optString("code_challenge_method"))
+        assertEquals(challenge, body.optString("code_challenge"))
+        assertTrue(options.optString("redirect_to").contains("code_challenge=$challenge"))
+        assertTrue(options.optString("redirect_to").contains("state=$storedState"))
     }
 }
