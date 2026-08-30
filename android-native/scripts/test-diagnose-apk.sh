@@ -35,7 +35,7 @@ if [[ "$1" == "dump" && "$2" == "xmltree" ]]; then
     [[ "$4" == "AndroidManifest.xml" ]]
     [[ "$5" == "$EXPECTED_APK" ]]
     printf '%s\n' "$*" > "$CALL_LOG"
-    printf '%s\n' '    A: android:minSdkVersion(0x0101020c)=0x1a'
+    printf '%s\n' '    A: android:minSdkVersion(0x0101020c)=(type 0x10)0x1a'
     exit 0
 fi
 
