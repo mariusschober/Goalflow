@@ -31,24 +31,24 @@ class GoalflowDatabaseMigrationInstrumentedTest {
             migrationHelper.createDatabase(databaseName, startVersion).apply {
                 execSQL(
                     "INSERT INTO tasks (id,title,notes,schedulePrecision,scheduledFor,scheduledTime,plannedOrder,status,isFrog,beforeFrog,frogFailures,source,goalId,parentTaskId,habitId,createdAt,updatedAt,completedAt,deletedAt" +
-                        if (startVersion >= 4) ",extraJson)" else ")" +
+                        (if (startVersion >= 4) ",extraJson)" else ")") +
                         " VALUES ('task-$startVersion','Keep this task','','DAY','2026-08-27',NULL,0,'OPEN',0,0,0,'MANUAL',NULL,NULL,NULL,1,1,NULL,NULL" +
-                        if (startVersion >= 4) ",'{}')" else ")"
+                        (if (startVersion >= 4) ",'{}')" else ")")
                 )
                 execSQL("INSERT INTO daily_plans (localDate,confirmedAt,taskIds) VALUES ('2026-08-27',1,'task-$startVersion')")
                 if (startVersion >= 2) {
                     execSQL(
                         "INSERT INTO sync_outbox (mutationId,deviceId,entityType,entityId,baseServerVersion,version,payload,updatedAt,deletedAt" +
-                            if (startVersion >= 3) ",dependsOnMutationId,resolvesConflictId,attemptedAt)" else ")" +
+                            (if (startVersion >= 3) ",dependsOnMutationId,resolvesConflictId,attemptedAt)" else ")") +
                             " VALUES ('00000000-0000-4000-8000-00000000000$startVersion','device-a','tasks','task-$startVersion',NULL,1,'{}','2026-08-27T00:00:00Z',NULL" +
-                            if (startVersion >= 3) ",NULL,NULL,NULL)" else ")"
+                            (if (startVersion >= 3) ",NULL,NULL,NULL)" else ")")
                     )
                     execSQL("INSERT INTO sync_meta (entityType,cursor,localVersion,serverVersion,lastSuccessfulSync) VALUES ('tasks:task-$startVersion',0,1,NULL,NULL)")
                     execSQL(
                         "INSERT INTO sync_conflicts (id,entityType,localPayload,serverPayload,serverVersion,createdAt" +
-                            if (startVersion >= 3) ",entityId,mutationId,localDeletedAt,localHistory,serverDeletedAt,status)" else ")" +
+                            (if (startVersion >= 3) ",entityId,mutationId,localDeletedAt,localHistory,serverDeletedAt,status)" else ")") +
                             " VALUES ('conflict-$startVersion','tasks','{}','{}',2,'2026-08-27T00:00:00Z'" +
-                            if (startVersion >= 3) ",'task-$startVersion',NULL,NULL,'[]',NULL,'unresolved')" else ")"
+                            (if (startVersion >= 3) ",'task-$startVersion',NULL,NULL,'[]',NULL,'unresolved')" else ")")
                     )
                 }
                 if (startVersion >= 5) {
