@@ -1,0 +1,30 @@
+{
+  "name": "goalflow-chrome",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Goalflow Chrome execution companion — Current-first Side Panel, ACTION, focus timer",
+  "scripts": {
+    "lint": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "vite build && npm run build:background",
+    "build:background": "esbuild src/background/serviceWorker.ts --bundle --format=iife --target=chrome114 --outfile=dist/background.js --platform=browser",
+    "dev": "vite --port 5174"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.290",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^5.0.0",
+    "esbuild": "^0.28.0",
+    "fake-indexeddb": "^6.2.5",
+    "typescript": "~5.8.2",
+    "vite": "^6.2.0",
+    "vitest": "^4.1.8"
+  }
+}
