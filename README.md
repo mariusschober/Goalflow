@@ -12,6 +12,17 @@ The application retains the complete Goalflow experience: Current, daily and mon
 - One pure scheduling domain in `src/domain/scheduling.ts` defines schedule validation, planning gates, queue precedence, skip, frog promotion, breakdown, and habit generation.
 - Telegram uses the same task and queue rules for text, voice, and command capture.
 
+## Production finalization
+
+The production-finalization roadmap and release gates are authoritative in [docs/PRODUCTION_FINALIZATION_PLAN.md](./docs/PRODUCTION_FINALIZATION_PLAN.md). Future agents must read these documents in order:
+
+1. [Authoritative five-tranche plan](./docs/PRODUCTION_FINALIZATION_PLAN.md)
+2. [AI context handover](./docs/AI_CONTEXT_HANDOVER.md)
+3. [Current production-readiness evidence](./docs/PRODUCTION_READINESS.md)
+4. [Current tranche handover](./docs/TRANCHE_2_HANDOVER.md)
+
+Older implementation and integrity handovers are historical evidence and do not override those documents.
+
 ## Local development
 
 Requirements: Node.js 22 and npm.
