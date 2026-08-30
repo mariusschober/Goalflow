@@ -12,6 +12,7 @@ final class CaptureWindowController: NSObject {
     private var clock: (any Clock)?
     private var executionVM: ExecutionViewModel?
     private var cancellables = Set<AnyCancellable>()
+    private var monitor: Any?
 
     func configure(taskProvider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock, executionVM: ExecutionViewModel, taskStore: any TaskStore) {
         self.taskProvider = taskProvider
@@ -53,6 +54,7 @@ final class CaptureWindowController: NSObject {
     func hide() {
         panel?.orderOut(nil)
         viewModel?.cancel()
+        if let m = monitor { NSEvent.removeMonitor(m); monitor = nil }
     }
 
     func toggle() {
@@ -77,8 +79,8 @@ final class CaptureWindowController: NSObject {
         let hosting = NSHostingView(rootView: CaptureOverlayView(vm: vm, onDismiss: { [weak self] in self?.hide() }))
         hosting.frame = p.contentRect(forFrameRect: p.frame)
         p.contentView = hosting
-        // Esc observer
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // Esc observer (stored for removal)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { // Esc
                 self?.hide()
                 return nil
@@ -88,6 +90,7 @@ final class CaptureWindowController: NSObject {
         self.panel = p
     }
 
+    deinit { if let m = monitor { NSEvent.removeMonitor(m) } }
     private func handleCreated(task: GoalflowTask, intent: CaptureIntent) {
         executionVM?.restore()
         if intent == .action {

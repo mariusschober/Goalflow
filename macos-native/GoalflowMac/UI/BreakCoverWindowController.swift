@@ -77,7 +77,5 @@ final class BreakCoverWindowController: NSObject {
             .store(in: &cancellables)
     }
 
-    deinit {
-        for w in windows { w.orderOut(nil) }
-    }
+    deinit { closeAll() }
 }

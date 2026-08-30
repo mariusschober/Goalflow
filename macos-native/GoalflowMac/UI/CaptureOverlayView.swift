@@ -53,6 +53,8 @@ struct CaptureOverlayView: View {
         HStack(spacing: 8) {
             Image(systemName: "pencil").foregroundStyle(.secondary)
             TextField("What needs doing?  e.g. Draft proposal @25m #focus 2026-09-01", text: $vm.rawText)
+                    .accessibilityLabel("Capture title")
+                    .accessibilityIdentifier("capture-title-field")
                 .textFieldStyle(.plain)
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .focused($focused)

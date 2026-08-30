@@ -2,7 +2,7 @@ import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    private var menuBar: MenuBarController!
+    private var menuBar: MenuBarController?
     private var hotkey: (any HotkeyGateway)?
     private let supabaseAuth = SupabaseAuthService.shared
 
@@ -26,18 +26,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trueNorthStore = TrueNorthStore()
         let amalgamStore = AmalgamStore()
 
-        menuBar = MenuBarController()
-        menuBar.start(taskProvider: provider, store: store, clock: clock, dailyPlanStore: dailyPlanStore, goalStore: goalStore, trueNorthStore: trueNorthStore, amalgamStore: amalgamStore, gateEnabled: true)
+        let mb = MenuBarController()
+        mb.start(taskProvider: provider, store: store, clock: clock, dailyPlanStore: dailyPlanStore, goalStore: goalStore, trueNorthStore: trueNorthStore, amalgamStore: amalgamStore, gateEnabled: true)
+        menuBar = mb
 
         // Global capture hotkey Cmd+Shift+G
         let hk = CarbonHotkeyGateway()
         hk.register { [weak self] in
-            Task { @MainActor in self?.menuBar.toggleCapture() }
+            Task { @MainActor in self?.menuBar?.toggleCapture() }
         }
         hotkey = hk
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        // Execution state already persisted before termination.
+        hotkey?.unregister()
     }
 }
