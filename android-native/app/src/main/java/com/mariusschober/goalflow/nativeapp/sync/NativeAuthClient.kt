@@ -67,10 +67,10 @@ class NativeAuthClient(private val sessionStore: SecureSessionStore) {
         // Validate OAuth state to prevent CSRF
         val returnedState = params["state"].orEmpty()
         val expectedState = sessionStore.getPendingState()
-        if (expectedState != null && returnedState != expectedState) return false
-        // Also validate state in query if present
+        if (expectedState == null) return false
+        if (returnedState != expectedState) return false
         val queryState = uri.getQueryParameter("state")
-        if (expectedState != null && queryState != null && queryState != expectedState) return false
+        if (queryState != null && queryState != expectedState) return false
         val accessToken = params["access_token"].orEmpty()
         val refreshToken = params["refresh_token"].orEmpty()
         if (accessToken.isBlank() || refreshToken.isBlank()) return false
