@@ -6,6 +6,7 @@ import {
   applyRemotePage,
   buildStagedLocalTransaction,
   emptySyncMeta,
+  mergeServerConflicts,
   normalizeSyncMeta,
   readyOutbox,
   resolveConflictWithLocal,
@@ -202,6 +203,87 @@ describe('record-level synchronization invariants', () => {
     expect(meta.conflicts[0].serverPayload).toEqual({ id: 'same', title: 'remote' });
   });
 
+  it('hydrates a server-only restore conflict with both recoverable versions', () => {
+    const meta = mergeServerConflicts(emptySyncMeta(), [{
+      id: '99999999-9999-4999-8999-999999999999',
+      entity_type: 'tasks',
+      entity_id: 'valuable-task',
+      mutation_id: '88888888-8888-4888-8888-888888888888',
+      local_payload: { id: 'valuable-task', title: 'newer pre-restore version' },
+      local_deleted_at: null,
+      local_version: 7,
+      local_updated_at: iso(7),
+      server_payload: { id: 'valuable-task', title: 'restored version' },
+      server_deleted_at: null,
+      server_missing: false,
+      server_version: 12,
+      created_at: iso(12)
+    }]);
+
+    expect(meta.conflicts).toHaveLength(1);
+    expect(meta.conflicts[0].localHistory).toEqual([expect.objectContaining({
+      mutationId: '88888888-8888-4888-8888-888888888888',
+      payload: { id: 'valuable-task', title: 'newer pre-restore version' },
+      version: 7
+    })]);
+    expect(meta.conflicts[0].serverPayload).toEqual({ id: 'valuable-task', title: 'restored version' });
+  });
+
+  it('never replaces a newer preserved conflict side with an older ledger response', () => {
+    const serverConflict = {
+      id: '99999999-9999-4999-8999-999999999999',
+      entity_type: 'tasks',
+      entity_id: 'valuable-task',
+      mutation_id: '88888888-8888-4888-8888-888888888888',
+      local_payload: { id: 'valuable-task', title: 'local' },
+      local_version: 7,
+      local_updated_at: iso(7),
+      server_payload: { id: 'valuable-task', title: 'server v12' },
+      server_version: 12,
+      server_missing: false,
+      created_at: iso(12)
+    };
+    const newest = mergeServerConflicts(
+      mergeServerConflicts(emptySyncMeta(), [serverConflict]),
+      [{ ...serverConflict, server_payload: { id: 'valuable-task', title: 'server v13' }, server_version: 13 }]
+    );
+    const afterStaleReplay = mergeServerConflicts(newest, [serverConflict]);
+
+    expect(afterStaleReplay.conflicts[0]).toMatchObject({
+      serverPayload: { id: 'valuable-task', title: 'server v13' },
+      serverVersion: 13
+    });
+    expect(() => mergeServerConflicts(afterStaleReplay, [{
+      ...serverConflict,
+      server_payload: { id: 'valuable-task', title: 'different v13' },
+      server_version: 13
+    }])).toThrow(/different cloud data/i);
+    expect(() => mergeServerConflicts(afterStaleReplay, [{
+      ...serverConflict,
+      local_payload: { id: 'valuable-task', title: 'different local data' },
+      server_payload: { id: 'valuable-task', title: 'server v13' },
+      server_version: 13
+    }])).toThrow(/different local data/i);
+    expect(() => mergeServerConflicts(afterStaleReplay, [{
+      ...serverConflict,
+      local_version: 8,
+      server_payload: { id: 'valuable-task', title: 'server v13' },
+      server_version: 13
+    }])).toThrow(/different local data/i);
+    expect(() => mergeServerConflicts(afterStaleReplay, [{
+      ...serverConflict,
+      local_updated_at: iso(8),
+      server_payload: { id: 'valuable-task', title: 'server v13' },
+      server_version: 13
+    }])).toThrow(/different local data/i);
+    expect(() => mergeServerConflicts(afterStaleReplay, [{
+      ...serverConflict,
+      local_deleted_at: iso(8),
+      server_payload: { id: 'valuable-task', title: 'server v13' },
+      server_version: 13
+    }])).toThrow(/different local data/i);
+  });
+
   it('does not consume an outbox entry for a malformed acknowledgement', () => {
     const meta = appendStagedTransactions(
       emptySyncMeta(), [transaction(1, 'same', { id: 'same', title: 'local' })], 'device-a'
@@ -213,6 +295,26 @@ describe('record-level synchronization invariants', () => {
       serverVersion: 0
     }], iso(2))).toThrow(/invalid/i);
     expect(meta.outbox).toHaveLength(1);
+  });
+
+  it.each([
+    ['entity identity', { entityId: 'different-task' }],
+    ['local version', { version: 99 }],
+    ['server version', { serverVersion: 99 }],
+    ['payload', { payload: { id: 'same', title: 'different' } }],
+    ['update timestamp', { updatedAt: iso(99) }],
+    ['tombstone timestamp', { deletedAt: iso(99) }]
+  ])('keeps a mutation pending when an accepted receipt has the wrong %s', (_label, recordPatch) => {
+    const meta = appendStagedTransactions(
+      emptySyncMeta(), [transaction(1, 'same', { id: 'same', title: 'local' })], 'device-a'
+    );
+    const batch = readyOutbox(meta);
+    const receipt = acceptedReceipt(batch[0], 8);
+    receipt.record = { ...receipt.record, ...recordPatch };
+
+    expect(() => applyPushResults(meta, batch, [receipt], iso(2))).toThrow(/exact submitted record/i);
+    expect(meta.outbox).toHaveLength(1);
+    expect(meta.conflicts).toHaveLength(0);
   });
 
   it('does not consume mutations when a server conflict id collides', () => {
@@ -262,6 +364,40 @@ describe('record-level synchronization invariants', () => {
     expect(readyOutbox(meta)[0]).toMatchObject({ mutationId: 'mutation-4', baseServerVersion: 5 });
   });
 
+  it('preserves the original history when a local conflict resolution is rejected', () => {
+    let meta = appendStagedTransactions(
+      emptySyncMeta(),
+      [transaction(1, 'same', { id: 'same', title: 'local one' })],
+      'device-a'
+    );
+    meta = applyPushResults(meta, readyOutbox(meta), [{
+      mutationId: 'mutation-1', accepted: false, serverVersion: 4,
+      conflictId: 'conflict-1', record: { payload: { id: 'same', title: 'cloud one' } }
+    }], iso(2));
+    meta = resolveConflictWithLocal(meta, 'conflict-1', 'device-a', iso(3), 'resolution-1');
+    meta = appendStagedTransactions(
+      meta,
+      [transaction(4, 'same', { id: 'same', title: 'local two' })],
+      'device-a'
+    );
+
+    meta = applyPushResults(meta, readyOutbox(meta), [{
+      mutationId: 'resolution-1', accepted: false, serverVersion: 6,
+      conflictId: 'conflict-2', record: { payload: { id: 'same', title: 'cloud two' } }
+    }], iso(6));
+
+    expect(meta.outbox).toHaveLength(0);
+    expect(meta.conflicts).toHaveLength(1);
+    expect(meta.conflicts[0]).toMatchObject({
+      id: 'conflict-2',
+      localPayload: { id: 'same', title: 'local two' },
+      serverPayload: { id: 'same', title: 'cloud two' },
+      status: 'unresolved'
+    });
+    expect(meta.conflicts[0].localHistory.map(item => item.mutationId))
+      .toEqual(['mutation-1', 'resolution-1', 'mutation-4']);
+  });
+
   it('applies a different-task remote edit without conflicting or replacing local work', () => {
     const meta = appendStagedTransactions(
       emptySyncMeta(),
@@ -286,6 +422,28 @@ describe('record-level synchronization invariants', () => {
       { id: 'local', title: 'offline' },
       { id: 'remote', title: 'new' }
     ]);
+  });
+
+  it('durably represents native task events before sharing their cursor', () => {
+    const event = {
+      id: 'event-1', taskId: 'task-1', eventType: 'completed',
+      localDate: '2026-08-27', metadata: { source: 'native' }, createdAt: 1_777_776_000_000
+    };
+    const applied = applyRemotePage(
+      emptySyncMeta(),
+      { task_events: [] },
+      [{
+        entityType: 'task_events', entityId: event.id, version: 1, serverVersion: 9,
+        deviceId: 'native-device', payload: event, deletedAt: null
+      }],
+      9,
+      'web-device',
+      iso(2)
+    );
+
+    expect(applied.meta.cursor).toBe(9);
+    expect(applied.values.task_events).toEqual([event]);
+    expect(applied.changedStores).toContain('task_events');
   });
 
   it('preserves both sides of a same-task pull conflict before advancing the cursor', () => {

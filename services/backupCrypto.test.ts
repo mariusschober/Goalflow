@@ -3,8 +3,9 @@ import { decryptBackup, encryptBackup } from './backupCrypto';
 import type { GoalflowBackup } from './storage';
 
 const backup: GoalflowBackup = {
-  schemaVersion: 2,
+  schemaVersion: 4,
   exportedAt: '2026-07-18T08:00:00.000Z',
+  ownerKey: 'user-1',
   checksum: 'a'.repeat(64),
   collections: { tasks: [{ id: 'task-1', title: 'Ship Goalflow' }], habits: [] }
 };

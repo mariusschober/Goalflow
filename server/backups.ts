@@ -50,7 +50,12 @@ export const decryptServerBackup = (
   if (!Number.isInteger(parsed.schemaVersion) || Number(parsed.schemaVersion) < 1 || Number(parsed.schemaVersion) > 3) {
     throw new Error('Backup schema version is unsupported.');
   }
-  if (typeof parsed.userId !== 'string' || !parsed.userId || !parsed.collections
+  if (typeof parsed.exportedAt !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?Z$/.test(parsed.exportedAt)
+    || !Number.isFinite(Date.parse(parsed.exportedAt))
+    || typeof parsed.userId !== 'string'
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(parsed.userId)
+    || !parsed.collections
     || typeof parsed.collections !== 'object' || Array.isArray(parsed.collections)) {
     throw new Error('Backup plaintext is invalid.');
   }
@@ -81,43 +86,93 @@ const rotate = async (admin: SupabaseClient, userId: string, kind: 'daily' | 'we
   }
 };
 
-export const runEncryptedBackups = async (config: AppConfig, admin: SupabaseClient): Promise<number> => {
-  if (!config.BACKUP_MASTER_KEY) throw new Error('Encrypted backups are not configured.');
-  const key = decodeKey(config.BACKUP_MASTER_KEY);
+export interface CreatedEncryptedBackup {
+  userId: string;
+  objectPath: string;
+  checksum: string;
+  byteSize: number;
+  exportedAt: string;
+}
+
+const requireBackupProtocol = async (admin: SupabaseClient): Promise<void> => {
   const { data: protocolVersion, error: protocolError } = await admin.rpc('goalflow_sync_protocol_version');
-  if (protocolError || Number(protocolVersion) !== 2) {
+  if (protocolError || Number(protocolVersion) !== 3) {
     throw new Error('Backups were not started because the complete data-integrity schema is not installed.');
   }
+};
+
+/**
+ * Creates one encrypted, checksummed user backup. Metadata is inserted in a
+ * visible failed state before the object upload; a crash can therefore leave
+ * an incomplete backup, but never an undiscoverable object presented as valid.
+ */
+export const createEncryptedBackupForUser = async (
+  config: AppConfig,
+  admin: SupabaseClient,
+  userId: string,
+  options: {
+    metadataKind?: 'daily' | 'weekly';
+    pathKind?: 'daily' | 'weekly' | 'pre-restore';
+    protocolAlreadyVerified?: boolean;
+  } = {}
+): Promise<CreatedEncryptedBackup> => {
+  if (!config.BACKUP_MASTER_KEY) throw new Error('Encrypted backups are not configured.');
+  if (!options.protocolAlreadyVerified) await requireBackupProtocol(admin);
+  const key = decodeKey(config.BACKUP_MASTER_KEY);
+  const { data: collections, error: exportError } = await admin.rpc('export_goalflow_backup', {
+    target_user_id: userId
+  });
+  if (exportError) throw exportError;
+  if (!collections || typeof collections !== 'object' || Array.isArray(collections)) {
+    throw new Error('Database backup export returned an invalid snapshot.');
+  }
+  const exportedAt = new Date().toISOString();
+  const plain = Buffer.from(JSON.stringify({ schemaVersion: 3, exportedAt, userId, collections }), 'utf8');
+  const checksum = crypto.createHash('sha256').update(plain).digest('hex');
+  const encrypted = encrypt(plain, key);
+  const metadataKind = options.metadataKind ?? (new Date().getUTCDay() === 0 ? 'weekly' : 'daily');
+  const pathKind = options.pathKind ?? metadataKind;
+  const objectPath = `${userId}/${pathKind}/${exportedAt.replace(/[:.]/g, '-')}.goalflow-backup.enc`;
+
+  const { error: metadataError } = await admin.from('backup_metadata').insert({
+    user_id: userId,
+    object_path: objectPath,
+    backup_kind: metadataKind,
+    checksum,
+    byte_size: encrypted.length,
+    status: 'failed'
+  });
+  if (metadataError) throw metadataError;
+
+  const { error: uploadError } = await admin.storage.from('goalflow-backups').upload(objectPath, encrypted, {
+    contentType: 'application/octet-stream', upsert: false, cacheControl: '0'
+  });
+  if (uploadError) throw uploadError;
+
+  const { data: completedMetadata, error: completeError } = await admin.from('backup_metadata')
+    .update({ status: 'complete' })
+    .eq('user_id', userId).eq('object_path', objectPath).eq('status', 'failed')
+    .select('object_path').single();
+  if (completeError || !completedMetadata) {
+    throw completeError ?? new Error('Backup upload completed but durable metadata was not finalized.');
+  }
+  return { userId, objectPath, checksum, byteSize: encrypted.length, exportedAt };
+};
+
+export const runEncryptedBackups = async (config: AppConfig, admin: SupabaseClient): Promise<number> => {
+  if (!config.BACKUP_MASTER_KEY) throw new Error('Encrypted backups are not configured.');
+  await requireBackupProtocol(admin);
   const { data: profiles, error: profileError } = await admin.from('profiles').select('user_id').eq('status', 'active');
   if (profileError) throw profileError;
   let completed = 0;
 
   for (const profile of profiles ?? []) {
-    const { data: collections, error: exportError } = await admin.rpc('export_goalflow_backup', {
-      target_user_id: profile.user_id
-    });
-    if (exportError) throw exportError;
-    if (!collections || typeof collections !== 'object' || Array.isArray(collections)) {
-      throw new Error('Database backup export returned an invalid snapshot.');
-    }
-    const exportedAt = new Date().toISOString();
-    const plain = Buffer.from(JSON.stringify({ schemaVersion: 3, exportedAt, userId: profile.user_id, collections }), 'utf8');
-    const checksum = crypto.createHash('sha256').update(plain).digest('hex');
-    const encrypted = encrypt(plain, key);
     const kind: 'daily' | 'weekly' = new Date().getUTCDay() === 0 ? 'weekly' : 'daily';
-    const objectPath = `${profile.user_id}/${kind}/${exportedAt.replace(/[:.]/g, '-')}.goalflow-backup.enc`;
-    const { error: uploadError } = await admin.storage.from('goalflow-backups').upload(objectPath, encrypted, {
-      contentType: 'application/octet-stream', upsert: false, cacheControl: '0'
+    await createEncryptedBackupForUser(config, admin, String(profile.user_id), {
+      metadataKind: kind,
+      pathKind: kind,
+      protocolAlreadyVerified: true
     });
-    if (uploadError) throw uploadError;
-    const { error: metadataError } = await admin.from('backup_metadata').insert({
-      user_id: profile.user_id, object_path: objectPath, backup_kind: kind,
-      checksum, byte_size: encrypted.length, status: 'complete'
-    });
-    if (metadataError) {
-      await admin.storage.from('goalflow-backups').remove([objectPath]);
-      throw metadataError;
-    }
     await rotate(admin, profile.user_id, 'daily', 7);
     await rotate(admin, profile.user_id, 'weekly', 4);
     completed += 1;

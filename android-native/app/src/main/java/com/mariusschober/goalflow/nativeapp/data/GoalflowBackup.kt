@@ -28,6 +28,8 @@ data class GoalflowBackupPayload(
     val conflicts: List<SyncConflictEntity> = emptyList(),
     /** Raw JSON for web collections without a dedicated native model yet. */
     val rawCollections: Map<String, String> = emptyMap(),
+    /** Durable, server-verified account identity used to reject cross-account restores. */
+    val ownerUserId: String? = null,
     /** Prevents a restore from mixing records from another backend/account. */
     val syncBinding: GoalflowSyncBinding? = null
 )
@@ -129,10 +131,37 @@ object GoalflowBackup {
             val envelopePayload = JSONObject(String(cipher.doFinal(ciphertext), StandardCharsets.UTF_8))
             val schemaVersion = envelopePayload.optInt("schemaVersion", 1)
             if (schemaVersion !in 1..SCHEMA_VERSION) throw BackupFormatException("This backup was created by a newer Goalflow version.")
+            if (schemaVersion >= 3) {
+                runCatching { Instant.parse(envelopePayload.getString("exportedAt")) }
+                    .getOrElse { throw BackupFormatException("Backup export timestamp is invalid or missing.") }
+            }
             val collections = envelopePayload.optJSONObject("collections") ?: envelopePayload
+            val ownerValue = if (schemaVersion >= 4 && envelopePayload.has("ownerKey")) {
+                envelopePayload.opt("ownerKey")
+            } else if (schemaVersion >= 4 && collections.has("ownerUserId")) {
+                collections.opt("ownerUserId")
+            } else null
+            val ownerUserId = when (ownerValue) {
+                null, JSONObject.NULL -> null
+                is String -> ownerValue.trim().also { owner ->
+                    if (runCatching { java.util.UUID.fromString(owner) }.isFailure) {
+                        throw BackupFormatException("Backup account binding is invalid.")
+                    }
+                }
+                else -> throw BackupFormatException("Backup account binding is invalid.")
+            }
             val syncBinding = envelopePayload.optJSONObject("syncBinding")?.let(::parseSyncBinding)
-            val payload = parsePayload(collections, syncBinding)
+            val bindingOwnerUserId = syncBinding?.accountSubject?.trim()?.takeIf(String::isNotBlank)?.let { accountSubject ->
+                runCatching { java.util.UUID.fromString(accountSubject).toString() }.getOrNull()
+            }
+            if (ownerUserId != null && bindingOwnerUserId != null && ownerUserId != bindingOwnerUserId) {
+                throw BackupFormatException("Backup account bindings disagree.")
+            }
+            val payload = parsePayload(collections, ownerUserId, syncBinding)
             val expectedChecksum = envelopePayload.optString("checksum", collections.optString("checksum"))
+            if (schemaVersion >= 3 && !expectedChecksum.matches(Regex("^[0-9a-fA-F]{64}$"))) {
+                throw BackupFormatException("Backup checksum is invalid or missing.")
+            }
             val rawChecksum = sha256(collections.toString())
             val canonicalChecksum = sha256(checksumSource(payload, schemaVersion).toString())
             val webChecksum = sha256(webChecksumSource(collections).toString())
@@ -155,7 +184,11 @@ object GoalflowBackup {
         }
     }
 
-    private fun parsePayload(collections: JSONObject, syncBinding: GoalflowSyncBinding? = null): GoalflowBackupPayload {
+    private fun parsePayload(
+        collections: JSONObject,
+        ownerUserId: String? = null,
+        syncBinding: GoalflowSyncBinding? = null
+    ): GoalflowBackupPayload {
         // The web backup stores only non-empty collections and calls daily
         // planning decisions `daily_plans`; native backups use explicit empty
         // arrays and the shorter `plans` name. Accept both without weakening
@@ -187,13 +220,14 @@ object GoalflowBackup {
         }
         val metadataKeys = setOf(
             "tasks", "goals", "plans", "daily_plans", "events", "task_events", "habits", "outbox", "syncMeta", "conflicts",
-            "rawCollections", "schemaVersion", "exportedAt", "checksum", "syncBinding"
+            "rawCollections", "schemaVersion", "exportedAt", "checksum", "ownerUserId", "syncBinding"
         )
         val directKeys = collections.keys()
         while (directKeys.hasNext()) {
             val key = directKeys.next()
             if (key !in metadataKeys) addRawCollection(rawCollections, key, jsonText(collections.get(key)))
         }
+        rawCollections["sync"]?.let(::validatePreservedWebSyncState)
         val payload = GoalflowBackupPayload(
             tasks = tasks,
             goals = goals,
@@ -204,6 +238,7 @@ object GoalflowBackup {
             syncMeta = optionalArrayOrNull(collections, "syncMeta")?.let(::parseSyncMeta).orEmpty(),
             conflicts = optionalArrayOrNull(collections, "conflicts")?.let(::parseConflicts).orEmpty(),
             rawCollections = rawCollections,
+            ownerUserId = ownerUserId,
             syncBinding = syncBinding
         )
         requireUnique(payload.tasks.map { it.id }, "task")
@@ -222,6 +257,21 @@ object GoalflowBackup {
         requireUnique(payload.conflicts.map { it.id }, "conflict")
         validateSyncState(payload)
         return payload
+    }
+
+    private fun validatePreservedWebSyncState(raw: String) {
+        val value = parseJsonValue(raw) as? JSONObject
+            ?: throw BackupFormatException("Preserved web synchronization state is invalid.")
+        for (key in listOf("outbox", "conflicts")) {
+            if (!value.has(key)) continue
+            val rows = value.optJSONArray(key)
+                ?: throw BackupFormatException("Preserved web synchronization recovery data is invalid.")
+            if (rows.length() > 0) {
+                throw BackupFormatException(
+                    "This web backup contains pending synchronization recovery data. Restore it in the web app."
+                )
+            }
+        }
     }
 
     private fun optionalArray(collections: JSONObject, vararg keys: String): JSONArray {
@@ -259,6 +309,7 @@ object GoalflowBackup {
         put("schemaVersion", SCHEMA_VERSION)
         requireInstant(exportedAt, "backup export timestamp")
         put("exportedAt", exportedAt)
+        put("ownerKey", payload.ownerUserId ?: JSONObject.NULL)
         put("checksum", sha256(checksumSource(payload).toString()))
         put("collections", checksumSource(payload))
         payload.syncBinding?.let { put("syncBinding", syncBindingPayload(it)) }
@@ -408,9 +459,8 @@ object GoalflowBackup {
             runCatching { java.util.UUID.fromString(mutationId) }
                 .getOrElse { throw BackupFormatException("Backup contains an invalid pending mutation identity.") }
             val payload = item.requiredString("payload", "pending mutation")
-            runCatching {
-                if (payload.trimStart().startsWith("[")) JSONArray(payload) else JSONObject(payload)
-            }.getOrElse { throw BackupFormatException("Backup contains an invalid pending mutation payload.") }
+            runCatching { parseJsonValue(payload) }
+                .getOrElse { throw BackupFormatException("Backup contains an invalid pending mutation payload.") }
             val updatedAt = item.requiredString("updatedAt", "pending mutation")
             requireInstant(updatedAt, "pending mutation timestamp")
             val deletedAt = item.nullableString("deletedAt")

@@ -2,12 +2,13 @@ import { v5 as uuidv5 } from 'uuid';
 
 export const SYNC_META_SCHEMA_VERSION = 2;
 const LEGACY_MUTATION_NAMESPACE = '384d2580-c159-4f6a-97d4-f4e94809538b';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const STORE = {
   TASKS: 'tasks', GOALS: 'goals', HABITS: 'habits', STATS: 'stats', PROGRESS: 'progress',
   HASHTAGS: 'hashtags', ACCOUNTABILITY: 'accountability', TRUE_NORTH: 'truenorth',
   AMALGAM: 'amalgam', TRACKING: 'tracking', CIRCADIAN: 'circadian', SETTINGS: 'settings',
-  DAILY_PLANS: 'daily_plans'
+  DAILY_PLANS: 'daily_plans', TASK_EVENTS: 'task_events'
 } as const;
 
 export const RECORD_LEVEL_STORES = new Set<string>([
@@ -15,7 +16,8 @@ export const RECORD_LEVEL_STORES = new Set<string>([
   STORE.GOALS,
   STORE.HABITS,
   STORE.TRUE_NORTH,
-  STORE.DAILY_PLANS
+  STORE.DAILY_PLANS,
+  STORE.TASK_EVENTS
 ]);
 
 export interface SyncMutation {
@@ -121,6 +123,34 @@ export interface RemoteSyncRecord {
   payload: unknown;
   updatedAt?: string;
   deletedAt?: string | null;
+}
+
+export interface RemoteServerConflict {
+  id?: unknown;
+  entityType?: unknown;
+  entity_type?: unknown;
+  entityId?: unknown;
+  entity_id?: unknown;
+  mutationId?: unknown;
+  mutation_id?: unknown;
+  localPayload?: unknown;
+  local_payload?: unknown;
+  localDeletedAt?: unknown;
+  local_deleted_at?: unknown;
+  localVersion?: unknown;
+  local_version?: unknown;
+  localUpdatedAt?: unknown;
+  local_updated_at?: unknown;
+  serverPayload?: unknown;
+  server_payload?: unknown;
+  serverDeletedAt?: unknown;
+  server_deleted_at?: unknown;
+  serverMissing?: unknown;
+  server_missing?: unknown;
+  serverVersion?: unknown;
+  server_version?: unknown;
+  createdAt?: unknown;
+  created_at?: unknown;
 }
 
 export const emptySyncMeta = (): SyncMeta => ({
@@ -521,6 +551,7 @@ export const applyPushResults = (
       const recordEntityId = record?.entityId ?? record?.entity_id;
       const recordVersion = Number(record?.version);
       const recordServerVersion = Number(record?.serverVersion ?? record?.server_version);
+      const recordUpdatedAt = record?.updatedAt ?? record?.updated_at;
       const recordDeletedAt = record?.deletedAt ?? record?.deleted_at ?? null;
       if (!record
         || recordEntityType !== mutation.entityType
@@ -528,6 +559,7 @@ export const applyPushResults = (
         || recordVersion !== mutation.version
         || recordServerVersion !== candidate.serverVersion
         || stableJson(record.payload) !== stableJson(mutation.payload)
+        || !sameInstant(recordUpdatedAt, mutation.updatedAt)
         || !sameInstant(recordDeletedAt, mutation.deletedAt)
         || candidate.replayMismatch === true
         || candidate.serverMissing === true
@@ -671,7 +703,7 @@ export const applyRemotePage = (
   const supportedStores = new Set<string>([
     STORE.TASKS, STORE.GOALS, STORE.HABITS, STORE.STATS, STORE.PROGRESS,
     STORE.HASHTAGS, STORE.ACCOUNTABILITY, STORE.TRUE_NORTH, STORE.AMALGAM,
-    STORE.TRACKING, STORE.CIRCADIAN, STORE.SETTINGS, STORE.DAILY_PLANS
+    STORE.TRACKING, STORE.CIRCADIAN, STORE.SETTINGS, STORE.DAILY_PLANS, STORE.TASK_EVENTS
   ]);
   const seenServerVersions = new Set<number>();
   for (const record of records) {
@@ -783,6 +815,130 @@ export const applyRemotePage = (
   }
   meta.cursor = Math.max(meta.cursor, finiteVersion(nextCursor, meta.cursor));
   return { meta, values, changedStores: Array.from(changedStores) };
+};
+
+/**
+ * Imports the server's append-only conflict ledger into local durable state.
+ * This is essential after a fresh install or restore: a conflict is not safe
+ * merely because it exists in PostgreSQL if the user cannot see either side.
+ */
+export const mergeServerConflicts = (
+  input: SyncMeta,
+  conflicts: RemoteServerConflict[]
+): SyncMeta => {
+  const meta = cloneMeta(input);
+  const seenIds = new Set<string>();
+  const representedMutationIds = new Set([
+    ...meta.outbox.map(item => item.mutationId),
+    ...meta.conflicts.flatMap(item => item.localHistory.map(entry => entry.mutationId))
+  ]);
+  for (const [index, candidate] of conflicts.entries()) {
+    if (!isRecord(candidate)) throw new Error(`Server conflict ${index} is invalid. Existing conflicts were not changed.`);
+    const id = candidate.id;
+    const entityType = candidate.entityType ?? candidate.entity_type;
+    const entityId = candidate.entityId ?? candidate.entity_id;
+    const mutationId = candidate.mutationId ?? candidate.mutation_id;
+    const localPayload = Object.prototype.hasOwnProperty.call(candidate, 'localPayload')
+      ? candidate.localPayload : candidate.local_payload;
+    const serverPayload = Object.prototype.hasOwnProperty.call(candidate, 'serverPayload')
+      ? candidate.serverPayload : candidate.server_payload;
+    const localDeletedAt = candidate.localDeletedAt ?? candidate.local_deleted_at ?? null;
+    const serverDeletedAt = candidate.serverDeletedAt ?? candidate.server_deleted_at ?? null;
+    const localUpdatedAt = candidate.localUpdatedAt ?? candidate.local_updated_at
+      ?? candidate.createdAt ?? candidate.created_at;
+    const createdAt = candidate.createdAt ?? candidate.created_at;
+    const localVersionValue = candidate.localVersion ?? candidate.local_version;
+    const serverVersionValue = candidate.serverVersion ?? candidate.server_version;
+    const localVersion = localVersionValue == null ? 1 : localVersionValue;
+    const serverVersion = serverVersionValue;
+    const serverMissing = (candidate.serverMissing ?? candidate.server_missing) === true;
+    const localPayloadPresent = Object.prototype.hasOwnProperty.call(candidate, 'localPayload')
+      || Object.prototype.hasOwnProperty.call(candidate, 'local_payload');
+    const serverPayloadPresent = Object.prototype.hasOwnProperty.call(candidate, 'serverPayload')
+      || Object.prototype.hasOwnProperty.call(candidate, 'server_payload');
+    if (typeof id !== 'string' || !UUID_PATTERN.test(id) || seenIds.has(id)
+      || typeof entityType !== 'string' || !entityType
+      || typeof entityId !== 'string' || !entityId
+      || typeof mutationId !== 'string' || !UUID_PATTERN.test(mutationId)
+      || !localPayloadPresent
+      || typeof createdAt !== 'string' || !Number.isFinite(Date.parse(createdAt))
+      || typeof localUpdatedAt !== 'string' || !Number.isFinite(Date.parse(localUpdatedAt))
+      || typeof localVersion !== 'number' || !Number.isSafeInteger(localVersion) || localVersion <= 0
+      || typeof serverVersion !== 'number' || !Number.isSafeInteger(serverVersion) || serverVersion < 0
+      || (localDeletedAt !== null && (typeof localDeletedAt !== 'string'
+        || !Number.isFinite(Date.parse(localDeletedAt))))
+      || (serverDeletedAt !== null && (typeof serverDeletedAt !== 'string'
+        || !Number.isFinite(Date.parse(serverDeletedAt))))
+      || (!serverMissing && !serverPayloadPresent)) {
+      throw new Error(`Server conflict ${index} is incomplete or damaged. Existing conflicts were not changed.`);
+    }
+    seenIds.add(id);
+    const existing = meta.conflicts.find(item => item.id === id);
+    if (existing) {
+      if (existing.entityType !== entityType || existing.entityId !== entityId
+        || (existing.mutationId !== undefined && existing.mutationId !== mutationId)) {
+        throw new Error('A server conflict id refers to different records. Existing conflicts were not changed.');
+      }
+      const representedLocalSide = existing.localHistory.find(entry => entry.mutationId === mutationId);
+      if (!representedLocalSide
+        || stableJson(representedLocalSide.payload) !== stableJson(localPayload)
+        || representedLocalSide.version !== localVersion
+        || !sameInstant(representedLocalSide.updatedAt, localUpdatedAt)
+        || !sameInstant(representedLocalSide.deletedAt, localDeletedAt as string | null)) {
+        throw new Error('A server conflict mutation refers to different local data. Existing conflicts were not changed.');
+      }
+      if (serverVersion === existing.serverVersion
+        && (stableJson(existing.serverPayload) !== stableJson(serverPayload)
+          || existing.serverMissing !== serverMissing
+          || !sameInstant(existing.serverDeletedAt, serverDeletedAt as string | null))) {
+        throw new Error('A server conflict version refers to different cloud data. Existing conflicts were not changed.');
+      }
+      if (serverVersion > existing.serverVersion) {
+        existing.serverPayload = serverPayload;
+        existing.serverMissing = serverMissing;
+        existing.serverDeletedAt = serverDeletedAt as string | null;
+        existing.serverVersion = serverVersion;
+      }
+      const key = syncEntityKey(entityType, entityId);
+      meta.versions[key] = {
+        local: Math.max(meta.versions[key]?.local ?? 0, localVersion),
+        server: Math.max(meta.versions[key]?.server ?? 0, serverVersion)
+      };
+      continue;
+    }
+    if (representedMutationIds.has(mutationId)) {
+      throw new Error('A server conflict mutation identity collides with different pending data. Existing conflicts were not changed.');
+    }
+    representedMutationIds.add(mutationId);
+    meta.conflicts.push({
+      id,
+      kind: 'push-rejected',
+      entityType,
+      entityId,
+      mutationId,
+      localPayload,
+      localDeletedAt: localDeletedAt as string | null,
+      localHistory: [{
+        mutationId,
+        payload: localPayload,
+        deletedAt: localDeletedAt as string | null,
+        updatedAt: localUpdatedAt,
+        version: localVersion
+      }],
+      serverPayload,
+      serverMissing,
+      serverDeletedAt: serverDeletedAt as string | null,
+      serverVersion,
+      createdAt,
+      status: 'unresolved'
+    });
+    const key = syncEntityKey(entityType, entityId);
+    meta.versions[key] = {
+      local: Math.max(meta.versions[key]?.local ?? 0, localVersion),
+      server: Math.max(meta.versions[key]?.server ?? 0, serverVersion)
+    };
+  }
+  return meta;
 };
 
 export const resolveConflictWithLocal = (

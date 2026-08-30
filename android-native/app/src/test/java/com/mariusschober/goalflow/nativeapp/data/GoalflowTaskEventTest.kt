@@ -135,6 +135,36 @@ class GoalflowTaskEventTest {
     }
 
     @Test
+    fun explicitCloudResolutionCanRemoveAConflictingEventTombstone() = runTest {
+        val task = repository.createTask(
+            "Resolve the history conflict",
+            "",
+            SchedulePrecision.DAY,
+            LocalDate.now().toString(),
+            null,
+            false
+        )
+        val event = database.taskEventDao().getAll().single { it.taskId == task.id }
+        database.syncConflictDao().insert(
+            SyncConflictEntity(
+                id = "event-tombstone-conflict",
+                entityType = "task_events",
+                entityId = event.id,
+                localPayload = GoalflowTaskEventJson.eventPayload(event).toString(),
+                serverPayload = "",
+                serverDeletedAt = java.time.Instant.now().toString(),
+                serverVersion = 200,
+                createdAt = java.time.Instant.now().toString()
+            )
+        )
+
+        repository.resolveConflictWithCloud("event-tombstone-conflict")
+
+        assertEquals(null, database.taskEventDao().get(event.id))
+        assertEquals(null, database.syncConflictDao().get("event-tombstone-conflict"))
+    }
+
+    @Test
     fun frogsCannotBeSkipped() = runTest {
         val frog = repository.createTask("Frog", "", SchedulePrecision.DAY, LocalDate.now().toString(), null, true)
         try {

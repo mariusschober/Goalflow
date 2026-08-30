@@ -47,6 +47,17 @@ class GoalflowBackupTest {
                     payload = GoalflowJson.taskPayload(task).toString(),
                     updatedAt = "2026-08-27T00:00:00Z",
                     deletedAt = null
+                ),
+                SyncOutboxEntity(
+                    mutationId = "00000000-0000-4000-8000-000000000002",
+                    deviceId = "device-a",
+                    entityType = "amalgam",
+                    entityId = "singleton",
+                    baseServerVersion = null,
+                    version = 1,
+                    payload = "\"My world takes care of me\"",
+                    updatedAt = "2026-08-27T00:00:01Z",
+                    deletedAt = null
                 )
             ),
             syncMeta = listOf(SyncMetaEntity("tasks:${task.id}", 0, 1, null, null)),
@@ -65,7 +76,8 @@ class GoalflowBackupTest {
                 "truenorth" to "[{\"id\":\"vision-1\",\"vision\":\"A calm life\"}]",
                 "amalgam" to "\"My world takes care of me\"",
                 "stats" to "{\"2026-08-27\":{\"tasksCompleted\":2}}"
-            )
+            ),
+            ownerUserId = "00000000-0000-4000-8000-000000000009"
         )
         val restored = GoalflowBackup.decrypt(GoalflowBackup.encrypt(payload, PASSWORD), PASSWORD)
 
@@ -81,6 +93,7 @@ class GoalflowBackupTest {
         payload.rawCollections.forEach { (key, value) ->
             assertEquals("raw collection $key", value, restored.rawCollections[key])
         }
+        assertEquals("account binding roundtrip", payload.ownerUserId, restored.ownerUserId)
     }
 
     @Test
@@ -178,6 +191,22 @@ class GoalflowBackupTest {
             goals = emptyList(),
             plans = emptyList(),
             outbox = listOf(mutation(firstId, secondId), mutation(secondId, firstId))
+        )
+
+        assertThrows(BackupFormatException::class.java) {
+            GoalflowBackup.decrypt(GoalflowBackup.encrypt(payload, PASSWORD), PASSWORD)
+        }
+    }
+
+    @Test
+    fun `web pending recovery state is rejected instead of being hidden as raw data`() {
+        val payload = GoalflowBackupPayload(
+            tasks = emptyList(),
+            goals = emptyList(),
+            plans = emptyList(),
+            rawCollections = mapOf(
+                "sync" to """{"schemaVersion":2,"cursor":0,"versions":{},"outbox":[{"mutationId":"valuable"}],"conflicts":[]}"""
+            )
         )
 
         assertThrows(BackupFormatException::class.java) {

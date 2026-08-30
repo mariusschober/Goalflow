@@ -453,6 +453,86 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `scalar collection rejection is preserved as a recoverable conflict`() = runTest {
+        repository.updateAmalgam("valuable local thought")
+        val mutation = repository.readySyncMutations().single()
+
+        repository.commitPushResults(
+            listOf(mutation),
+            listOf(NativePushResult(
+                mutationId = mutation.mutationId,
+                accepted = false,
+                serverVersion = 4,
+                conflictId = "scalar-conflict",
+                serverPayload = "\"valuable cloud thought\""
+            ))
+        )
+
+        assertTrue(repository.pendingSyncMutations().isEmpty())
+        val conflict = database.syncConflictDao().get("scalar-conflict")
+        assertEquals("\"valuable local thought\"", conflict?.localPayload)
+        assertEquals("\"valuable cloud thought\"", conflict?.serverPayload)
+        assertEquals(
+            "valuable local thought",
+            JSONArray(conflict?.localHistory).getJSONObject(0).getString("payload")
+        )
+    }
+
+    @Test
+    fun `later local edit keeps the server conflict mutation identity stable`() = runTest {
+        val task = repository.createTask(
+            title = "First local side",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        val original = repository.readySyncMutations().single { it.entityId == task.id }
+        val conflictId = "99999999-9999-4999-8999-999999999998"
+        repository.commitPushResults(
+            listOf(original),
+            listOf(NativePushResult(
+                mutationId = original.mutationId,
+                accepted = false,
+                serverVersion = 9,
+                conflictId = conflictId,
+                serverPayload = "{\"id\":\"${task.id}\",\"title\":\"Cloud side\"}"
+            ))
+        )
+
+        repository.updateTask(
+            id = task.id,
+            title = "Second local side",
+            notes = task.notes,
+            schedulePrecision = task.schedulePrecision,
+            scheduledFor = task.scheduledFor,
+            scheduledTime = task.scheduledTime,
+            isFrog = task.isFrog,
+            goalId = task.goalId
+        )
+
+        val stored = database.syncConflictDao().get(conflictId)!!
+        assertEquals(original.mutationId, stored.mutationId)
+        assertEquals(2, JSONArray(stored.localHistory).length())
+        assertEquals(0, repository.mergeServerConflicts(listOf(NativeServerConflict(
+            id = conflictId,
+            entityType = "tasks",
+            entityId = task.id,
+            mutationId = original.mutationId,
+            localPayload = original.payload,
+            localDeletedAt = original.deletedAt,
+            localVersion = original.version,
+            localUpdatedAt = original.updatedAt,
+            serverPayload = "{\"id\":\"${task.id}\",\"title\":\"Cloud side\"}",
+            serverDeletedAt = null,
+            serverVersion = 9,
+            serverMissing = false,
+            createdAt = stored.createdAt
+        ))))
+    }
+
+    @Test
     fun `pull conflict is stored before cursor advances`() = runTest {
         val local = repository.createTask(
             title = "Local version",
@@ -628,6 +708,60 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `local Room data can never synchronize into a second account`() = runTest {
+        repository.createTask(
+            title = "Account A data",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        repository.bindSyncAccount("00000000-0000-4000-8000-000000000001")
+
+        try {
+            repository.bindSyncAccount("00000000-0000-4000-8000-000000000002")
+            fail("Cross-account synchronization must stop")
+        } catch (_: NativeSyncAccountMismatch) {
+            // Existing data and pending mutations remain untouched.
+        }
+
+        assertEquals(1, repository.pendingSyncMutations().size)
+        assertEquals(
+            "00000000-0000-4000-8000-000000000001",
+            database.localAccountDao().get()?.userId
+        )
+    }
+
+    @Test
+    fun `server-only conflict hydration durably preserves both sides`() = runTest {
+        val localPayload = "{\"id\":\"valuable-task\",\"title\":\"newer pre-restore version\"}"
+        val serverPayload = "{\"id\":\"valuable-task\",\"title\":\"restored version\"}"
+        val inserted = repository.mergeServerConflicts(listOf(NativeServerConflict(
+            id = "99999999-9999-4999-8999-999999999999",
+            entityType = "tasks",
+            entityId = "valuable-task",
+            mutationId = "88888888-8888-4888-8888-888888888888",
+            localPayload = localPayload,
+            localDeletedAt = null,
+            localVersion = 7,
+            localUpdatedAt = "2026-08-26T00:00:00Z",
+            serverPayload = serverPayload,
+            serverDeletedAt = null,
+            serverVersion = 12,
+            serverMissing = false,
+            createdAt = "2026-08-27T00:00:00Z"
+        )))
+
+        assertEquals(1, inserted)
+        val conflict = database.syncConflictDao().get("99999999-9999-4999-8999-999999999999")
+        assertNotNull(conflict)
+        assertEquals(localPayload, conflict?.localPayload)
+        assertEquals(serverPayload, conflict?.serverPayload)
+        assertTrue(conflict?.localHistory.orEmpty().contains("88888888-8888-4888-8888-888888888888"))
+    }
+
+    @Test
     fun `conflict id collision rolls back every acknowledgement`() = runTest {
         repeat(2) { index ->
             repository.createTask(
@@ -716,6 +850,38 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `restore from a different bound account leaves valid local data unchanged`() = runTest {
+        val task = repository.createTask(
+            title = "Keep account A data",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        repository.bindSyncAccount("00000000-0000-4000-8000-000000000001")
+        val envelope = GoalflowBackup.encrypt(
+            GoalflowBackupPayload(
+                tasks = emptyList(),
+                goals = emptyList(),
+                plans = emptyList(),
+                ownerUserId = "00000000-0000-4000-8000-000000000002"
+            ),
+            "strong-password"
+        )
+
+        try {
+            repository.restoreBackup(envelope, "strong-password")
+            fail("A cross-account restore must stop before replacing data")
+        } catch (_: NativeSyncAccountMismatch) {
+            // The Room transaction does not begin destructive work.
+        }
+
+        assertEquals("Keep account A data", database.taskDao().get(task.id)?.title)
+        assertTrue(repository.pendingSyncMutations().isNotEmpty())
+    }
+
+    @Test
     fun `restore preserves a future collection without inventing a native sync mutation`() = runTest {
         val envelope = GoalflowBackup.encrypt(
             GoalflowBackupPayload(
@@ -789,6 +955,26 @@ class GoalflowRepositorySyncTest {
         assertTrue(preview.syncStateWillBeQuarantined)
         assertTrue(database.syncMetaDao().getAll().isEmpty())
         assertTrue(database.rawCollectionDao().getAll().any { it.entityType.startsWith(RESTORE_QUARANTINE_PREFIX) })
+    }
+
+    @Test
+    fun `preserved empty web sync metadata is never queued as a domain mutation`() = runTest {
+        val envelope = GoalflowBackup.encrypt(
+            GoalflowBackupPayload(
+                tasks = emptyList(),
+                goals = emptyList(),
+                plans = emptyList(),
+                rawCollections = mapOf(
+                    "sync" to """{"schemaVersion":2,"cursor":0,"versions":{},"outbox":[],"conflicts":[]}"""
+                )
+            ),
+            "strong-password"
+        )
+
+        repository.restoreBackup(envelope, "strong-password")
+
+        assertTrue(repository.pendingSyncMutations().none { it.entityType == "sync" })
+        assertTrue(database.rawCollectionDao().get("sync") != null)
     }
 
     @Test

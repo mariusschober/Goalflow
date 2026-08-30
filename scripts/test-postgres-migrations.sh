@@ -19,6 +19,8 @@ psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${repository_root}/scripts/su
 for migration in "${repository_root}"/supabase/migrations/*.sql; do
   psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${migration}" >/dev/null
 done
+psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${repository_root}/scripts/migration-current-seed.sql" >/dev/null
+psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null
 
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/supabase-test-bootstrap.sql" >/dev/null
 for migration in \
@@ -28,7 +30,12 @@ for migration in \
   psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-current-seed.sql" >/dev/null
-psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/supabase/migrations/202608260001_zero_silent_data_loss.sql" >/dev/null
+for migration in \
+  "${repository_root}/supabase/migrations/202608260001_zero_silent_data_loss.sql" \
+  "${repository_root}/supabase/migrations/202608290001_native_task_events.sql" \
+  "${repository_root}/supabase/migrations/202608300001_complete_native_sync_transport.sql"; do
+  psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
+done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null
 
-echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","atomicRestore":"PASS"}'
+echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS"}'

@@ -1,6 +1,6 @@
 import { readConfig } from '../server/config';
 import { createAdminClient } from '../server/supabase';
-import { decryptServerBackup } from '../server/backups';
+import { createEncryptedBackupForUser, decryptServerBackup } from '../server/backups';
 
 const argument = (name: string): string | undefined => {
   const index = process.argv.indexOf(name);
@@ -39,9 +39,17 @@ const backup = decryptServerBackup(
 );
 if (backup.userId !== userId) throw new Error('Backup owner does not match the explicit restore target.');
 
+// A successful but operator-mistaken point-in-time restore still needs a
+// recovery path. Abort before touching the database unless the current state
+// has itself been encrypted, uploaded, and marked complete.
+const preRestoreBackup = await createEncryptedBackupForUser(config, admin, userId, {
+  metadataKind: 'daily',
+  pathKind: 'pre-restore'
+});
+
 const { data: result, error: restoreError } = await admin.rpc('restore_goalflow_backup', {
   target_user_id: userId,
   backup_payload: backup
 });
 if (restoreError) throw restoreError;
-process.stdout.write(`${JSON.stringify(result)}\n`);
+process.stdout.write(`${JSON.stringify({ result, preRestoreBackup })}\n`);

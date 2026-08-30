@@ -1,13 +1,22 @@
 import { authenticatedFetch, supabase } from './authService';
 import { storageService, STORES } from './storage';
-import { emptySyncMeta, normalizeSyncMeta, type PushResult, type RemoteSyncRecord, type SyncMeta, type SyncMutation } from './syncProtocol';
+import {
+  emptySyncMeta,
+  normalizeSyncMeta,
+  type PushResult,
+  type RemoteServerConflict,
+  type RemoteSyncRecord,
+  type SyncMeta,
+  type SyncMutation
+} from './syncProtocol';
 
 export type SyncState = 'saved-locally' | 'syncing' | 'synced' | 'offline' | 'error' | 'conflict';
 
 const SYNCED_STORES: string[] = [
   STORES.TASKS, STORES.GOALS, STORES.HABITS, STORES.STATS, STORES.PROGRESS,
   STORES.HASHTAGS, STORES.ACCOUNTABILITY, STORES.TRUE_NORTH, STORES.AMALGAM,
-  STORES.TRACKING, STORES.CIRCADIAN, STORES.SETTINGS, STORES.DAILY_PLANS
+  STORES.TRACKING, STORES.CIRCADIAN, STORES.SETTINGS, STORES.DAILY_PLANS,
+  STORES.TASK_EVENTS
 ];
 
 export interface CloudSyncDependencies {
@@ -136,6 +145,16 @@ export const synchronizeCloudOnce = async (
     meta = applied.meta;
     hasMore = body.hasMore;
   }
+
+  const conflictResponse = await dependencies.fetch('/api/v1/sync/conflicts');
+  const conflictBody = await parseJson<{ conflicts?: RemoteServerConflict[] }>(
+    conflictResponse,
+    'Sync conflicts could not be verified. Existing local state was not changed.'
+  );
+  if (!Array.isArray(conflictBody.conflicts)) {
+    throw new Error('Sync conflict response was invalid. Existing local state was not changed.');
+  }
+  meta = await storageService.mergeServerConflicts(userKey, conflictBody.conflicts);
 
   meta = await storageService.markSyncSuccessful(userKey);
   return meta;

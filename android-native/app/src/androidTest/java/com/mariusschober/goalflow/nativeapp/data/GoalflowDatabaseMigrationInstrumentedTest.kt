@@ -25,7 +25,7 @@ class GoalflowDatabaseMigrationInstrumentedTest {
 
     @Test
     fun migrateEverySupportedVersionWithoutDestructiveFallback() = runBlocking {
-        for (startVersion in 1..5) {
+        for (startVersion in 1..6) {
             val databaseName = "goalflow-migration-$startVersion.db"
             context.deleteDatabase(databaseName)
             migrationHelper.createDatabase(databaseName, startVersion).apply {
@@ -71,6 +71,7 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                 }
                 if (startVersion >= 5) assertEquals("{}", migrated.rawCollectionDao().get("stats")?.payload)
                 assertEquals(0, migrated.taskEventDao().getAll().size)
+                assertEquals(null, migrated.localAccountDao().get())
             } finally {
                 migrated.close()
                 context.deleteDatabase(databaseName)

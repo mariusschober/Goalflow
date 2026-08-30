@@ -34,7 +34,8 @@ class SecureSessionStore(context: Context) : NativeSessionProvider {
             accessToken = json.getString("accessToken"),
             refreshToken = json.getString("refreshToken"),
             expiresAtMillis = json.getLong("expiresAtMillis"),
-            userId = json.optString("userId").takeIf(String::isNotBlank)
+            userId = if (!json.has("userId") || json.isNull("userId")) null
+                else json.optString("userId").takeIf(String::isNotBlank)
         )
     }.getOrNull()
 

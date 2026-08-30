@@ -14,6 +14,16 @@ alter table public.tasks
 alter table public.daily_plans
   add column if not exists sync_server_version bigint;
 
+alter table public.telegram_updates
+  add column if not exists payload jsonb;
+
+alter table public.sync_conflicts
+  add column if not exists local_deleted_at timestamptz,
+  add column if not exists server_deleted_at timestamptz,
+  add column if not exists local_version integer,
+  add column if not exists local_updated_at timestamptz,
+  add column if not exists server_missing boolean not null default false;
+
 create index if not exists sync_mutations_entity_idx
   on public.sync_mutations (user_id, entity_type, entity_id, created_at);
 create index if not exists sync_conflicts_unresolved_entity_idx
@@ -31,7 +41,7 @@ returns integer
 language sql
 immutable
 set search_path = public
-as $$ select 2; $$;
+as $$ select 3; $$;
 revoke all on function public.goalflow_sync_protocol_version() from public, anon, authenticated;
 grant execute on function public.goalflow_sync_protocol_version() to service_role;
 
@@ -458,7 +468,7 @@ create trigger mirror_goalflow_daily_plan_to_sync_trigger
 after insert or update on public.daily_plans
 for each row execute function public.mirror_goalflow_daily_plan_to_sync();
 
-create or replace function public.push_sync_mutation(
+create or replace function public.push_sync_mutation_v2(
   target_user_id uuid,
   target_mutation_id uuid,
   target_device_id text,
@@ -468,7 +478,8 @@ create or replace function public.push_sync_mutation(
   target_version integer,
   target_payload jsonb,
   target_updated_at timestamptz,
-  target_deleted_at timestamptz
+  target_deleted_at timestamptz,
+  target_resolves_conflict_id uuid
 )
 returns jsonb
 language plpgsql
@@ -485,7 +496,14 @@ declare
   record_existed boolean;
   legacy_guard_version bigint;
   legacy_guard_payload jsonb;
+  resolution_conflict public.sync_conflicts%rowtype;
 begin
+  if target_entity_type not in (
+    'tasks','goals','habits','stats','progress','hashtags','accountability',
+    'truenorth','amalgam','tracking','circadian','settings','daily_plans'
+  ) or length(target_entity_id) not between 1 and 240 then
+    raise exception using errcode = '22023', message = 'Unsupported synchronization entity';
+  end if;
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
   request_fingerprint := encode(digest(convert_to(jsonb_build_object(
     'deviceId', target_device_id,
@@ -495,7 +513,8 @@ begin
     'version', target_version,
     'payload', target_payload,
     'updatedAt', target_updated_at,
-    'deletedAt', target_deleted_at
+    'deletedAt', target_deleted_at,
+    'resolvesConflictId', target_resolves_conflict_id
   )::text, 'utf8'), 'sha256'), 'hex');
 
   select * into existing_mutation from public.sync_mutations
@@ -510,11 +529,14 @@ begin
       record_existed := found;
       insert into public.sync_conflicts (
         user_id, entity_type, entity_id, mutation_id, base_server_version,
-        server_version, local_payload, server_payload
+        server_version, local_payload, server_payload, local_deleted_at, server_deleted_at,
+        local_version, local_updated_at, server_missing
       ) values (
         target_user_id, target_entity_type, target_entity_id, target_mutation_id,
         target_base_server_version, coalesce(existing_record.server_version, existing_mutation.server_version, 0),
-        target_payload, case when record_existed then existing_record.payload else '{}'::jsonb end
+        target_payload, case when record_existed then existing_record.payload else '{}'::jsonb end,
+        target_deleted_at, case when record_existed then existing_record.deleted_at else null end,
+        target_version, target_updated_at, not record_existed
       ) on conflict (user_id, mutation_id) do nothing
       returning id into conflict_id;
       if conflict_id is null then
@@ -544,8 +566,8 @@ begin
     ) then
       select * into existing_record from public.sync_records
       where user_id = target_user_id
-        and entity_type = coalesce(existing_mutation.entity_type, target_entity_type)
-        and entity_id = coalesce(existing_mutation.entity_id, target_entity_id);
+        and entity_type = target_entity_type
+        and entity_id = target_entity_id;
       record_existed := found;
       return jsonb_build_object(
         'accepted', false,
@@ -572,6 +594,19 @@ begin
     return response_payload;
   end if;
 
+  if target_resolves_conflict_id is not null then
+    select * into resolution_conflict from public.sync_conflicts
+    where id = target_resolves_conflict_id
+      and user_id = target_user_id
+      and entity_type = target_entity_type
+      and entity_id = target_entity_id
+      and resolved_at is null
+    for update;
+    if not found then
+      raise exception using errcode = '22023', message = 'Conflict resolution does not match an unresolved record conflict';
+    end if;
+  end if;
+
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_entity_type || ':' || target_entity_id, 0));
   select * into existing_record from public.sync_records
   where user_id = target_user_id and entity_type = target_entity_type and entity_id = target_entity_id
@@ -589,10 +624,12 @@ begin
     end if;
     insert into public.sync_conflicts (
       user_id, entity_type, entity_id, mutation_id, base_server_version,
-      server_version, local_payload, server_payload
+      server_version, local_payload, server_payload, local_deleted_at, server_deleted_at,
+      local_version, local_updated_at, server_missing
     ) values (
       target_user_id, target_entity_type, target_entity_id, target_mutation_id,
-      target_base_server_version, existing_record.server_version, target_payload, existing_record.payload
+      target_base_server_version, existing_record.server_version, target_payload, existing_record.payload,
+      target_deleted_at, existing_record.deleted_at, target_version, target_updated_at, not record_existed
     ) returning id into conflict_id;
     response_payload := jsonb_build_object(
       'accepted', false,
@@ -608,6 +645,10 @@ begin
       target_user_id, target_mutation_id, target_device_id, existing_record.server_version, false,
       target_entity_type, target_entity_id, request_fingerprint, response_payload
     );
+    if target_resolves_conflict_id is not null then
+      update public.sync_conflicts set resolved_at = now()
+      where id = target_resolves_conflict_id and user_id = target_user_id and resolved_at is null;
+    end if;
     return response_payload;
   end if;
 
@@ -627,10 +668,12 @@ begin
     where user_id = target_user_id and entity_type = target_entity_type and entity_id <> 'singleton';
     insert into public.sync_conflicts (
       user_id, entity_type, entity_id, mutation_id, base_server_version,
-      server_version, local_payload, server_payload
+      server_version, local_payload, server_payload, local_deleted_at, server_deleted_at,
+      local_version, local_updated_at, server_missing
     ) values (
       target_user_id, target_entity_type, target_entity_id, target_mutation_id,
-      target_base_server_version, legacy_guard_version, target_payload, coalesce(legacy_guard_payload, '[]'::jsonb)
+      target_base_server_version, legacy_guard_version, target_payload, coalesce(legacy_guard_payload, '[]'::jsonb),
+      target_deleted_at, null, target_version, target_updated_at, false
     ) returning id into conflict_id;
     response_payload := jsonb_build_object(
       'accepted', false,
@@ -650,6 +693,10 @@ begin
       target_user_id, target_mutation_id, target_device_id, legacy_guard_version, false,
       target_entity_type, target_entity_id, request_fingerprint, response_payload
     );
+    if target_resolves_conflict_id is not null then
+      update public.sync_conflicts set resolved_at = now()
+      where id = target_resolves_conflict_id and user_id = target_user_id and resolved_at is null;
+    end if;
     return response_payload;
   end if;
 
@@ -693,6 +740,13 @@ begin
     target_user_id, target_mutation_id, target_device_id, next_server_version, true,
     target_entity_type, target_entity_id, request_fingerprint, response_payload
   );
+  if target_resolves_conflict_id is not null then
+    update public.sync_conflicts set resolved_at = now()
+    where id = target_resolves_conflict_id and user_id = target_user_id and resolved_at is null;
+    if not found then
+      raise exception using errcode = '22023', message = 'Conflict resolution was not durably recorded';
+    end if;
+  end if;
   -- Conflicts remain visible until an explicit, exact conflict resolution is
   -- durably recorded by the API. An unrelated accepted edit must not choose a side.
   return response_payload;
@@ -700,8 +754,10 @@ end;
 $$;
 
 revoke all on function public.push_sync_mutation(uuid, uuid, text, text, text, bigint, integer, jsonb, timestamptz, timestamptz)
+  from public, anon, authenticated, service_role;
+revoke all on function public.push_sync_mutation_v2(uuid, uuid, text, text, text, bigint, integer, jsonb, timestamptz, timestamptz, uuid)
   from public, anon, authenticated;
-grant execute on function public.push_sync_mutation(uuid, uuid, text, text, text, bigint, integer, jsonb, timestamptz, timestamptz)
+grant execute on function public.push_sync_mutation_v2(uuid, uuid, text, text, text, bigint, integer, jsonb, timestamptz, timestamptz, uuid)
   to service_role;
 
 -- Backfill canonical tasks that predate record-level synchronization. Existing
@@ -838,11 +894,30 @@ declare
   collection_name text;
   sequence_floor bigint;
   idempotency_state_missing boolean := false;
+  pre_restore_sync_records jsonb;
+  restore_time timestamptz := clock_timestamp();
 begin
   perform pg_advisory_xact_lock(hashtextextended('goalflow-restore:' || target_user_id::text, 0));
   if not exists (select 1 from auth.users where id = target_user_id) then
     raise exception using errcode = 'P0002', message = 'Restore target auth user does not exist';
   end if;
+  select coalesce(jsonb_agg(to_jsonb(record_value)), '[]'::jsonb)
+    into pre_restore_sync_records
+  from public.sync_records record_value
+  where record_value.user_id = target_user_id;
+  -- Reserve a sequence value before replacing records. Every restored record
+  -- and every restore tombstone will therefore be newer than every cursor that
+  -- could have existed before this transaction.
+  sequence_floor := public.goalflow_next_change_version();
+  perform setval(
+    'public.goalflow_change_seq',
+    greatest(
+      sequence_floor,
+      coalesce((select max(server_version) from public.sync_records), 1),
+      coalesce((select max(server_version) from public.sync_mutations), 1)
+    ),
+    true
+  );
   collections := case
     when jsonb_typeof(backup_payload->'collections') = 'object' then backup_payload->'collections'
     else backup_payload
@@ -862,18 +937,21 @@ begin
   end loop;
   foreach collection_name in array array[
     'profiles','tasks','daily_plans','task_events','telegram_identities','telegram_captures',
-    'sync_records','sync_mutations','sync_conflicts','api_mutation_receipts','entitlements'
+    'telegram_updates','sync_records','sync_mutations','sync_conflicts','api_mutation_receipts','entitlements'
   ] loop
     if jsonb_typeof(collections->collection_name) <> 'array' then
       raise exception using errcode = '22023', message = 'Backup collection is missing or invalid: ' || collection_name;
     end if;
-    if exists (
+    if collection_name <> 'telegram_updates' and exists (
       select 1 from jsonb_array_elements(collections->collection_name) value
       where coalesce(value->>'user_id', '') <> target_user_id::text
     ) then
       raise exception using errcode = '42501', message = 'Backup contains data owned by a different user';
     end if;
   end loop;
+  if jsonb_array_length(collections->'profiles') <> 1 then
+    raise exception using errcode = '22023', message = 'Backup must contain exactly one profile';
+  end if;
   if exists (
     select 1 from jsonb_array_elements(collections->'telegram_updates') update_row
     where coalesce(update_row->>'telegram_user_id', '') not in (
@@ -894,9 +972,9 @@ begin
     select telegram_user_id from public.telegram_identities where user_id = target_user_id
   );
   delete from public.telegram_identities where user_id = target_user_id;
-  delete from public.sync_conflicts where user_id = target_user_id;
-  delete from public.sync_mutations where user_id = target_user_id;
-  delete from public.api_mutation_receipts where user_id = target_user_id;
+  -- Accepted mutation receipts and conflict history are append-only recovery
+  -- evidence. A point-in-time restore must not make a previously committed
+  -- request executable for a second time.
   delete from public.sync_records where user_id = target_user_id;
   delete from public.entitlements where user_id = target_user_id;
   delete from public.tasks where user_id = target_user_id;
@@ -953,10 +1031,10 @@ begin
   from jsonb_populate_recordset(null::public.telegram_identities, collections->'telegram_identities') restored;
 
   insert into public.telegram_updates (
-    update_id, telegram_user_id, received_at, processed_at, outcome, error_code
+    update_id, telegram_user_id, received_at, processed_at, outcome, error_code, payload
   )
   select restored.update_id, restored.telegram_user_id, restored.received_at,
-    restored.processed_at, restored.outcome, restored.error_code
+    restored.processed_at, restored.outcome, restored.error_code, restored.payload
   from jsonb_populate_recordset(null::public.telegram_updates, collections->'telegram_updates') restored;
 
   insert into public.telegram_captures (
@@ -973,8 +1051,50 @@ begin
     payload, updated_at, deleted_at
   )
   select target_user_id, restored.entity_type, restored.entity_id, restored.version,
-    restored.server_version, restored.device_id, restored.payload, restored.updated_at, restored.deleted_at
+    public.goalflow_next_change_version(), 'server-restore', restored.payload,
+    restore_time, restored.deleted_at
   from jsonb_populate_recordset(null::public.sync_records, collections->'sync_records') restored;
+
+  -- Older backups may predate canonical task/plan projection. Recreate any
+  -- missing records from the restored canonical rows before making tombstones.
+  insert into public.sync_records (
+    user_id, entity_type, entity_id, version, server_version, device_id,
+    payload, updated_at, deleted_at
+  )
+  select task.user_id, 'tasks', coalesce(task.legacy_entity_id, task.id::text),
+    least(task.revision, 2147483647)::integer, public.goalflow_next_change_version(),
+    'server-restore', public.goalflow_task_sync_payload(task), restore_time, task.deleted_at
+  from public.tasks task where task.user_id = target_user_id
+  on conflict (user_id, entity_type, entity_id) do nothing;
+
+  insert into public.sync_records (
+    user_id, entity_type, entity_id, version, server_version, device_id,
+    payload, updated_at, deleted_at
+  )
+  select plan.user_id, 'daily_plans', plan.local_date::text,
+    least(plan.revision, 2147483647)::integer, public.goalflow_next_change_version(),
+    'server-restore', public.goalflow_daily_plan_sync_payload(plan), restore_time, null
+  from public.daily_plans plan where plan.user_id = target_user_id
+  on conflict (user_id, entity_type, entity_id) do nothing;
+
+  -- Anything that existed after the backup but is absent from the restored
+  -- snapshot receives a fresh tombstone. Stale clients can no longer resurrect
+  -- it merely because their cursor was ahead of the backup's old cursor.
+  insert into public.sync_records (
+    user_id, entity_type, entity_id, version, server_version, device_id,
+    payload, updated_at, deleted_at
+  )
+  select target_user_id, previous.entity_type, previous.entity_id,
+    least(previous.version::bigint + 1, 2147483647)::integer,
+    public.goalflow_next_change_version(), 'server-restore', previous.payload,
+    restore_time, restore_time
+  from jsonb_populate_recordset(null::public.sync_records, pre_restore_sync_records) previous
+  where not exists (
+    select 1 from public.sync_records current_record
+    where current_record.user_id = target_user_id
+      and current_record.entity_type = previous.entity_type
+      and current_record.entity_id = previous.entity_id
+  );
 
   insert into public.sync_mutations (
     user_id, mutation_id, device_id, server_version, accepted, created_at,
@@ -983,27 +1103,116 @@ begin
   select target_user_id, restored.mutation_id, restored.device_id, restored.server_version,
     restored.accepted, restored.created_at, restored.entity_type, restored.entity_id,
     restored.request_hash, restored.result
-  from jsonb_populate_recordset(null::public.sync_mutations, collections->'sync_mutations') restored;
+  from jsonb_populate_recordset(null::public.sync_mutations, collections->'sync_mutations') restored
+  on conflict (user_id, mutation_id) do nothing;
 
   insert into public.sync_conflicts (
     id, user_id, entity_type, entity_id, mutation_id, base_server_version,
-    server_version, local_payload, server_payload, created_at, resolved_at
+    server_version, local_payload, server_payload, local_deleted_at, server_deleted_at,
+    local_version, local_updated_at, server_missing, created_at, resolved_at
   )
   select restored.id, target_user_id, restored.entity_type, restored.entity_id,
     restored.mutation_id, restored.base_server_version, restored.server_version,
-    restored.local_payload, restored.server_payload, restored.created_at, restored.resolved_at
-  from jsonb_populate_recordset(null::public.sync_conflicts, collections->'sync_conflicts') restored;
+    restored.local_payload, restored.server_payload, restored.local_deleted_at,
+    restored.server_deleted_at, restored.local_version, restored.local_updated_at,
+    coalesce(restored.server_missing, false), restored.created_at, restored.resolved_at
+  from jsonb_populate_recordset(null::public.sync_conflicts, collections->'sync_conflicts') restored
+  on conflict do nothing;
 
   insert into public.api_mutation_receipts (
     user_id, mutation_id, operation, request_hash, response, created_at
   )
   select target_user_id, restored.mutation_id, restored.operation, restored.request_hash,
     restored.response, restored.created_at
-  from jsonb_populate_recordset(null::public.api_mutation_receipts, collections->'api_mutation_receipts') restored;
+  from jsonb_populate_recordset(null::public.api_mutation_receipts, collections->'api_mutation_receipts') restored
+  on conflict (user_id, mutation_id) do nothing;
 
   insert into public.entitlements (user_id, plan, active, updated_at)
   select target_user_id, restored.plan, restored.active, restored.updated_at
   from jsonb_populate_recordset(null::public.entitlements, collections->'entitlements') restored;
+
+  -- Rebase canonical revisions and their sync projections together. Restored
+  -- values are data; old sequence numbers are not portable synchronization
+  -- identities.
+  update public.tasks task set
+    revision = public.goalflow_next_task_revision(),
+    sync_server_version = record_value.server_version
+  from public.sync_records record_value
+  where task.user_id = target_user_id
+    and record_value.user_id = target_user_id
+    and record_value.entity_type = 'tasks'
+    and record_value.entity_id = coalesce(task.legacy_entity_id, task.id::text);
+
+  update public.sync_records record_value set
+    version = least(task.revision, 2147483647)::integer,
+    payload = public.goalflow_task_sync_payload(task),
+    updated_at = restore_time,
+    deleted_at = task.deleted_at
+  from public.tasks task
+  where task.user_id = target_user_id
+    and record_value.user_id = target_user_id
+    and record_value.entity_type = 'tasks'
+    and record_value.entity_id = coalesce(task.legacy_entity_id, task.id::text);
+
+  update public.daily_plans plan set
+    revision = public.goalflow_next_task_revision(),
+    sync_server_version = record_value.server_version
+  from public.sync_records record_value
+  where plan.user_id = target_user_id
+    and record_value.user_id = target_user_id
+    and record_value.entity_type = 'daily_plans'
+    and record_value.entity_id = plan.local_date::text;
+
+  update public.sync_records record_value set
+    version = least(plan.revision, 2147483647)::integer,
+    payload = public.goalflow_daily_plan_sync_payload(plan),
+    updated_at = restore_time,
+    deleted_at = null
+  from public.daily_plans plan
+  where plan.user_id = target_user_id
+    and record_value.user_id = target_user_id
+    and record_value.entity_type = 'daily_plans'
+    and record_value.entity_id = plan.local_date::text;
+
+  -- A restore is allowed to choose the backup as canonical, but it must not
+  -- erase a newer same-record value that arrived before the restore transaction.
+  -- Preserve both sides in the durable conflict ledger; absent records already
+  -- retain the newer payload in their fresh tombstone above.
+  insert into public.sync_conflicts (
+    user_id, entity_type, entity_id, mutation_id, base_server_version,
+    server_version, local_payload, server_payload, local_deleted_at, server_deleted_at,
+    local_version, local_updated_at, server_missing
+  )
+  select target_user_id, previous.entity_type, previous.entity_id, gen_random_uuid(),
+    previous.server_version, current_record.server_version, previous.payload,
+    current_record.payload, previous.deleted_at, current_record.deleted_at,
+    previous.version, previous.updated_at, false
+  from jsonb_populate_recordset(null::public.sync_records, pre_restore_sync_records) previous
+  join public.sync_records current_record
+    on current_record.user_id = target_user_id
+    and current_record.entity_type = previous.entity_type
+    and current_record.entity_id = previous.entity_id
+  where (previous.payload is distinct from current_record.payload
+      or previous.deleted_at is distinct from current_record.deleted_at)
+    and not exists (
+      select 1 from public.sync_conflicts existing_conflict
+      where existing_conflict.user_id = target_user_id
+        and existing_conflict.entity_type = previous.entity_type
+        and existing_conflict.entity_id = previous.entity_id
+        and existing_conflict.resolved_at is null
+        and existing_conflict.local_payload = previous.payload
+        and existing_conflict.local_deleted_at is not distinct from previous.deleted_at
+    );
+
+  update public.sync_conflicts conflict set
+    server_version = record_value.server_version,
+    server_payload = record_value.payload,
+    server_deleted_at = record_value.deleted_at
+  from public.sync_records record_value
+  where conflict.user_id = target_user_id and conflict.resolved_at is null
+    and record_value.user_id = target_user_id
+    and record_value.entity_type = conflict.entity_type
+    and record_value.entity_id = conflict.entity_id;
 
   sequence_floor := public.goalflow_next_change_version();
   perform setval(
@@ -1081,6 +1290,57 @@ begin
 end;
 $$;
 
+create or replace function public.goalflow_require_task_revision(
+  target_user_id uuid,
+  target_task_id uuid,
+  target_expected_revision bigint
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare current_revision bigint;
+begin
+  select revision into current_revision from public.tasks
+  where id = target_task_id and user_id = target_user_id
+    and status = 'open' and deleted_at is null
+  for update;
+  if not found then
+    raise exception using errcode = 'P0002', message = 'Task not found';
+  end if;
+  if target_expected_revision is null or current_revision <> target_expected_revision then
+    raise exception using errcode = '40001', message = 'Task revision changed';
+  end if;
+end;
+$$;
+
+create or replace function public.goalflow_require_plan_revision(
+  target_user_id uuid,
+  target_local_date date,
+  target_expected_revision bigint
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare current_revision bigint;
+begin
+  perform pg_advisory_xact_lock(hashtextextended(
+    target_user_id::text || ':daily-plan:' || target_local_date::text, 0
+  ));
+  select revision into current_revision from public.daily_plans
+  where user_id = target_user_id and local_date = target_local_date
+  for update;
+  if (found and target_expected_revision is null)
+    or (not found and target_expected_revision is not null)
+    or (found and current_revision <> target_expected_revision) then
+    raise exception using errcode = '40001', message = 'Daily plan revision changed';
+  end if;
+end;
+$$;
+
 create or replace function public.goalflow_create_task_idempotent(
   target_user_id uuid,
   target_mutation_id uuid,
@@ -1097,7 +1357,6 @@ declare
   existing_response jsonb;
   created_task public.tasks%rowtype;
   requested_id uuid;
-  requested_date date;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
   request_fingerprint := encode(digest(convert_to(jsonb_build_object('date', target_local_date, 'task', task_payload)::text, 'utf8'), 'sha256'), 'hex');
@@ -1106,9 +1365,6 @@ begin
   if coalesce(task_payload->>'taskId', '') ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$' then
     requested_id := (task_payload->>'taskId')::uuid;
   else requested_id := gen_random_uuid(); end if;
-  requested_date := case when task_payload->>'schedulePrecision' = 'month'
-    then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
-    else (task_payload->>'scheduledFor')::date end;
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':task-id:' || requested_id::text, 0));
   select * into created_task from public.tasks where id = requested_id;
   if found then
@@ -1117,7 +1373,9 @@ begin
       or created_task.notes <> coalesce(task_payload->>'notes', '')
       or created_task.tags <> array(select jsonb_array_elements_text(coalesce(task_payload->'tags', '[]'::jsonb)))
       or created_task.schedule_precision <> task_payload->>'schedulePrecision'
-      or created_task.scheduled_for <> requested_date
+      or created_task.scheduled_for <> case when task_payload->>'schedulePrecision' = 'month'
+        then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
+        else (task_payload->>'scheduledFor')::date end
       or created_task.source <> coalesce(task_payload->>'source', 'manual')
       or created_task.deleted_at is not null
     then
@@ -1126,6 +1384,13 @@ begin
     insert into public.api_mutation_receipts (user_id, mutation_id, operation, request_hash, response)
     values (target_user_id, target_mutation_id, 'create-task', request_fingerprint, to_jsonb(created_task));
     return to_jsonb(created_task);
+  end if;
+  if exists (
+    select 1 from public.sync_records
+    where user_id = target_user_id and entity_type = 'tasks'
+      and entity_id = requested_id::text and deleted_at is not null
+  ) then
+    raise exception using errcode = '40001', message = 'A deleted task identity cannot be resurrected';
   end if;
   insert into public.tasks (
     id, user_id, title, notes, tags, schedule_precision, scheduled_for, scheduled_time,
@@ -1137,7 +1402,9 @@ begin
     coalesce(task_payload->>'notes', ''),
     array(select jsonb_array_elements_text(coalesce(task_payload->'tags', '[]'::jsonb))),
     task_payload->>'schedulePrecision',
-    requested_date,
+    case when task_payload->>'schedulePrecision' = 'month'
+      then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
+      else (task_payload->>'scheduledFor')::date end,
     nullif(task_payload->>'scheduledTime', '')::time,
     coalesce((task_payload->>'plannedOrder')::integer, 0),
     coalesce((task_payload->>'isFrog')::boolean, false),
@@ -1156,45 +1423,51 @@ end;
 $$;
 
 create or replace function public.goalflow_complete_task_idempotent(
-  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_local_date date
+  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_local_date date,
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; updated_task public.tasks%rowtype;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'complete-task', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_task_revision(target_user_id, target_task_id, target_expected_revision);
   updated_task := public.goalflow_complete_task(target_user_id, target_task_id, target_local_date);
   insert into public.api_mutation_receipts values (target_user_id, target_mutation_id, 'complete-task', request_fingerprint, to_jsonb(updated_task), now());
   return to_jsonb(updated_task);
 end; $$;
 
 create or replace function public.goalflow_skip_task_idempotent(
-  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_day date
+  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_day date,
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; updated_task public.tasks%rowtype;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_day)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_day, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'skip-task', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_task_revision(target_user_id, target_task_id, target_expected_revision);
   updated_task := public.goalflow_skip_task(target_user_id, target_task_id, target_day);
   insert into public.api_mutation_receipts values (target_user_id, target_mutation_id, 'skip-task', request_fingerprint, to_jsonb(updated_task), now());
   return to_jsonb(updated_task);
 end; $$;
 
 create or replace function public.goalflow_drop_task_idempotent(
-  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_local_date date
+  target_user_id uuid, target_mutation_id uuid, target_task_id uuid, target_local_date date,
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; updated_task public.tasks%rowtype;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'drop-task', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_task_revision(target_user_id, target_task_id, target_expected_revision);
   updated_task := public.goalflow_drop_task(target_user_id, target_task_id, target_local_date);
   insert into public.api_mutation_receipts values (target_user_id, target_mutation_id, 'drop-task', request_fingerprint, to_jsonb(updated_task), now());
   return to_jsonb(updated_task);
@@ -1207,15 +1480,17 @@ create or replace function public.goalflow_reschedule_task_idempotent(
   target_local_date date,
   target_schedule_precision text,
   target_scheduled_for date,
-  target_scheduled_time time
+  target_scheduled_time time,
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; updated_task public.tasks%rowtype;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date, target_schedule_precision, target_scheduled_for, target_scheduled_time)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, target_local_date, target_schedule_precision, target_scheduled_for, target_scheduled_time, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'reschedule-task', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_task_revision(target_user_id, target_task_id, target_expected_revision);
   updated_task := public.goalflow_reschedule_task(target_user_id, target_task_id, target_local_date, target_schedule_precision, target_scheduled_for, target_scheduled_time);
   insert into public.api_mutation_receipts values (target_user_id, target_mutation_id, 'reschedule-task', request_fingerprint, to_jsonb(updated_task), now());
   return to_jsonb(updated_task);
@@ -1225,15 +1500,17 @@ create or replace function public.goalflow_break_down_task_idempotent(
   target_user_id uuid,
   target_mutation_id uuid,
   target_task_id uuid,
-  child_tasks jsonb
+  child_tasks jsonb,
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; operation_response jsonb;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, child_tasks)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_task_id, child_tasks, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'break-down-task', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_task_revision(target_user_id, target_task_id, target_expected_revision);
   operation_response := public.goalflow_break_down_task(target_user_id, target_task_id, child_tasks);
   insert into public.api_mutation_receipts values (target_user_id, target_mutation_id, 'break-down-task', request_fingerprint, operation_response, now());
   return operation_response;
@@ -1243,15 +1520,17 @@ create or replace function public.goalflow_confirm_plan_idempotent(
   target_user_id uuid,
   target_mutation_id uuid,
   target_local_date date,
-  target_task_ids uuid[]
+  target_task_ids uuid[],
+  target_expected_revision bigint
 )
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare request_fingerprint text; existing_response jsonb; saved_plan public.daily_plans%rowtype; confirmed_time timestamptz;
 begin
   perform pg_advisory_xact_lock(hashtextextended(target_user_id::text || ':' || target_mutation_id::text, 0));
-  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_local_date, target_task_ids)::text, 'utf8'), 'sha256'), 'hex');
+  request_fingerprint := encode(digest(convert_to(jsonb_build_array(target_local_date, target_task_ids, target_expected_revision)::text, 'utf8'), 'sha256'), 'hex');
   existing_response := public.goalflow_existing_api_receipt(target_user_id, target_mutation_id, 'confirm-plan', request_fingerprint);
   if existing_response is not null then return existing_response; end if;
+  perform public.goalflow_require_plan_revision(target_user_id, target_local_date, target_expected_revision);
   confirmed_time := now();
   insert into public.daily_plans (user_id, local_date, task_ids, confirmed_at, updated_at)
   values (target_user_id, target_local_date, target_task_ids, confirmed_time, confirmed_time)
@@ -1265,20 +1544,22 @@ begin
 end; $$;
 
 revoke all on function public.goalflow_existing_api_receipt(uuid, uuid, text, text) from public, anon, authenticated;
+revoke all on function public.goalflow_require_task_revision(uuid, uuid, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_require_plan_revision(uuid, date, bigint) from public, anon, authenticated;
 revoke all on function public.goalflow_create_task_idempotent(uuid, uuid, date, jsonb) from public, anon, authenticated;
-revoke all on function public.goalflow_complete_task_idempotent(uuid, uuid, uuid, date) from public, anon, authenticated;
-revoke all on function public.goalflow_skip_task_idempotent(uuid, uuid, uuid, date) from public, anon, authenticated;
-revoke all on function public.goalflow_drop_task_idempotent(uuid, uuid, uuid, date) from public, anon, authenticated;
-revoke all on function public.goalflow_reschedule_task_idempotent(uuid, uuid, uuid, date, text, date, time) from public, anon, authenticated;
-revoke all on function public.goalflow_break_down_task_idempotent(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
-revoke all on function public.goalflow_confirm_plan_idempotent(uuid, uuid, date, uuid[]) from public, anon, authenticated;
+revoke all on function public.goalflow_complete_task_idempotent(uuid, uuid, uuid, date, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_skip_task_idempotent(uuid, uuid, uuid, date, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_drop_task_idempotent(uuid, uuid, uuid, date, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_reschedule_task_idempotent(uuid, uuid, uuid, date, text, date, time, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_break_down_task_idempotent(uuid, uuid, uuid, jsonb, bigint) from public, anon, authenticated;
+revoke all on function public.goalflow_confirm_plan_idempotent(uuid, uuid, date, uuid[], bigint) from public, anon, authenticated;
 grant execute on function public.goalflow_create_task_idempotent(uuid, uuid, date, jsonb) to service_role;
-grant execute on function public.goalflow_complete_task_idempotent(uuid, uuid, uuid, date) to service_role;
-grant execute on function public.goalflow_skip_task_idempotent(uuid, uuid, uuid, date) to service_role;
-grant execute on function public.goalflow_drop_task_idempotent(uuid, uuid, uuid, date) to service_role;
-grant execute on function public.goalflow_reschedule_task_idempotent(uuid, uuid, uuid, date, text, date, time) to service_role;
-grant execute on function public.goalflow_break_down_task_idempotent(uuid, uuid, uuid, jsonb) to service_role;
-grant execute on function public.goalflow_confirm_plan_idempotent(uuid, uuid, date, uuid[]) to service_role;
+grant execute on function public.goalflow_complete_task_idempotent(uuid, uuid, uuid, date, bigint) to service_role;
+grant execute on function public.goalflow_skip_task_idempotent(uuid, uuid, uuid, date, bigint) to service_role;
+grant execute on function public.goalflow_drop_task_idempotent(uuid, uuid, uuid, date, bigint) to service_role;
+grant execute on function public.goalflow_reschedule_task_idempotent(uuid, uuid, uuid, date, text, date, time, bigint) to service_role;
+grant execute on function public.goalflow_break_down_task_idempotent(uuid, uuid, uuid, jsonb, bigint) to service_role;
+grant execute on function public.goalflow_confirm_plan_idempotent(uuid, uuid, date, uuid[], bigint) to service_role;
 
 -- Recreate after api_mutation_receipts exists so backup/restore also preserves
 -- task-API idempotency receipts. Replaying a timed-out request after a restore

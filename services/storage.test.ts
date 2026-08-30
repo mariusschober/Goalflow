@@ -1,6 +1,12 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
-import { mergeBackupCollection, storageService, STORES, validateBackupCollections } from './storage';
+import {
+  mergeBackupCollection,
+  normalizeBackupCollectionsForWeb,
+  storageService,
+  STORES,
+  validateBackupCollections
+} from './storage';
 
 class TestLocalStorage {
   private values = new Map<string, string>();
@@ -42,9 +48,78 @@ describe('backup merge behavior', () => {
     expect(() => mergeBackupCollection({ enableAi: false }, { enableAi: true })).toThrow(/key "enableAi"/i);
     expect(() => mergeBackupCollection([1, 2], [3])).toThrow(/unkeyed collections/i);
   });
+
+  it('maps safe native backup collections without dropping event or raw web data', () => {
+    const event = { id: 'event-1', taskId: 'task-1', eventType: 'created' };
+    const normalized = normalizeBackupCollectionsForWeb({
+      plans: [{ localDate: '2026-08-27', taskIds: [], confirmedAt: 1 }],
+      events: [event],
+      outbox: [],
+      syncMeta: [],
+      conflicts: [],
+      rawCollections: {
+        stats: { __goalflowNativeRawJsonV1: '{"tasksCompleted":2}' }
+      }
+    });
+
+    expect(normalized[STORES.DAILY_PLANS]).toEqual([{ localDate: '2026-08-27', taskIds: [], confirmedAt: 1 }]);
+    expect(normalized[STORES.TASK_EVENTS]).toEqual([event]);
+    expect(normalized[STORES.STATS]).toEqual({ tasksCompleted: 2 });
+  });
+
+  it('rejects native pending recovery state instead of silently dropping it', () => {
+    expect(() => normalizeBackupCollectionsForWeb({
+      tasks: [],
+      outbox: [{ mutationId: 'valuable-pending-mutation' }],
+      conflicts: []
+    })).toThrow(/restore it in the native app/i);
+  });
 });
 
 describe('durable storage failure boundaries', () => {
+  it('recovers every store in a grouped UI mutation after a simulated process kill', async () => {
+    installBrowserStorage();
+    const key = `storage-group-kill-${crypto.randomUUID()}`;
+    const tasks = [{ id: 'task', title: 'completed', completed: true }];
+    const stats = { '2026-08-27': { tasksCompleted: 1, frogsEaten: 0, timeFocused: 25, totalBreakMinutes: 0 } };
+    await storageService.set(STORES.STATS, key, {}, 'cloud');
+    storageService.stageLocalValues(key, [
+      { storeName: STORES.TASKS, previousValue: [], nextValue: tasks },
+      { storeName: STORES.STATS, previousValue: {}, nextValue: stats }
+    ]);
+
+    // No IndexedDB write has run. Both values are nevertheless readable from
+    // the single durable WAL entry after the modeled restart boundary.
+    expect(await storageService.get(STORES.TASKS, key)).toEqual(tasks);
+    expect(await storageService.get(STORES.STATS, key)).toEqual(stats);
+
+    const meta = await storageService.flushPendingLocalChanges(key);
+    expect(await storageService.get(STORES.TASKS, key)).toEqual(tasks);
+    expect(await storageService.get(STORES.STATS, key)).toEqual(stats);
+    expect(meta.outbox).toHaveLength(2);
+    expect(meta.outbox.map(item => item.entityType).sort()).toEqual([STORES.STATS, STORES.TASKS]);
+  });
+
+  it('flushes an entire grouped mutation when a render effect persists only one member', async () => {
+    installBrowserStorage();
+    const key = `storage-group-effect-${crypto.randomUUID()}`;
+    const tasks = [{ id: 'task', title: 'safe' }];
+    const habits = [{ id: 'habit', title: 'streak', streak: 1 }];
+    storageService.stageLocalValues(key, [
+      { storeName: STORES.TASKS, previousValue: [], nextValue: tasks },
+      { storeName: STORES.HABITS, previousValue: [], nextValue: habits }
+    ]);
+
+    await storageService.set(STORES.TASKS, key, tasks);
+
+    expect(await storageService.get(STORES.HABITS, key)).toEqual(habits);
+    const meta = await storageService.get<any>(STORES.SYNC, key);
+    expect(meta.outbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({ entityType: STORES.TASKS, entityId: 'task' }),
+      expect.objectContaining({ entityType: STORES.HABITS, entityId: 'habit' })
+    ]));
+  });
+
   it('commits the newest WAL value when an older render effect flushes later', async () => {
     installBrowserStorage();
     const key = `storage-stale-effect-${crypto.randomUUID()}`;
@@ -209,8 +284,7 @@ describe('durable storage failure boundaries', () => {
 
   it('backs up pending mutations and restores them into a clean client', async () => {
     installBrowserStorage();
-    const sourceKey = `storage-pending-source-${crypto.randomUUID()}`;
-    const restoreKey = `storage-pending-restore-${crypto.randomUUID()}`;
+    const sourceKey = `storage-pending-${crypto.randomUUID()}`;
     const tasks = [{ id: 'task-pending', title: 'Created without a network' }];
     storageService.stageLocalValue(STORES.TASKS, sourceKey, [], tasks);
 
@@ -218,11 +292,38 @@ describe('durable storage failure boundaries', () => {
     const sourceMeta = (backup.collections[STORES.SYNC] as { outbox: unknown[] });
     expect(sourceMeta.outbox).toHaveLength(1);
 
-    await storageService.importBackup(restoreKey, backup, 'replace');
-    expect(await storageService.get(STORES.TASKS, restoreKey)).toEqual(tasks);
-    const restoredMeta = await storageService.get<{ outbox: Array<{ mutationId: string }> }>(STORES.SYNC, restoreKey);
+    // A clean client for the same authenticated account uses the same owner
+    // key. Remove the local copy to model a new browser profile, then restore.
+    await storageService.delete(STORES.TASKS, sourceKey);
+    await storageService.delete(STORES.SYNC, sourceKey);
+    await storageService.importBackup(sourceKey, backup, 'replace');
+    expect(await storageService.get(STORES.TASKS, sourceKey)).toEqual(tasks);
+    const restoredMeta = await storageService.get<{ outbox: Array<{ mutationId: string }> }>(STORES.SYNC, sourceKey);
     expect(restoredMeta?.outbox.length).toBeGreaterThanOrEqual(1);
     expect(restoredMeta?.outbox.some(item => item.mutationId === (sourceMeta.outbox[0] as any).mutationId)).toBe(true);
+  });
+
+  it('rejects a current backup owned by another account before changing data', async () => {
+    installBrowserStorage();
+    const sourceKey = `storage-owner-source-${crypto.randomUUID()}`;
+    const targetKey = `storage-owner-target-${crypto.randomUUID()}`;
+    await storageService.set(STORES.TASKS, sourceKey, [{ id: 'source', title: 'source' }], 'cloud');
+    await storageService.set(STORES.TASKS, targetKey, [{ id: 'target', title: 'must survive' }], 'cloud');
+    const backup = await storageService.exportBackup(sourceKey);
+
+    await expect(storageService.importBackup(targetKey, backup, 'replace')).rejects.toThrow('different Goalflow account');
+    expect(await storageService.get(STORES.TASKS, targetKey)).toEqual([{ id: 'target', title: 'must survive' }]);
+  });
+
+  it('rejects incomplete schema-3 integrity metadata', () => {
+    expect(() => validateBackupCollections({ schemaVersion: 3, collections: { tasks: [] } }))
+      .toThrow(/timestamp|checksum/i);
+    expect(() => validateBackupCollections({
+      schemaVersion: 3,
+      exportedAt: 'not-a-date',
+      checksum: '0'.repeat(64),
+      collections: { tasks: [] }
+    })).toThrow(/timestamp/i);
   });
 
   it('backs up an offline planning decision with its record-level outbox mutation', async () => {
@@ -245,16 +346,15 @@ describe('durable storage failure boundaries', () => {
 
   it('rejects a checksum-corrupted backup before changing a clean client', async () => {
     installBrowserStorage();
-    const sourceKey = `storage-corrupt-source-${crypto.randomUUID()}`;
-    const targetKey = `storage-corrupt-target-${crypto.randomUUID()}`;
-    await storageService.set(STORES.TASKS, sourceKey, [{ id: 'source', title: 'source' }], 'cloud');
-    await storageService.set(STORES.TASKS, targetKey, [{ id: 'target', title: 'must survive' }], 'cloud');
-    const backup = await storageService.exportBackup(sourceKey);
+    const key = `storage-corrupt-${crypto.randomUUID()}`;
+    await storageService.set(STORES.TASKS, key, [{ id: 'source', title: 'source' }], 'cloud');
+    const backup = await storageService.exportBackup(key);
+    await storageService.set(STORES.TASKS, key, [{ id: 'target', title: 'must survive' }], 'cloud');
     const corrupted = structuredClone(backup);
     corrupted.collections[STORES.TASKS] = [{ id: 'source', title: 'tampered' }];
 
-    await expect(storageService.importBackup(targetKey, corrupted, 'replace')).rejects.toThrow('checksum');
-    expect(await storageService.get(STORES.TASKS, targetKey)).toEqual([{ id: 'target', title: 'must survive' }]);
+    await expect(storageService.importBackup(key, corrupted, 'replace')).rejects.toThrow('checksum');
+    expect(await storageService.get(STORES.TASKS, key)).toEqual([{ id: 'target', title: 'must survive' }]);
   });
 
   it('rolls back when a restored mutation id collides with different pending data', async () => {
@@ -265,7 +365,7 @@ describe('durable storage failure boundaries', () => {
     const currentMeta = await storageService.get<any>(STORES.SYNC, key);
     const mutation = currentMeta.outbox[0];
     const malformed = {
-      schemaVersion: 3,
+      schemaVersion: 2,
       collections: {
         [STORES.TASKS]: [{ id: 'backup', title: 'backup' }],
         [STORES.SYNC]: {

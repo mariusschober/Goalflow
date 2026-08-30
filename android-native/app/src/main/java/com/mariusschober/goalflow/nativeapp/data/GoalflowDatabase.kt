@@ -135,6 +135,12 @@ data class RawCollectionEntity(
     val deletedAt: String?
 )
 
+@Entity(tableName = "local_account")
+data class LocalAccountEntity(
+    @PrimaryKey val bindingKey: String = "owner",
+    val userId: String
+)
+
 @Dao
 interface TaskDao {
     @Query("SELECT * FROM tasks ORDER BY scheduledFor ASC, plannedOrder ASC, createdAt ASC, id ASC")
@@ -369,6 +375,15 @@ interface RawCollectionDao {
     suspend fun deleteAll()
 }
 
+@Dao
+interface LocalAccountDao {
+    @Query("SELECT * FROM local_account WHERE bindingKey = 'owner' LIMIT 1")
+    suspend fun get(): LocalAccountEntity?
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(account: LocalAccountEntity)
+}
+
 @Database(
     entities = [
         TaskEntity::class,
@@ -379,9 +394,10 @@ interface RawCollectionDao {
         SyncMetaEntity::class,
         SyncConflictEntity::class,
         RawCollectionEntity::class,
-        TaskEventEntity::class
+        TaskEventEntity::class,
+        LocalAccountEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 abstract class GoalflowDatabase : RoomDatabase() {
@@ -394,6 +410,7 @@ abstract class GoalflowDatabase : RoomDatabase() {
     abstract fun syncConflictDao(): SyncConflictDao
     abstract fun rawCollectionDao(): RawCollectionDao
     abstract fun taskEventDao(): TaskEventDao
+    abstract fun localAccountDao(): LocalAccountDao
 
     companion object {
         private val integrityCallback = object : RoomDatabase.Callback() {
@@ -402,9 +419,8 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
 
             override fun onOpen(database: SupportSQLiteDatabase) {
-                // Existing v6 files did not have these triggers. Installing
-                // them on every open closes the invariant for upgrades too,
-                // without changing the persisted Room schema version.
+                // Installing on every open closes the invariant for upgraded
+                // databases whose original schema predated these triggers.
                 installActiveHabitDayUniqueness(database)
             }
         }
@@ -496,14 +512,20 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE TABLE IF NOT EXISTS local_account (bindingKey TEXT NOT NULL PRIMARY KEY, userId TEXT NOT NULL)")
+            }
+        }
+
         fun migrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
             MIGRATION_4_5,
-            MIGRATION_5_6
+            MIGRATION_5_6,
+            MIGRATION_6_7
         )
-
         fun create(context: Context): GoalflowDatabase = Room.databaseBuilder(
             context,
             GoalflowDatabase::class.java,

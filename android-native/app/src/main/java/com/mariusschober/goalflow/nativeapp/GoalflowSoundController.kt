@@ -65,4 +65,3 @@ class GoalflowSoundController {
         val frogNotes = listOf(523.25 to 130, 659.25 to 130, 783.99 to 130, 1_046.5 to 220)
     }
 }
-

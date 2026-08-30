@@ -49,4 +49,3 @@ class GoalflowTimelineTest {
         assertTrue(task("Frog", 25).isExplicitFrogName())
     }
 }
-

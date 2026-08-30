@@ -1,5 +1,15 @@
 # Goalflow Release Report
 
+> **2026-08-30 data-integrity follow-up:** The evidence below describes the
+> earlier production baseline. A newer zero-silent-data-loss integration now
+> sits on top of production commit `62d55195949782644ae09e82fa9b9437a69e7692`.
+> Its local non-Android gate passes 102 tests, production builds/startup,
+> secret scanning, and dependency audit. PostgreSQL execution, Room v7
+> compilation, Android tests, and final clean GitHub CI are **NOT VERIFIED** at
+> the time of this update. See [`DATA_INTEGRITY_REPORT.md`](../DATA_INTEGRITY_REPORT.md)
+> and [`DATA_INTEGRITY_HANDOVER.md`](../DATA_INTEGRITY_HANDOVER.md). Do not use
+> the older clean-CI claims below as proof for the follow-up tree.
+
 Evidence for the `goalflow-production` release branch. This report records
 what was actually exercised; unavailable infrastructure is not represented as
 a pass.

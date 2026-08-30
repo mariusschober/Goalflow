@@ -65,6 +65,13 @@ class GoalflowDatabaseMigrationTest {
             )
             assertEquals("[]", database.rawCollectionDao().get("truenorth")?.payload)
             assertEquals(0, database.taskEventDao().getAll().size)
+            database.localAccountDao().insert(
+                LocalAccountEntity(userId = "00000000-0000-4000-8000-000000000001")
+            )
+            assertEquals(
+                "00000000-0000-4000-8000-000000000001",
+                database.localAccountDao().get()?.userId
+            )
         } finally {
             database.close()
         }

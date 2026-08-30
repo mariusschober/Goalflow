@@ -108,7 +108,6 @@ fun GoalflowTimeField(
         )
     }
 }
-
 @Composable
 fun GoalflowDurationField(
     value: Int?,
@@ -217,4 +216,3 @@ fun formatDurationMinutes(minutes: Int): String = when {
     minutes >= 60 -> "${minutes / 60} h ${minutes % 60} min"
     else -> "$minutes min"
 }
-

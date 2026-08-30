@@ -125,4 +125,3 @@
         android:text="Undo completion"
         android:visibility="gone" />
 </LinearLayout>
-

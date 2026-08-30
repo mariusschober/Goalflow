@@ -17,6 +17,7 @@ const localMonth = z.string().regex(/^\d{4}-\d{2}$/);
 const schedulePrecision = z.enum(["day", "month"]);
 const scheduledFor = z.union([localDay, localMonth]);
 const scheduledTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).optional();
+const expectedRevision = z.number().int().positive();
 
 const createTaskBody = z.object({
   taskId: z.string().uuid().optional(),
@@ -35,13 +36,20 @@ const createTaskBody = z.object({
   estimatedMinutes: z.number().int().min(1).max(1_440).default(25)
 });
 
-const scheduleBody = z.object({
+const existingTaskMutationBody = z.object({
+  today: localDay,
+  expectedRevision
+});
+
+const scheduleBody = existingTaskMutationBody.extend({
   schedulePrecision,
   scheduledFor,
   scheduledTime
 });
 
 const breakdownBody = z.object({
+  today: localDay,
+  expectedRevision,
   children: z.array(createTaskBody.omit({ isFrog: true, beforeFrog: true, habitId: true }))
     .min(1)
     .max(50)
@@ -49,7 +57,8 @@ const breakdownBody = z.object({
 
 const confirmPlanBody = z.object({
   localDate: localDay,
-  taskIds: z.array(z.string().uuid()).max(500)
+  taskIds: z.array(z.string().uuid()).max(500),
+  expectedRevision: expectedRevision.nullable()
 });
 
 const toDatabaseDay = (precision: SchedulePrecision, value: string): string =>
@@ -106,6 +115,9 @@ const schedulingResponse = (error: unknown): { status: number; body: unknown } =
     }
     if (code === "P0002") {
       return { status: 404, body: { error: { code: "task_not_found", message: "The task no longer exists or is no longer open." } } };
+    }
+    if (code === "40001") {
+      return { status: 409, body: { error: { code: "stale_revision", message: "This record changed on another device. Reload before choosing a version." } } };
     }
   }
   return {
@@ -167,7 +179,7 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
       const tasks = (rows ?? []).map((row) => toScheduledTask(row as Record<string, unknown>));
       const { data: planRow, error: planError } = await database
         .from("daily_plans")
-        .select("local_date,confirmed_at,task_ids")
+        .select("local_date,confirmed_at,task_ids,revision")
         .eq("user_id", request.user!.id)
         .eq("local_date", today)
         .maybeSingle();
@@ -182,6 +194,7 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
         gate: gate.state,
         current: gate.state === "ready" ? gate.queue[0] ?? null : null,
         progress: gate.state === "ready" ? { remaining: gate.queue.length, taskIds: gate.queue.map((task) => task.id) } : null,
+        planRevision: planRow ? Number(planRow.revision) : null,
         details: gate
       });
     } catch (error) {
@@ -218,13 +231,15 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
     try {
       const database = requireDatabase(admin);
       const mutationId = mutationIdFor(request);
-      const today = localDay.parse(request.body.today);
+      const input = existingTaskMutationBody.parse(request.body);
+      const today = input.today;
       const taskId = z.string().uuid().parse(request.params.taskId);
       const { data, error } = await database.rpc("goalflow_skip_task_idempotent", {
         target_user_id: request.user!.id,
         target_mutation_id: mutationId,
         target_task_id: taskId,
-        target_day: today
+        target_day: today,
+        target_expected_revision: input.expectedRevision
       });
       if (error) throw error;
       response.json({ task: toScheduledTask(data as Record<string, unknown>) });
@@ -238,9 +253,9 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
     try {
       const database = requireDatabase(admin);
       const mutationId = mutationIdFor(request);
-      const today = localDay.parse(request.body.today);
       const taskId = z.string().uuid().parse(request.params.taskId);
       const schedule = scheduleBody.parse(request.body);
+      const today = schedule.today;
       assertSchedule(schedule.schedulePrecision, schedule.scheduledFor, today, schedule.scheduledTime);
       const { data, error } = await database.rpc("goalflow_reschedule_task_idempotent", {
         target_user_id: request.user!.id,
@@ -249,7 +264,8 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
         target_local_date: today,
         target_schedule_precision: schedule.schedulePrecision,
         target_scheduled_for: toDatabaseDay(schedule.schedulePrecision, schedule.scheduledFor),
-        target_scheduled_time: schedule.scheduledTime ?? null
+        target_scheduled_time: schedule.scheduledTime ?? null,
+        target_expected_revision: schedule.expectedRevision
       });
       if (error) throw error;
       response.json({ task: toScheduledTask(data as Record<string, unknown>) });
@@ -264,10 +280,12 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
       const database = requireDatabase(admin);
       const mutationId = mutationIdFor(request);
       const taskId = z.string().uuid().parse(request.params.taskId);
-      const today = localDay.parse(request.body.today);
+      const input = existingTaskMutationBody.parse(request.body);
+      const today = input.today;
       const { data, error } = await database.rpc("goalflow_complete_task_idempotent", {
         target_user_id: request.user!.id, target_mutation_id: mutationId,
-        target_task_id: taskId, target_local_date: today
+        target_task_id: taskId, target_local_date: today,
+        target_expected_revision: input.expectedRevision
       });
       if (error) throw error;
       response.json({ task: toScheduledTask(data as Record<string, unknown>) });
@@ -282,10 +300,12 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
       const database = requireDatabase(admin);
       const mutationId = mutationIdFor(request);
       const taskId = z.string().uuid().parse(request.params.taskId);
-      const today = localDay.parse(request.body.today);
+      const input = existingTaskMutationBody.parse(request.body);
+      const today = input.today;
       const { data, error } = await database.rpc("goalflow_drop_task_idempotent", {
         target_user_id: request.user!.id, target_mutation_id: mutationId,
-        target_task_id: taskId, target_local_date: today
+        target_task_id: taskId, target_local_date: today,
+        target_expected_revision: input.expectedRevision
       });
       if (error) throw error;
       response.json({ task: toScheduledTask(data as Record<string, unknown>) });
@@ -299,9 +319,9 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
     try {
       const database = requireDatabase(admin);
       const mutationId = mutationIdFor(request);
-      const today = localDay.parse(request.body.today);
       const taskId = z.string().uuid().parse(request.params.taskId);
       const input = breakdownBody.parse(request.body);
+      const today = input.today;
       input.children.forEach((child) => assertSchedule(
         child.schedulePrecision,
         child.scheduledFor,
@@ -312,7 +332,8 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
         target_user_id: request.user!.id,
         target_mutation_id: mutationId,
         target_task_id: taskId,
-        child_tasks: input.children
+        child_tasks: input.children,
+        target_expected_revision: input.expectedRevision
       });
       if (error) throw error;
       response.json(data);
@@ -349,7 +370,8 @@ export const createTaskRouter = (admin?: SupabaseClient) => {
         target_user_id: request.user!.id,
         target_mutation_id: mutationId,
         target_local_date: input.localDate,
-        target_task_ids: input.taskIds
+        target_task_ids: input.taskIds,
+        target_expected_revision: input.expectedRevision
       });
       if (saveError) throw saveError;
       response.json({ plan: data });

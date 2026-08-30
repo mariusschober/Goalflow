@@ -63,6 +63,26 @@ data class NativeRemoteRecord(
     val deletedAt: String?
 )
 
+data class NativeServerConflict(
+    val id: String,
+    val entityType: String,
+    val entityId: String,
+    val mutationId: String,
+    val localPayload: String,
+    val localDeletedAt: String?,
+    val localVersion: Long,
+    val localUpdatedAt: String,
+    val serverPayload: String,
+    val serverDeletedAt: String?,
+    val serverVersion: Long,
+    val serverMissing: Boolean,
+    val createdAt: String
+)
+
+class NativeSyncAccountMismatch : IllegalStateException(
+    "This local database is bound to a different Goalflow account. Its data was not synchronized or overwritten."
+)
+
 data class NativeReorderResult(
     val localDate: String,
     val previousIds: List<String>,
@@ -104,6 +124,7 @@ class GoalflowRepository(
     private val syncMeta = database.syncMetaDao()
     private val conflicts = database.syncConflictDao()
     private val rawCollections = database.rawCollectionDao()
+    private val accounts = database.localAccountDao()
 
     val taskStream: Flow<List<GoalflowTask>> = tasks.observeAll().map { rows -> rows.map(::toDomain) }
     val goalStream: Flow<List<GoalflowGoal>> = goals.observeAll().map { rows -> rows.map(::toDomain) }
@@ -128,6 +149,17 @@ class GoalflowRepository(
         rawCollections.observe(entityType).map { it?.payload }
 
     fun planStream(localDate: String): Flow<DailyPlan?> = plans.observe(localDate).map { row -> row?.let(::toDomain) }
+
+    /** Binds an existing offline database once and refuses every cross-account sync thereafter. */
+    suspend fun bindSyncAccount(userId: String) {
+        val normalized = runCatching { UUID.fromString(userId).toString() }
+            .getOrElse { throw NativeSyncAccountMismatch() }
+        database.withTransaction {
+            val current = accounts.get()
+            if (current == null) accounts.insert(LocalAccountEntity(userId = normalized))
+            else if (current.userId != normalized) throw NativeSyncAccountMismatch()
+        }
+    }
 
     suspend fun widgetSnapshot(localDate: String = timeProvider.today().toString()): NativeWidgetSnapshot {
         val allTasks = tasks.getAll().map(::toDomain)
@@ -1453,18 +1485,25 @@ class GoalflowRepository(
     }
 
     suspend fun exportBackup(password: String): String = database.withTransaction {
+        val binding = syncBindingProvider()
+        val bindingOwnerUserId = normalizedAccountSubject(binding.accountSubject)
+        val storedOwnerUserId = accounts.get()?.userId
+        if (storedOwnerUserId != null && bindingOwnerUserId != null && storedOwnerUserId != bindingOwnerUserId) {
+            throw NativeSyncAccountMismatch()
+        }
         val payload = GoalflowBackupPayload(
-                tasks = tasks.getAll().map(::toDomain),
-                goals = goals.getAll().map(::toDomain),
-                plans = plans.getAll().map(::toDomain),
-                events = taskEvents.getAll(),
-                habits = habits.getAll().map(::toDomain),
-                outbox = outbox.getAll(),
-                syncMeta = syncMeta.getAll(),
-                conflicts = conflicts.getAll(),
-                rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
-                syncBinding = syncBindingProvider()
-            )
+            tasks = tasks.getAll().map(::toDomain),
+            goals = goals.getAll().map(::toDomain),
+            plans = plans.getAll().map(::toDomain),
+            events = taskEvents.getAll(),
+            habits = habits.getAll().map(::toDomain),
+            outbox = outbox.getAll(),
+            syncMeta = syncMeta.getAll(),
+            conflicts = conflicts.getAll(),
+            rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
+            ownerUserId = storedOwnerUserId ?: bindingOwnerUserId,
+            syncBinding = binding
+        )
         val envelope = GoalflowBackup.encrypt(
             payload,
             password,
@@ -1540,7 +1579,19 @@ class GoalflowRepository(
         val originalPlans = plans.getAll().map(::toDomain)
         val originalEvents = taskEvents.getAll()
         val originalRaw = rawCollections.getAll()
+        val storedOwnerUserId = accounts.get()?.userId
         val currentBinding = syncBindingProvider()
+        val bindingOwnerUserId = normalizedAccountSubject(payload.syncBinding?.accountSubject)
+        val incomingOwnerUserId = payload.ownerUserId ?: bindingOwnerUserId
+        if (payload.ownerUserId != null && bindingOwnerUserId != null && payload.ownerUserId != bindingOwnerUserId) {
+            throw BackupFormatException("Backup account bindings disagree.")
+        }
+        if (storedOwnerUserId != null && incomingOwnerUserId != null && storedOwnerUserId != incomingOwnerUserId) {
+            throw NativeSyncAccountMismatch()
+        }
+        if (storedOwnerUserId == null && incomingOwnerUserId != null) {
+            accounts.insert(LocalAccountEntity(userId = incomingOwnerUserId))
+        }
         val syncStatePresent = payload.syncBinding != null || payload.outbox.isNotEmpty() ||
             payload.syncMeta.isNotEmpty() || payload.conflicts.isNotEmpty()
         val syncCompatible = !syncStatePresent || payload.syncBinding != null && payload.syncBinding == currentBinding
@@ -1690,22 +1741,26 @@ class GoalflowRepository(
             )
         }
         payload.rawCollections
-            .filterKeys { it in NATIVE_RAW_COLLECTION_TYPES && (syncCompatible || it != "sync") }
+            .filterKeys { it in NATIVE_RAW_COLLECTION_TYPES && it != "sync" }
             .forEach { (entityType, rawPayload) -> enqueueRecordInTransaction(entityType, "singleton", rawPayload) }
     }
 
-    private suspend fun currentBackupPayloadInTransaction(): GoalflowBackupPayload = GoalflowBackupPayload(
-        tasks = tasks.getAll().map(::toDomain),
-        goals = goals.getAll().map(::toDomain),
-        plans = plans.getAll().map(::toDomain),
-        events = taskEvents.getAll(),
-        habits = habits.getAll().map(::toDomain),
-        outbox = outbox.getAll(),
-        syncMeta = syncMeta.getAll(),
-        conflicts = conflicts.getAll(),
-        rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
-        syncBinding = syncBindingProvider()
-    )
+    private suspend fun currentBackupPayloadInTransaction(): GoalflowBackupPayload {
+        val binding = syncBindingProvider()
+        return GoalflowBackupPayload(
+            tasks = tasks.getAll().map(::toDomain),
+            goals = goals.getAll().map(::toDomain),
+            plans = plans.getAll().map(::toDomain),
+            events = taskEvents.getAll(),
+            habits = habits.getAll().map(::toDomain),
+            outbox = outbox.getAll(),
+            syncMeta = syncMeta.getAll(),
+            conflicts = conflicts.getAll(),
+            rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
+            ownerUserId = accounts.get()?.userId ?: normalizedAccountSubject(binding.accountSubject),
+            syncBinding = binding
+        )
+    }
 
     private suspend fun buildBackupPreview(document: GoalflowBackupDocument): NativeBackupPreview {
         val payload = document.payload
@@ -1795,6 +1850,11 @@ class GoalflowRepository(
         put("accountSubject", binding.accountSubject ?: JSONObject.NULL)
     }
 
+    private fun normalizedAccountSubject(value: String?): String? =
+        value?.trim()?.takeIf(String::isNotBlank)?.let { accountSubject ->
+            runCatching { UUID.fromString(accountSubject).toString() }.getOrNull()
+        }
+
     private fun restoreQuarantineKey(envelope: String): String =
         "$RESTORE_QUARANTINE_PREFIX${sha256(envelope).take(16)}"
 
@@ -1858,10 +1918,8 @@ class GoalflowRepository(
                 "The sync server rejected a mutation without preserving the server side."
             }
             if (!result.accepted && !result.serverMissing) {
-                runCatching {
-                    if (result.serverPayload.trimStart().startsWith("[")) JSONArray(result.serverPayload)
-                    else JSONObject(result.serverPayload)
-                }.getOrElse { throw IllegalArgumentException("The sync server returned an invalid conflict payload.") }
+                runCatching { parseJsonValue(result.serverPayload) }
+                    .getOrElse { throw IllegalArgumentException("The sync server returned an invalid conflict payload.") }
             }
         }
         return database.withTransaction {
@@ -2075,6 +2133,111 @@ class GoalflowRepository(
         }
     }
 
+    /** Makes PostgreSQL-only conflicts visible after a reinstall or restore. */
+    suspend fun mergeServerConflicts(remote: List<NativeServerConflict>): Int {
+        require(remote.map { it.id }.toSet().size == remote.size) {
+            "The server returned duplicate conflict identities; existing conflicts were not changed."
+        }
+        remote.forEach { conflict ->
+            require(runCatching { UUID.fromString(conflict.id) }.isSuccess
+                && conflict.entityType.isNotBlank() && conflict.entityId.isNotBlank())
+            require(runCatching { UUID.fromString(conflict.mutationId) }.isSuccess)
+            require(conflict.localVersion > 0L && conflict.serverVersion >= 0L)
+            Instant.parse(conflict.localUpdatedAt)
+            Instant.parse(conflict.createdAt)
+            conflict.localDeletedAt?.let(Instant::parse)
+            conflict.serverDeletedAt?.let(Instant::parse)
+            parseJsonValue(conflict.localPayload)
+            if (!conflict.serverMissing) parseJsonValue(conflict.serverPayload)
+        }
+        return database.withTransaction {
+            var inserted = 0
+            remote.forEach { remoteConflict ->
+                val existing = conflicts.get(remoteConflict.id)
+                val serverPayload = if (remoteConflict.serverMissing) "" else remoteConflict.serverPayload
+                if (existing != null) {
+                    require(existing.entityType == remoteConflict.entityType
+                        && existing.entityId == remoteConflict.entityId
+                        && existing.mutationId == remoteConflict.mutationId) {
+                        "A server conflict id refers to different records; existing conflicts were not changed."
+                    }
+                    val history = JSONArray(existing.localHistory)
+                    val representedLocalSide = (0 until history.length())
+                        .mapNotNull { index -> history.optJSONObject(index) }
+                        .firstOrNull { it.optString("mutationId") == remoteConflict.mutationId }
+                    val representedDeletedAt = if (representedLocalSide == null
+                        || !representedLocalSide.has("deletedAt") || representedLocalSide.isNull("deletedAt")) {
+                        null
+                    } else representedLocalSide.optString("deletedAt").takeIf(String::isNotBlank)
+                    require(representedLocalSide != null && representedLocalSide.has("payload")
+                        && jsonEquivalent(
+                            canonicalJson(representedLocalSide.opt("payload")),
+                            remoteConflict.localPayload
+                        )
+                        && representedLocalSide.optLong("version", -1L) == remoteConflict.localVersion
+                        && sameInstant(representedLocalSide.optString("updatedAt"), remoteConflict.localUpdatedAt)
+                        && sameInstantOrNull(representedDeletedAt, remoteConflict.localDeletedAt)) {
+                        "A server conflict mutation refers to different local data; existing conflicts were not changed."
+                    }
+                    require(remoteConflict.serverVersion != existing.serverVersion
+                        || ((existing.serverPayload.isBlank() == remoteConflict.serverMissing)
+                            && jsonEquivalent(existing.serverPayload.ifBlank { "null" }, serverPayload.ifBlank { "null" })
+                            && sameInstantOrNull(existing.serverDeletedAt, remoteConflict.serverDeletedAt))) {
+                        "A server conflict version refers to different cloud data; existing conflicts were not changed."
+                    }
+                    if (remoteConflict.serverVersion > existing.serverVersion) {
+                        conflicts.update(existing.copy(
+                            serverPayload = serverPayload,
+                            serverDeletedAt = remoteConflict.serverDeletedAt,
+                            serverVersion = remoteConflict.serverVersion
+                        ))
+                    }
+                    val key = syncMetaKey(remoteConflict.entityType, remoteConflict.entityId)
+                    val current = syncMeta.get(key)
+                    syncMeta.insert(SyncMetaEntity(
+                        entityType = key,
+                        cursor = current?.cursor ?: 0L,
+                        localVersion = maxOf(current?.localVersion ?: 0L, remoteConflict.localVersion),
+                        serverVersion = maxOf(current?.serverVersion ?: 0L, remoteConflict.serverVersion),
+                        lastSuccessfulSync = current?.lastSuccessfulSync
+                    ))
+                    return@forEach
+                }
+                requireMutationIdAvailableInTransaction(remoteConflict.mutationId)
+                conflicts.insert(SyncConflictEntity(
+                    id = remoteConflict.id,
+                    entityType = remoteConflict.entityType,
+                    entityId = remoteConflict.entityId,
+                    mutationId = remoteConflict.mutationId,
+                    localPayload = remoteConflict.localPayload,
+                    localDeletedAt = remoteConflict.localDeletedAt,
+                    localHistory = JSONArray().put(historyEntry(
+                        remoteConflict.mutationId,
+                        remoteConflict.localPayload,
+                        remoteConflict.localDeletedAt,
+                        remoteConflict.localUpdatedAt,
+                        remoteConflict.localVersion
+                    )).toString(),
+                    serverPayload = serverPayload,
+                    serverDeletedAt = remoteConflict.serverDeletedAt,
+                    serverVersion = remoteConflict.serverVersion,
+                    createdAt = remoteConflict.createdAt
+                ))
+                val key = syncMetaKey(remoteConflict.entityType, remoteConflict.entityId)
+                val current = syncMeta.get(key)
+                syncMeta.insert(SyncMetaEntity(
+                    entityType = key,
+                    cursor = current?.cursor ?: 0L,
+                    localVersion = maxOf(current?.localVersion ?: 0L, remoteConflict.localVersion),
+                    serverVersion = maxOf(current?.serverVersion ?: 0L, remoteConflict.serverVersion),
+                    lastSuccessfulSync = current?.lastSuccessfulSync
+                ))
+                inserted += 1
+            }
+            inserted
+        }
+    }
+
     suspend fun resolveConflictLocally(conflictId: String) {
         database.withTransaction {
             val conflict = conflicts.get(conflictId) ?: return@withTransaction
@@ -2177,7 +2340,10 @@ class GoalflowRepository(
             "goals" -> goals.delete(entityId)
             "habits" -> habits.delete(entityId)
             "daily_plans" -> plans.delete(entityId)
-            "task_events" -> Unit // Append-only lifecycle history is never erased by a tombstone.
+            // A pull tombstone never reaches this branch. Deletion is allowed
+            // only after the user explicitly chooses the cloud side of a
+            // preserved conflict.
+            "task_events" -> taskEvents.delete(entityId)
             in NATIVE_RAW_COLLECTION_TYPES -> rawCollections.delete(entityType)
             else -> throw IllegalArgumentException("This conflict type cannot be applied by the native client.")
         }
@@ -2333,7 +2499,6 @@ class GoalflowRepository(
             history.put(historyEntry(mutationId, payload, deletedAt, updatedAt, nextVersion))
             conflicts.update(
                 unresolved.copy(
-                    mutationId = mutationId,
                     localPayload = payload,
                     localDeletedAt = deletedAt,
                     localHistory = history.toString()
@@ -2866,13 +3031,8 @@ class GoalflowRepository(
         updatedAt: String,
         version: Long
     ): JSONObject = JSONObject().apply {
-        val parsedPayload: Any = try {
-            JSONObject(payload)
-        } catch (_: Exception) {
-            try { JSONArray(payload) } catch (_: Exception) { payload }
-        }
         put("mutationId", mutationId)
-        put("payload", parsedPayload)
+        put("payload", parseJsonValue(payload))
         put("deletedAt", deletedAt ?: JSONObject.NULL)
         put("updatedAt", updatedAt)
         put("version", version)

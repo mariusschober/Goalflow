@@ -7,6 +7,7 @@ import {
   buildStagedLocalTransaction,
   emptySyncMeta,
   markMutationsAttempted,
+  mergeServerConflicts as transitionServerConflicts,
   normalizeSyncMeta,
   RECORD_LEVEL_STORES,
   readyOutbox,
@@ -14,6 +15,7 @@ import {
   type LocalConflict,
   type PushResult,
   type RemoteSyncRecord,
+  type RemoteServerConflict,
   type StagedLocalTransaction,
   type SyncMeta,
   type SyncMutation
@@ -21,8 +23,20 @@ import {
 
 const BASE_DB_NAME = 'GoalflowDB';
 const ACTIVE_DB_KEY = 'goalflow_active_database_v2';
-const BACKUP_SCHEMA_VERSION = 3;
+const BACKUP_SCHEMA_VERSION = 4;
 const WAL_PREFIX = 'goalflow_wal_v2_';
+
+interface StagedLocalTransactionGroup {
+  schemaVersion: 1;
+  userKey: string;
+  transactions: StagedLocalTransaction[];
+}
+
+export interface LocalValueChange {
+  storeName: string;
+  previousValue: unknown;
+  nextValue: unknown;
+}
 
 export const STORES = {
   TASKS: 'tasks',
@@ -38,6 +52,7 @@ export const STORES = {
   CIRCADIAN: 'circadian',
   SETTINGS: 'settings',
   DAILY_PLANS: 'daily_plans',
+  TASK_EVENTS: 'task_events',
   SYNC: 'sync',
   SNAPSHOTS: 'snapshots'
 } as const;
@@ -50,6 +65,7 @@ const SYNCABLE_STORES = new Set<string>(DATA_STORES);
 export interface GoalflowBackup {
   schemaVersion: number;
   exportedAt: string;
+  ownerKey: string;
   checksum: string;
   collections: Record<string, unknown>;
 }
@@ -75,6 +91,17 @@ export const validateBackupCollections = (backup: unknown): Record<string, any> 
   if (envelope.schemaVersion && envelope.schemaVersion > BACKUP_SCHEMA_VERSION) {
     throw new Error('This backup was created by a newer Goalflow version.');
   }
+  if (Number(envelope.schemaVersion) >= 3) {
+    if (typeof envelope.exportedAt !== 'string' || !Number.isFinite(Date.parse(envelope.exportedAt))) {
+      throw new Error('The backup export timestamp is invalid or missing.');
+    }
+    if (typeof envelope.checksum !== 'string' || !/^[a-f0-9]{64}$/i.test(envelope.checksum)) {
+      throw new Error('Backup checksum validation failed. The file may be incomplete or modified.');
+    }
+  }
+  if (Number(envelope.schemaVersion) >= 4 && (typeof envelope.ownerKey !== 'string' || !envelope.ownerKey)) {
+    throw new Error('The backup owner binding is invalid or missing.');
+  }
   const collections = Object.prototype.hasOwnProperty.call(envelope, 'collections')
     ? envelope.collections
     : backup;
@@ -89,6 +116,62 @@ const checksumCollections = async (collections: Record<string, unknown>): Promis
   const bytes = new TextEncoder().encode(JSON.stringify(collections));
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
+};
+
+const NATIVE_RAW_JSON_VALUE_KEY = '__goalflowNativeRawJsonV1';
+
+/**
+ * Native backups use a few different collection names. Business records can
+ * be imported losslessly, but native Room outbox/conflict rows cannot be
+ * guessed into browser state: stop visibly if either ledger is non-empty.
+ */
+export const normalizeBackupCollectionsForWeb = (
+  source: Record<string, unknown>
+): Record<string, unknown> => {
+  const normalized: Record<string, unknown> = { ...source };
+  const nativeOutbox = source.outbox;
+  const nativeConflicts = source.conflicts;
+  for (const [name, value] of [['outbox', nativeOutbox], ['conflicts', nativeConflicts]] as const) {
+    if (value !== undefined && !Array.isArray(value)) {
+      throw new Error(`Native backup ${name} recovery data is damaged. Existing data is unchanged.`);
+    }
+    if (Array.isArray(value) && value.length > 0) {
+      throw new Error(`Native backup contains pending ${name} recovery data. Restore it in the native app; existing data is unchanged.`);
+    }
+  }
+  if (source.syncMeta !== undefined && !Array.isArray(source.syncMeta)) {
+    throw new Error('Native backup synchronization metadata is damaged. Existing data is unchanged.');
+  }
+  if (normalized[STORES.DAILY_PLANS] === undefined && source.plans !== undefined) {
+    normalized[STORES.DAILY_PLANS] = source.plans;
+  }
+  if (normalized[STORES.TASK_EVENTS] === undefined && source.events !== undefined) {
+    normalized[STORES.TASK_EVENTS] = source.events;
+  }
+  if (source.rawCollections !== undefined) {
+    if (!isRecord(source.rawCollections)) {
+      throw new Error('Native backup preserved collections are damaged. Existing data is unchanged.');
+    }
+    for (const [storeName, wrapped] of Object.entries(source.rawCollections)) {
+      const value = isRecord(wrapped)
+        && Object.keys(wrapped).length === 1
+        && typeof wrapped[NATIVE_RAW_JSON_VALUE_KEY] === 'string'
+        ? (() => {
+            try { return JSON.parse(wrapped[NATIVE_RAW_JSON_VALUE_KEY]); }
+            catch (_) { throw new Error(`Native backup collection ${storeName} is damaged. Existing data is unchanged.`); }
+          })()
+        : wrapped;
+      if (!DATA_STORES.includes(storeName) && storeName !== STORES.SYNC) {
+        throw new Error(`Native backup collection ${storeName} is not supported by this web version. Existing data is unchanged.`);
+      }
+      if (normalized[storeName] !== undefined
+        && JSON.stringify(normalized[storeName]) !== JSON.stringify(value)) {
+        throw new Error(`Native backup contains two different copies of ${storeName}. Existing data is unchanged.`);
+      }
+      normalized[storeName] = value;
+    }
+  }
+  return normalized;
 };
 
 export const mergeBackupCollection = (current: unknown, incoming: unknown): unknown => {
@@ -198,18 +281,43 @@ const readLocalCopy = <T>(storeName: string, key: string): T | undefined => {
   }
 };
 
-const listWal = (userKey: string, storeName?: string): Array<{ key: string; transaction: StagedLocalTransaction }> => {
+interface WalEntry {
+  key: string;
+  transaction: StagedLocalTransaction;
+  grouped: boolean;
+}
+
+const validStagedTransaction = (value: unknown, userKey: string): value is StagedLocalTransaction =>
+  isRecord(value)
+  && value.userKey === userKey
+  && typeof value.id === 'string'
+  && typeof value.storeName === 'string'
+  && Number.isSafeInteger(value.order)
+  && Array.isArray(value.changes);
+
+const listWal = (userKey: string, storeName?: string): WalEntry[] => {
   if (!hasWindow()) return [];
   const prefix = walPrefixForUser(userKey);
-  const entries: Array<{ key: string; transaction: StagedLocalTransaction }> = [];
+  const entries: WalEntry[] = [];
   for (let index = 0; index < window.localStorage.length; index++) {
     const key = window.localStorage.key(index);
     if (!key?.startsWith(prefix)) continue;
     const raw = window.localStorage.getItem(key);
     try {
-      const transaction = JSON.parse(raw ?? '') as StagedLocalTransaction;
-      if (!transaction || transaction.userKey !== userKey || !Array.isArray(transaction.changes)) throw new Error('invalid WAL entry');
-      if (!storeName || transaction.storeName === storeName) entries.push({ key, transaction });
+      const parsed = JSON.parse(raw ?? '') as unknown;
+      if (isRecord(parsed) && parsed.schemaVersion === 1 && parsed.userKey === userKey
+        && Array.isArray(parsed.transactions)) {
+        if (!parsed.transactions.length
+          || parsed.transactions.some(transaction => !validStagedTransaction(transaction, userKey))) {
+          throw new Error('invalid grouped WAL entry');
+        }
+        for (const transaction of parsed.transactions as StagedLocalTransaction[]) {
+          if (!storeName || transaction.storeName === storeName) entries.push({ key, transaction, grouped: true });
+        }
+      } else {
+        if (!validStagedTransaction(parsed, userKey)) throw new Error('invalid WAL entry');
+        if (!storeName || parsed.storeName === storeName) entries.push({ key, transaction: parsed, grouped: false });
+      }
     } catch (_) {
       throw new DurableStorageError('A pending local change is damaged. Synchronization stopped without discarding it.');
     }
@@ -472,6 +580,45 @@ export const storageService = {
     return transaction.id;
   },
 
+  /**
+   * Stages all parts of one logical UI action in one read-verified localStorage
+   * write. Recovery flattens the group only inside one IndexedDB transaction,
+   * so a process death cannot retain a completion while dropping its habit or
+   * statistics mutation.
+   */
+  stageLocalValues(key: string, changes: LocalValueChange[]): string | null {
+    const stores = new Set<string>();
+    const now = new Date().toISOString();
+    const baseOrder = nextWalOrder();
+    const transactions: StagedLocalTransaction[] = [];
+    for (const [index, change] of changes.entries()) {
+      if (!SYNCABLE_STORES.has(change.storeName)) {
+        throw new DurableStorageError(`Store ${change.storeName} cannot participate in a durable local transaction.`);
+      }
+      if (stores.has(change.storeName)) {
+        throw new DurableStorageError(`Store ${change.storeName} appears twice in one local transaction.`);
+      }
+      stores.add(change.storeName);
+      const transaction = buildStagedLocalTransaction(
+        change.storeName,
+        key,
+        change.previousValue,
+        change.nextValue,
+        baseOrder + index,
+        now,
+        randomUuid
+      );
+      if (transaction) transactions.push(transaction);
+    }
+    if (!transactions.length) return null;
+    const id = randomUuid();
+    const group: StagedLocalTransactionGroup = { schemaVersion: 1, userKey: key, transactions };
+    const serialized = JSON.stringify(group);
+    if (serialized === undefined) throw new DurableStorageError();
+    verifiedLocalStorageWrite(`${walPrefixForUser(key)}batch-${id}`, serialized);
+    return id;
+  },
+
   async get<T>(storeName: string, key: string): Promise<T | undefined> {
     if (SYNCABLE_STORES.has(storeName)) {
       const staged = latestWalValue<T>(storeName, key);
@@ -485,12 +632,18 @@ export const storageService = {
         if (db) return await db.get(storeName, key) as T | undefined;
       } catch (error) {
         console.warn(`[Storage] IndexedDB read failed for ${storeName}.`, error);
+        throw new DurableStorageError(
+          `IndexedDB could not verify the current ${storeName} value. An older mirror was not substituted.`
+        );
       }
     }
     return readLocalCopy<T>(storeName, key);
   },
 
   set<T>(storeName: string, key: string, value: T, source: 'local' | 'cloud' = 'local'): Promise<void> {
+    if (source === 'local' && listWal(key, storeName).some(item => item.grouped)) {
+      return this.flushPendingLocalChanges(key).then(() => this.set(storeName, key, value, source));
+    }
     return queueMutation(async () => {
       let pending = source === 'local' ? listWal(key, storeName) : [];
       let committedValue: unknown = pending.length
@@ -511,7 +664,7 @@ export const storageService = {
             if (transaction) {
               const entryKey = walKey(transaction);
               verifiedLocalStorageWrite(entryKey, JSON.stringify(transaction));
-              pending = [{ key: entryKey, transaction }];
+              pending = [{ key: entryKey, transaction, grouped: false }];
               committedValue = transaction.value;
             }
           }
@@ -543,7 +696,7 @@ export const storageService = {
           if (transaction) {
             const entryKey = walKey(transaction);
             verifiedLocalStorageWrite(entryKey, JSON.stringify(transaction));
-            pending = [{ key: entryKey, transaction }];
+            pending = [{ key: entryKey, transaction, grouped: false }];
             committedValue = transaction.value;
           }
         }
@@ -695,6 +848,19 @@ export const storageService = {
     });
   },
 
+  async mergeServerConflicts(userKey: string, conflicts: RemoteServerConflict[]): Promise<SyncMeta> {
+    return queueMutation(async () => {
+      const db = await getDB();
+      const current = normalizeSyncMeta(db
+        ? await db.get(STORES.SYNC, userKey)
+        : readLocalCopy(STORES.SYNC, userKey));
+      const next = transitionServerConflicts(current, conflicts);
+      if (db) await db.put(STORES.SYNC, next, userKey);
+      else writeFallback(STORES.SYNC, userKey, next);
+      return next;
+    });
+  },
+
   async getConflict(userKey: string, conflictId: string): Promise<LocalConflict | undefined> {
     const meta = normalizeSyncMeta(await this.get(STORES.SYNC, userKey));
     return meta.conflicts.find(item => item.id === conflictId);
@@ -776,6 +942,11 @@ export const storageService = {
         throw error;
       }
     }
+    // Hydration must establish the value that React will treat as its previous
+    // state. Otherwise the first UI mutation can be based on an in-memory
+    // default while durable storage is still absent, making safe WAL replay
+    // indistinguishable from a divergence after a crash.
+    await this.set(storeName, key, defaultValue, 'cloud');
     return defaultValue;
   },
 
@@ -812,6 +983,7 @@ export const storageService = {
       return {
         schemaVersion: BACKUP_SCHEMA_VERSION,
         exportedAt: new Date().toISOString(),
+        ownerKey: userKey,
         checksum: await checksumCollections(collections),
         collections
       };
@@ -820,10 +992,14 @@ export const storageService = {
 
   async importBackup(userKey: string, backup: Record<string, any>, mode: 'merge' | 'replace' = 'merge'): Promise<void> {
     const envelope = backup as Partial<GoalflowBackup>;
-    const collections = validateBackupCollections(backup);
-    if (envelope.checksum && await checksumCollections(collections) !== envelope.checksum) {
+    const verifiedCollections = validateBackupCollections(backup);
+    if (Number(envelope.schemaVersion) >= 4 && envelope.ownerKey !== userKey) {
+      throw new Error('This backup belongs to a different Goalflow account. Existing data is unchanged.');
+    }
+    if (envelope.checksum && await checksumCollections(verifiedCollections) !== envelope.checksum.toLowerCase()) {
       throw new Error('Backup checksum validation failed. The file may be incomplete or modified.');
     }
+    const collections = normalizeBackupCollectionsForWeb(verifiedCollections);
     await this.flushPendingLocalChanges(userKey);
     await this.createLocalSnapshot(userKey, 'before-restore');
     await queueMutation(async () => {

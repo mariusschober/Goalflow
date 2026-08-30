@@ -40,7 +40,7 @@ class GoalflowApplication : Application() {
             syncBindingProvider = {
                 com.mariusschober.goalflow.nativeapp.data.GoalflowSyncBinding(
                     backendOrigin = NativeConfig.apiOrigin.ifBlank { "unconfigured" },
-                    protocolVersion = 1,
+                    protocolVersion = 3,
                     accountSubject = sessionStore.read()?.userId
                 )
             }

@@ -235,7 +235,20 @@ class NativeSyncEngineTest {
     private fun engine(transport: NativeSyncTransport): NativeSyncEngine = NativeSyncEngine(
         repository = repository,
         sessionProvider = NativeSessionProvider { validSession },
-        transport = transport,
+        transport = NativeSyncTransport { path, token, method, body ->
+            when (path) {
+                "/api/v1/sync/status" -> NativeHttpResponse(
+                    200,
+                    JSONObject().put("userId", validSession.userId).put("serverVersion", 0)
+                        .put("unresolvedConflicts", 0).toString()
+                )
+                "/api/v1/sync/conflicts" -> NativeHttpResponse(
+                    200,
+                    JSONObject().put("conflicts", JSONArray()).toString()
+                )
+                else -> transport.request(path, token, method, body)
+            }
+        },
         cloudAvailable = { true }
     )
 

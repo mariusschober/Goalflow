@@ -65,6 +65,16 @@ const identityFor = async (database: SupabaseClient, telegramUserId: number) => 
   return data;
 };
 
+const existingApiReceipt = async (database: SupabaseClient, userId: string, mutationId: string) => {
+  const { data, error } = await database.from("api_mutation_receipts")
+    .select("operation,response")
+    .eq("user_id", userId)
+    .eq("mutation_id", mutationId)
+    .maybeSingle();
+  if (error) throw error;
+  return data as { operation?: string; response?: Record<string, unknown> } | null;
+};
+
 const localDateFor = async (database: SupabaseClient, userId: string): Promise<string> => {
   const { data } = await database.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
   const timeZone = String(data?.timezone ?? "UTC");
@@ -126,7 +136,7 @@ const captureText = async (
   const dateLabel = capture.schedulePrecision === "day" ? capture.scheduledFor : `month ${capture.scheduledFor}`;
   await send(config, chatId, `<b>Added:</b> ${escapeHtml(capture.title)}\nScheduled for ${dateLabel}.`, {
     inline_keyboard: [[
-      { text: "Undo", callback_data: `undo:${task.id}` },
+      { text: "Undo", callback_data: `undo:${task.id}:${task.revision}` },
       { text: "Change date", callback_data: `date:${task.id}` }
     ]]
   });
@@ -199,10 +209,17 @@ export const createTelegramProcessor = (
   const today = await localDateFor(database, userId);
 
   if (callback?.data) {
-    const [action, id] = callback.data.split(":");
+    const [action, id, revisionText] = callback.data.split(":");
     if (action === "undo") {
-      await database.from("tasks").update({ status: "dropped" }).eq("id", id).eq("user_id", userId).eq("source", "telegram").eq("status", "open");
-      await answerCallback(config, callback.id, "Task removed"); return;
+      const expected = Number(revisionText);
+      if (!Number.isSafeInteger(expected) || expected <= 0) {
+        await answerCallback(config, callback.id, "Task changed; open Goalflow before removing it."); return;
+      }
+      const { data: dropped, error: dropError } = await database.from("tasks").update({ status: "dropped" })
+        .eq("id", id).eq("user_id", userId).eq("source", "telegram").eq("status", "open")
+        .eq("revision", expected).select("id").maybeSingle();
+      if (dropError) throw dropError;
+      await answerCallback(config, callback.id, dropped ? "Task removed" : "Task changed; nothing was removed."); return;
     }
     if (action === "date") {
       await answerCallback(config, callback.id);
@@ -246,6 +263,19 @@ export const createTelegramProcessor = (
     await send(config, message.chat.id, "<b>Goalflow</b>\n/current - one task\n/today - today's ordered queue\n/add Task title - capture\n/done - complete Current\n/skip - rotate Current\nSend plain text or a voice note to capture quickly."); return;
   }
   if (command === "/current" || command === "/today" || command === "/done" || command === "/skip") {
+    const commandMutationId = command === "/done"
+      ? mutationIdForUpdate(update.update_id, "complete-current")
+      : command === "/skip"
+        ? mutationIdForUpdate(update.update_id, "skip-current")
+        : undefined;
+    if (commandMutationId) {
+      const receipt = await existingApiReceipt(database, userId, commandMutationId);
+      if (receipt?.response) {
+        const title = escapeHtml(String(receipt.response.title ?? "task"));
+        await send(config, message.chat.id, command === "/done" ? `Completed: ${title}` : `Moved to the end of today: ${title}`);
+        return;
+      }
+    }
     const { gate, queue } = await loadQueue(database, userId, today);
     if (command === "/today") {
       await send(config, message.chat.id, queue.length ? queue.map((task, index) => `${index + 1}. ${task.isFrog ? "🐸 " : ""}${escapeHtml(task.title)}`).join("\n") : "Nothing is scheduled for today."); return;
@@ -262,7 +292,8 @@ export const createTelegramProcessor = (
         target_user_id: userId,
         target_mutation_id: mutationIdForUpdate(update.update_id, "complete-current"),
         target_task_id: current.id,
-        target_local_date: today
+        target_local_date: today,
+        target_expected_revision: current.version
       });
       await send(config, message.chat.id, error ? 'The task could not be completed.' : `Completed: ${escapeHtml(current.title)}`); return;
     }
@@ -270,7 +301,8 @@ export const createTelegramProcessor = (
       target_user_id: userId,
       target_mutation_id: mutationIdForUpdate(update.update_id, "skip-current"),
       target_task_id: current.id,
-      target_day: today
+      target_day: today,
+      target_expected_revision: current.version
     });
     if (error) await send(config, message.chat.id, current.isFrog ? "A frog cannot be skipped. Complete it, break it down, or drop it explicitly." : "This task could not be skipped.");
     else await send(config, message.chat.id, `Moved to the end of today: ${escapeHtml(current.title)}`);
@@ -282,12 +314,24 @@ export const createTelegramProcessor = (
       await send(config, message.chat.id, "Use <code>/move TASK_ID YYYY-MM-DD</code>.");
       return;
     }
+    const moveMutationId = mutationIdForUpdate(update.update_id, "move-task");
+    const existingMove = await existingApiReceipt(database, userId, moveMutationId);
+    if (existingMove?.response) {
+      await send(config, message.chat.id, `Moved to ${String(existingMove.response.scheduled_for).slice(0, 10)}.`); return;
+    }
+    const { data: taskToMove, error: taskError } = await database.from("tasks")
+      .select("revision,status,deleted_at").eq("id", id).eq("user_id", userId).maybeSingle();
+    if (taskError) throw taskError;
+    if (!taskToMove || taskToMove.status !== "open" || taskToMove.deleted_at) {
+      await send(config, message.chat.id, "The task no longer exists or is no longer open."); return;
+    }
     const parsed = parseTelegramCapture(`Move ${date ?? ""}`, today);
     const { error } = await database.rpc('goalflow_reschedule_task_idempotent', {
       target_user_id: userId,
-      target_mutation_id: mutationIdForUpdate(update.update_id, "move-task"),
+      target_mutation_id: moveMutationId,
       target_task_id: id, target_local_date: today,
-      target_schedule_precision: 'day', target_scheduled_for: parsed.scheduledFor, target_scheduled_time: null
+      target_schedule_precision: 'day', target_scheduled_for: parsed.scheduledFor, target_scheduled_time: null,
+      target_expected_revision: Number(taskToMove.revision)
     });
     await send(config, message.chat.id, error ? "The task could not be moved." : `Moved to ${parsed.scheduledFor}.`); return;
   }
