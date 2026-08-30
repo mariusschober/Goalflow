@@ -61,7 +61,7 @@ fi
 package_name="$(printf '%s\n' "$badging" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)"
 version_code="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionCode='\\([^']*\\)'.*/\\1/p" | head -n 1)"
 version_name="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionName='\\([^']*\\)'.*/\\1/p" | head -n 1)"
-min_sdk="$(printf '%s\n' "$badging" | sed -n "s/^sdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)"
+min_sdk="$(printf '%s\n' "$badging" | awk -F"\047" '$1 ~ /^[[:space:]]*sdkVersion/ { print $2; exit }')"
 target_sdk="$(printf '%s\n' "$badging" | sed -n "s/^targetSdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)"
 printf 'PACKAGE=%s\nVERSION_CODE=%s\nVERSION_NAME=%s\nMIN_SDK=%s\nTARGET_SDK=%s\n' \
     "$package_name" "$version_code" "$version_name" "$min_sdk" "$target_sdk"
