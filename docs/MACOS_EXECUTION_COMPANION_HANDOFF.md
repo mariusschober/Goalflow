@@ -2,7 +2,7 @@
 
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
-**Latest commit at handoff:** `70fa935e687938166ceb879c9c0616a7fcf1a37d` (Session G — Final Sync)  
+**Latest commit at handoff:** `daef4d079ff339c64efa101a9bf635bbd3021e3e` (Session F — Server Capabilities)  
 **Previous slice commit:** `daef4d079ff339c64efa101a9bf635bbd3021e3e` (Session F — Server Capabilities)  
 **Base:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30, verified via `git merge-base`)  
 **Xcode / SDK at build:** Xcode 26.6 (17F113), macOS SDK 26.5, Swift 6.3.3, Target: arm64-apple-macosx26.0, DeploymentTarget 15.0 (Tahoe target per context is 26 — built against 26.5 SDK; plan deploys to 15.0 for broader beta, tighten to 26 at hardening)  
