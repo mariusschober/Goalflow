@@ -63,7 +63,7 @@ version_code="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionCode='\\(
 version_name="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionName='\\([^']*\\)'.*/\\1/p" | head -n 1)"
 min_sdk="$(printf '%s\n' "$badging" | awk -F"\047" '$1 ~ /^[[:space:]]*sdkVersion/ { print $2; exit }')"
 if [[ -z "$min_sdk" && -n "$aapt2_bin" ]]; then
-    manifest_dump="$("$aapt2_bin" dump xmltree --file AndroidManifest.xml "$apk_path")"
+    manifest_dump="$("$aapt2_bin" dump xmltree "$apk_path" --file AndroidManifest.xml)"
     min_sdk_hex="$(printf '%s\n' "$manifest_dump" | sed -n 's/.*android:minSdkVersion.*0x\([0-9a-fA-F]\+\)[^0-9a-fA-F]*$/\1/p' | head -n 1)"
     if [[ -n "$min_sdk_hex" ]]; then
         min_sdk="$(printf '%d' "0x${min_sdk_hex}")"

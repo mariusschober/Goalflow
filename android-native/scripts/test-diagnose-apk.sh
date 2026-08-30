@@ -31,9 +31,9 @@ if [[ "$1" == "dump" && "$2" == "badging" ]]; then
 fi
 
 if [[ "$1" == "dump" && "$2" == "xmltree" ]]; then
-    [[ "$3" == "--file" ]]
-    [[ "$4" == "AndroidManifest.xml" ]]
-    [[ "$5" == "$EXPECTED_APK" ]]
+    [[ "$3" == "$EXPECTED_APK" ]]
+    [[ "$4" == "--file" ]]
+    [[ "$5" == "AndroidManifest.xml" ]]
     printf '%s\n' "$*" > "$CALL_LOG"
     printf '%s\n' '    A: android:minSdkVersion(0x0101020c)=(type 0x10)0x1a'
     exit 0
@@ -57,7 +57,7 @@ grep -Fqx 'VERSION_CODE=7' <<<"$output"
 grep -Fqx 'VERSION_NAME=1.2' <<<"$output"
 grep -Fqx 'MIN_SDK=26' <<<"$output"
 grep -Fqx 'TARGET_SDK=35' <<<"$output"
-grep -Fq -- 'xmltree --file AndroidManifest.xml' "$work_dir/aapt2-call"
+grep -Fq -- "xmltree $work_dir/test.apk --file AndroidManifest.xml" "$work_dir/aapt2-call"
 grep -Fqx 'APK_DIAGNOSTIC=PASS' <<<"$output"
 
 printf '%s\n' "$output"
