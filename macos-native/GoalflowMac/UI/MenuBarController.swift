@@ -83,9 +83,23 @@ final class MenuBarController: NSObject {
     private func updateStatusTitle() {
         guard let button = statusItem.button else { return }
         button.appearsDisabled = false
-        // Tahoe Liquid Glass: force vibrant appearance based on system dark/light, otherwise labelColor resolves to black on dark
-        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        // Tahoe: menu bar is transparent Liquid Glass — isDark must reflect system dark, not NSApp aqua fallback
+        // Use AppleInterfaceStyle + button.window appearance + effectiveAppearance
+        let isDark: Bool = {
+            if let style = UserDefaults.standard.string(forKey: "AppleInterfaceStyle"), style == "Dark" { return true }
+            if let winAppearance = button.window?.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua, .vibrantDark, .vibrantLight]) {
+                return winAppearance == .vibrantDark || winAppearance == .darkAqua
+            }
+            return NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        }()
+        // Log for debugging
+        let debugAppearance = button.effectiveAppearance.name.rawValue
+        let winAppearance = button.window?.effectiveAppearance.name.rawValue ?? "nil-window"
+        let appAppearance = NSApp.effectiveAppearance.name.rawValue
+        print("[MenuBar] isDark=\(isDark) button.effective=\(debugAppearance) window=\(winAppearance) app=\(appAppearance) display=\(isDark ? "dark":"light")")
         button.appearance = NSAppearance(named: isDark ? .vibrantDark : .vibrantLight)
+        // Force explicit white/black via attributedTitle, not labelColor which still resolves against wrong appearance on Tahoe
+        let titleColor: NSColor = isDark ? .white : .black
         // Break takes precedence — show break timer
         if viewModel.isOnBreak {
             let remaining = viewModel.breakRemaining
@@ -97,7 +111,7 @@ final class MenuBarController: NSObject {
                 timeStr = String(format: "%02d:%02d", elapsed/60, elapsed%60)
             }
             let title = "☕ \(timeStr)"
-            button.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+            button.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.systemTeal])
             button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)
             img?.isTemplate = true
@@ -108,13 +122,13 @@ final class MenuBarController: NSObject {
         }
         // Respect planning gate when enabled
         if case .monthlyPlanningRequired = viewModel.gate {
-            button.attributedTitle = NSAttributedString(string: "Plan monthly", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+            button.attributedTitle = NSAttributedString(string: "Plan monthly", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.systemOrange])
             button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
             button.toolTip = "Monthly planning required"; button.contentTintColor = .systemOrange; return
         }
         if case .dailyPlanningRequired = viewModel.gate {
-            button.attributedTitle = NSAttributedString(string: "Plan the day", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+            button.attributedTitle = NSAttributedString(string: "Plan the day", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.systemOrange])
             button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
             button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
@@ -130,13 +144,13 @@ final class MenuBarController: NSObject {
             else { display = trimmed }
         } else { display = "Plan the day" }
         let iconName = isPaused ? "pause.circle.fill" : isOvertime ? "exclamationmark.circle.fill" : isActive ? "scope" : "circle.dotted"
-        // Use attributedTitle with labelColor so it resolves vibrantly white on dark, black on light
-        button.attributedTitle = NSAttributedString(string: display, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+        let baseColor: NSColor = (isOvertime || isPaused) ? .systemOrange : titleColor
+        button.attributedTitle = NSAttributedString(string: display, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: baseColor])
         button.imagePosition = .imageLeading
         let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
         icon?.isTemplate = true
         button.image = icon
         button.toolTip = task?.title ?? "Goalflow — no tasks planned"
-        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = NSColor.labelColor }
+        button.contentTintColor = baseColor
     }
 }
