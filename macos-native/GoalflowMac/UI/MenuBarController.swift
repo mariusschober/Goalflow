@@ -83,7 +83,9 @@ final class MenuBarController: NSObject {
     private func updateStatusTitle() {
         guard let button = statusItem.button else { return }
         button.appearsDisabled = false
-        button.appearance = nil // force vibrant inheritance on Tahoe Liquid Glass
+        // Tahoe Liquid Glass: force vibrant appearance based on system dark/light, otherwise labelColor resolves to black on dark
+        let isDark = NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+        button.appearance = NSAppearance(named: isDark ? .vibrantDark : .vibrantLight)
         // Break takes precedence — show break timer
         if viewModel.isOnBreak {
             let remaining = viewModel.breakRemaining
@@ -94,24 +96,26 @@ final class MenuBarController: NSObject {
             } else {
                 timeStr = String(format: "%02d:%02d", elapsed/60, elapsed%60)
             }
-            button.title = "☕ \(timeStr)"
+            let title = "☕ \(timeStr)"
+            button.attributedTitle = NSAttributedString(string: title, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
             button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)
             img?.isTemplate = true
             button.image = img
-            button.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             button.toolTip = "On Break — \(timeStr)"
             button.contentTintColor = .systemTeal
             return
         }
         // Respect planning gate when enabled
         if case .monthlyPlanningRequired = viewModel.gate {
-            button.title = "Plan monthly"; button.imagePosition = .imageLeading
+            button.attributedTitle = NSAttributedString(string: "Plan monthly", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+            button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
             button.toolTip = "Monthly planning required"; button.contentTintColor = .systemOrange; return
         }
         if case .dailyPlanningRequired = viewModel.gate {
-            button.title = "Plan the day"; button.imagePosition = .imageLeading
+            button.attributedTitle = NSAttributedString(string: "Plan the day", attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+            button.imagePosition = .imageLeading
             let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
             button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
         }
@@ -126,11 +130,13 @@ final class MenuBarController: NSObject {
             else { display = trimmed }
         } else { display = "Plan the day" }
         let iconName = isPaused ? "pause.circle.fill" : isOvertime ? "exclamationmark.circle.fill" : isActive ? "scope" : "circle.dotted"
-        button.title = display; button.imagePosition = .imageLeading
+        // Use attributedTitle with labelColor so it resolves vibrantly white on dark, black on light
+        button.attributedTitle = NSAttributedString(string: display, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: NSColor.labelColor])
+        button.imagePosition = .imageLeading
         let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
         icon?.isTemplate = true
         button.image = icon
-        button.font = NSFont.systemFont(ofSize: 12, weight: .medium); button.toolTip = task?.title ?? "Goalflow — no tasks planned"
-        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = nil } // nil → vibrant labelColor (white on dark glass, black on light glass)
+        button.toolTip = task?.title ?? "Goalflow — no tasks planned"
+        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = NSColor.labelColor }
     }
 }
