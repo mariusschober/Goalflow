@@ -50,6 +50,7 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func appDidBecomeActive() { viewModel.restore(); updateStatusTitle(); if viewModel.isOnBreak { updateBreakCover() } }
+    @objc private func appearanceDidChange() { updateStatusTitle() }
 
     // MARK: - Capture
 
@@ -102,8 +103,6 @@ final class MenuBarController: NSObject {
         menuBarLogger.debug("[MenuBar] isDark=\(isDark, privacy: .public) button.effective=\(debugAppearance, privacy: .public) window=\(winAppearance, privacy: .public) app=\(appAppearance, privacy: .public)")
         #endif
         button.appearance = NSAppearance(named: isDark ? .vibrantDark : .vibrantLight)
-        // Force explicit white/black via attributedTitle, not labelColor which still resolves against wrong appearance on Tahoe
-        let titleColor: NSColor = isDark ? .white : .black
         // Break takes precedence — show break timer
         if viewModel.isOnBreak {
             let remaining = viewModel.breakRemaining

@@ -4,7 +4,7 @@ import Combine
 
 @MainActor
 final class BreakCoverWindowController: NSObject {
-    private var windows: [NSWindow] = []
+    nonisolated(unsafe) private var windows: [NSWindow] = []
     private var cancellables: Set<AnyCancellable> = []
     private var breakState: BreakState?
     private var onEndEarly: (() -> Void)?
@@ -77,5 +77,5 @@ final class BreakCoverWindowController: NSObject {
             .store(in: &cancellables)
     }
 
-    deinit { closeAll() }
+    deinit { for w in windows { w.orderOut(nil) } }
 }
