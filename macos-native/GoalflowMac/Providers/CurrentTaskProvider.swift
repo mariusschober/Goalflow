@@ -13,7 +13,7 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
     private let userKey = "localUser"
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.demo.tasks.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("goalflow.tasks.json")
         }
@@ -75,11 +75,12 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         }
     }
 
+    private static let orderLock = NSLock()
+    private static var orderCounter = 0
     private func nextOrder() -> Int {
-        // Simple order: Date.now *1000 + counter
-        struct C { static var counter = 0 }
-        C.counter = (C.counter + 1) % 1000
-        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + C.counter
+        Self.orderLock.lock(); defer { Self.orderLock.unlock() }
+        Self.orderCounter = (Self.orderCounter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + Self.orderCounter
     }
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
         var tasks = loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == id }) else { throw TaskStoreError.notFound }

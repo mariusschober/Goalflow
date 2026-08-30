@@ -8,7 +8,7 @@ final class GoalStore: @unchecked Sendable {
     private let decoder: JSONDecoder
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.goals.v1") {
         if let u = fileURL { self.fileURL = u } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("goals.json")
         }
@@ -44,7 +44,7 @@ final class TrueNorthStore: @unchecked Sendable {
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.truenorth.v1") {
         if let u = fileURL { self.fileURL = u } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("truenorth.json")
         }
@@ -75,7 +75,7 @@ final class AmalgamStore: @unchecked Sendable {
     let fileURL: URL; private let walKey: String; private let defaults: UserDefaults
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.amalgam.v1") {
         if let u = fileURL { self.fileURL = u } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("amalgam.json")
         }

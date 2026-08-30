@@ -36,22 +36,27 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
 
     func save(_ session: NativeSession) throws {
         let data = try encoder.encode(session)
-        // Delete existing
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
-        SecItemDelete(query as CFDictionary)
         let attrs: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
             kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
-            kSecUseDataProtectionKeychain as String: true
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         ]
-        let status = SecItemAdd(attrs as CFDictionary, nil)
+        var status = SecItemUpdate(query as CFDictionary, attrs as CFDictionary)
+        if status == errSecItemNotFound {
+            let addAttrs: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: service,
+                kSecAttrAccount as String: account,
+                kSecValueData as String: data,
+                kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+                kSecUseDataProtectionKeychain as String: true
+            ]
+            status = SecItemAdd(addAttrs as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw KeychainError.saveFailed(status) }
         // Verify read-back
         guard let read = read(), read.accessToken == session.accessToken else { throw KeychainError.readBackMismatch }

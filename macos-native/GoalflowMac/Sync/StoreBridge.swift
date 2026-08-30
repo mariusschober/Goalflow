@@ -11,7 +11,7 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
     init(baseDir: URL? = nil, defaults: UserDefaults = .standard) {
         if let d = baseDir { self.baseDir = d }
         else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             self.baseDir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
         }
         self.defaults = defaults
@@ -77,6 +77,7 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
                 data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
             }
             try data.write(to: url, options: [.atomic])
+            if let read = try? Data(contentsOf: url), read != data { throw SyncError.writeFailed("read-back mismatch \(store)") }
             let walKey: String
             switch store {
             case "tasks": walKey = "goalflow.demo.tasks.v1"

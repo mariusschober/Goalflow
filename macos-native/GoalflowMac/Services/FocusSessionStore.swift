@@ -67,7 +67,7 @@ final class FileFocusSessionStore: FocusSessionStore, @unchecked Sendable {
         if let u = fileURL {
             self.fileURL = u
         } else {
-            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("execution.json")
         }
