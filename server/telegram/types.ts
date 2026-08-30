@@ -1,10 +1,14 @@
 export interface TelegramUser {
   id: number;
   username?: string;
+  first_name?: string;
 }
 
 export interface TelegramChat {
   id: number;
+  type?: string;
+  title?: string;
+  username?: string;
 }
 
 export interface TelegramVoice {
@@ -18,7 +22,14 @@ export interface TelegramMessage {
   from?: TelegramUser;
   chat: TelegramChat;
   text?: string;
+  caption?: string;
   voice?: TelegramVoice;
+  // Forwarded message metadata (Bot API 7.0+ forward_origin, legacy forward_from)
+  forward_origin?: unknown;
+  forward_from?: TelegramUser;
+  forward_from_chat?: TelegramChat & { message_id?: number };
+  forward_date?: number;
+  // For forwarded via forward_origin, Telegram may include forward_origin object
 }
 
 export interface TelegramCallback {

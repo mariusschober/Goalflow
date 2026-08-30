@@ -8,9 +8,12 @@ import { escapeHtml, sendMessage, answerCallbackQuery, telegramRequest } from ".
 import { identityFor, localDateFor, loadQueue } from "./queue";
 import type { TelegramUpdate, TelegramMessage } from "./types";
 import { addDays, findPendingCapture, ensurePendingTextCapture } from "./pending";
+import { isForwarded, extractForwardContext } from "./forward";
 import {
   formatAdded,
+  formatAddedRich,
   addedKeyboard,
+  addedKeyboardWithOpen,
   formatCurrent,
   formatCurrentEmpty,
   formatToday,
@@ -26,7 +29,7 @@ const answerCallback = answerCallbackQuery;
 const createTask = async (
   database: SupabaseClient,
   userId: string,
-  capture: ReturnType<typeof parseTelegramCapture>,
+  capture: ReturnType<typeof parseTelegramCapture> & { forwardOrigin?: unknown; forwardedText?: string },
   today: string,
   mutationId: string,
   taskId = mutationId,
@@ -39,17 +42,36 @@ const createTask = async (
       taskId,
       title: capture.title,
       notes: "",
-      tags: [],
+      tags: capture.tags ?? [],
       schedulePrecision: capture.schedulePrecision,
       scheduledFor: capture.scheduledFor,
+      scheduledTime: capture.scheduledTime ?? null,
       plannedOrder: 0,
       isFrog: false,
       beforeFrog: false,
       source: "telegram",
-      estimatedMinutes: 25,
+      estimatedMinutes: capture.estimatedMinutes ?? 25,
     },
   });
   if (error) throw error;
+  // Persist forward source if present (additive, not part of idempotent RPC yet)
+  if (capture.forwardOrigin || capture.forwardedText) {
+    const forwardSource = {
+      forwardedText: capture.forwardedText ?? capture.title,
+      forwardOrigin: capture.forwardOrigin ?? null,
+      capturedAt: new Date().toISOString(),
+    };
+    // Fire-and-forget, don't block user response on forward_source update
+    void (async () => {
+      try {
+        await database
+          .from("tasks")
+          .update({ forward_source: forwardSource } as Record<string, unknown>)
+          .eq("id", (data as { id: string }).id)
+          .eq("user_id", userId);
+      } catch {}
+    })();
+  }
   return data;
 };
 
@@ -67,7 +89,14 @@ const captureText = async (
   // Require explicit scheduling via inline clarification.
   if (capture.defaultedToToday) {
     const captureId = mutationIdForUpdate(updateId, "text-capture");
-    const ensured = await ensurePendingTextCapture(database, captureId, userId, chatId, capture.title, today);
+    const ensured = await ensurePendingTextCapture(database, captureId, userId, chatId, {
+      title: capture.title,
+      schedulePrecision: capture.schedulePrecision,
+      scheduledFor: capture.scheduledFor,
+      scheduledTime: capture.scheduledTime,
+      estimatedMinutes: capture.estimatedMinutes,
+      tags: capture.tags,
+    }, today);
     if (ensured === null) {
       // Already resolved (confirmed/cancelled) — ignore duplicate.
       return;
@@ -87,7 +116,85 @@ const captureText = async (
     mutationIdForUpdate(updateId, "capture-task"),
   )) as { id: string };
   const dateLabel = capture.schedulePrecision === "day" ? capture.scheduledFor : `month ${capture.scheduledFor}`;
-  await send(config, chatId, formatAdded(capture.title, dateLabel), addedKeyboard(task.id));
+  await send(
+    config,
+    chatId,
+    formatAddedRich(capture.title, dateLabel, {
+      scheduledTime: capture.scheduledTime,
+      estimatedMinutes: capture.estimatedMinutes,
+      tags: capture.tags,
+    }),
+    addedKeyboardWithOpen(task.id, config),
+  );
+};
+
+const handleForward = async (
+  config: AppConfig,
+  database: SupabaseClient,
+  userId: string,
+  message: TelegramMessage,
+  today: string,
+  updateId: number,
+): Promise<boolean> => {
+  const ctx = extractForwardContext(message);
+  if (!ctx) return false;
+  const captureId = mutationIdForUpdate(updateId, "forward-capture");
+  const existing = await findPendingCapture(database, captureId, userId);
+  if (existing) {
+    if (String((existing as Record<string, unknown>).state ?? "") !== "pending") return true;
+    await send(
+      config,
+      message.chat.id,
+      `Forwarded message captured.\n\n${escapeHtml(String(ctx.forwardedText).slice(0, 200))}\n\nWhat do you want to do?`,
+      pendingSchedulePrompt(ctx.forwardedText.slice(0, 50), captureId).keyboard,
+    );
+    return true;
+  }
+  // Use forwarded text as title candidate, but parse for explicit scheduling if user included it
+  const titleCandidate = ctx.forwardedText.slice(0, 240);
+  const capture = parseTelegramCapture(titleCandidate, today);
+  // If forwarded text already contains explicit date, we can create directly, otherwise pending
+  if (capture.defaultedToToday) {
+    await ensurePendingTextCapture(database, captureId, userId, message.chat.id, {
+      title: capture.title,
+      schedulePrecision: capture.schedulePrecision,
+      scheduledFor: capture.scheduledFor,
+      scheduledTime: capture.scheduledTime,
+      estimatedMinutes: capture.estimatedMinutes,
+      tags: capture.tags,
+      forwardOrigin: ctx.forwardOrigin,
+      forwardedText: ctx.forwardedText,
+    }, today);
+    await send(
+      config,
+      message.chat.id,
+      `Forwarded message captured.\n\n${escapeHtml(ctx.forwardedText.slice(0, 200))}\n\nWhen?`,
+      pendingSchedulePrompt(capture.title, captureId).keyboard,
+    );
+  } else {
+    await ensurePendingTextCapture(database, captureId, userId, message.chat.id, {
+      title: capture.title,
+      schedulePrecision: capture.schedulePrecision,
+      scheduledFor: capture.scheduledFor,
+      scheduledTime: capture.scheduledTime,
+      estimatedMinutes: capture.estimatedMinutes,
+      tags: capture.tags,
+      forwardOrigin: ctx.forwardOrigin,
+      forwardedText: ctx.forwardedText,
+    }, today);
+    await send(
+      config,
+      message.chat.id,
+      `Forwarded: ${escapeHtml(capture.title)}\nScheduled for ${capture.schedulePrecision === "day" ? capture.scheduledFor : `month ${capture.scheduledFor}`}.`,
+      {
+        inline_keyboard: [
+          [{ text: "Create task", callback_data: `sch:today:${captureId}` }],
+          [{ text: "When?", callback_data: `sch:pick:${captureId}` }],
+        ],
+      },
+    );
+  }
+  return true;
 };
 
 const handleVoice = async (
@@ -133,20 +240,39 @@ const handleVoice = async (
     await send(config, message.chat.id, "That voice note is too large. Keep it under 19 MB.");
     return;
   }
-  const file = (await telegramRequest(config, "getFile", { file_id: voice.file_id })) as {
-    result?: { file_path?: string; file_size?: number };
-  };
-  const path = file.result?.file_path;
-  if (!path || (file.result?.file_size ?? 0) > config.TELEGRAM_MAX_VOICE_BYTES)
-    throw new Error("Telegram voice file is unavailable or too large.");
-  const response = await fetch(`https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${path}`, {
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!response.ok) throw new Error("Telegram voice download failed.");
-  let audio: Uint8Array | undefined = new Uint8Array(await response.arrayBuffer());
-  if (audio.byteLength > config.TELEGRAM_MAX_VOICE_BYTES) throw new Error("Telegram voice file exceeded the limit.");
-  const transcript = await speech.transcribe({ audio, mimeType: voice.mime_type ?? "audio/ogg", fileName: "voice.ogg" });
-  audio = undefined;
+  let filePath: string | undefined;
+  try {
+    const file = (await telegramRequest(config, "getFile", { file_id: voice.file_id })) as {
+      result?: { file_path?: string; file_size?: number };
+    };
+    filePath = file.result?.file_path;
+    if (!filePath || (file.result?.file_size ?? 0) > config.TELEGRAM_MAX_VOICE_BYTES)
+      throw new Error("Telegram voice file is unavailable or too large.");
+  } catch {
+    await send(config, message.chat.id, "Voice note could not be retrieved. Try again as text.");
+    return;
+  }
+  let audio: Uint8Array | undefined;
+  try {
+    const response = await fetch(`https://api.telegram.org/file/bot${config.TELEGRAM_BOT_TOKEN}/${filePath}`, {
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (!response.ok) throw new Error("Telegram voice download failed.");
+    audio = new Uint8Array(await response.arrayBuffer());
+    if (audio.byteLength > config.TELEGRAM_MAX_VOICE_BYTES) throw new Error("Telegram voice file exceeded the limit.");
+  } catch {
+    await send(config, message.chat.id, "Voice note could not be downloaded. Try again as text.");
+    return;
+  }
+  let transcript: string;
+  try {
+    transcript = await speech.transcribe({ audio: audio!, mimeType: voice.mime_type ?? "audio/ogg", fileName: "voice.ogg" });
+  } catch {
+    await send(config, message.chat.id, "Voice note could not be transcribed. Try again as text.");
+    return;
+  } finally {
+    audio = undefined;
+  }
   const capture = parseTelegramCapture(transcript, today);
   const { data, error } = await database
     .from("telegram_captures")
@@ -159,8 +285,11 @@ const handleVoice = async (
       transcript,
       schedule_precision: capture.schedulePrecision,
       scheduled_for: capture.schedulePrecision === "month" ? `${capture.scheduledFor}-01` : capture.scheduledFor,
+      scheduled_time: capture.scheduledTime ?? null,
+      estimated_minutes: capture.estimatedMinutes ?? null,
+      tags: capture.tags ?? [],
       expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
-    })
+    } as Record<string, unknown>)
     .select("id")
     .single();
   if (error) throw error;
@@ -197,7 +326,22 @@ const handleScheduleCallback = async (
       return;
     }
     const scheduledFor = choice === "today" ? today : addDays(today, 1);
-    const capture = { title, schedulePrecision: "day" as const, scheduledFor, defaultedToToday: false };
+    const scheduledTime = pending.scheduled_time ? String(pending.scheduled_time).slice(0, 5) : undefined;
+    const estimatedMinutes = pending.estimated_minutes ? Number(pending.estimated_minutes) : undefined;
+    const tags = Array.isArray(pending.tags) ? (pending.tags as unknown[]).map(String) : undefined;
+    const forwardOrigin = pending.forward_origin as unknown;
+    const forwardedText = pending.forwarded_text ? String(pending.forwarded_text) : undefined;
+    const capture = {
+      title,
+      schedulePrecision: "day" as const,
+      scheduledFor,
+      scheduledTime,
+      estimatedMinutes,
+      tags,
+      forwardOrigin,
+      forwardedText,
+      defaultedToToday: false,
+    };
     const task = (await createTask(
       database,
       userId,
@@ -214,7 +358,12 @@ const handleScheduleCallback = async (
       .eq("state", "pending");
     if (confirmError) throw confirmError;
     await answerCallback(config, callbackId, "Task added");
-    await send(config, chatId, formatAdded(title, scheduledFor), addedKeyboard(task.id));
+    await send(
+      config,
+      chatId,
+      formatAddedRich(title, scheduledFor, { scheduledTime, estimatedMinutes, tags }),
+      addedKeyboardWithOpen(task.id, config),
+    );
     return;
   }
   if (choice === "pick") {
@@ -345,6 +494,11 @@ export const createTelegramProcessor = (
           effectivePending.schedule_precision === "month"
             ? String(effectivePending.scheduled_for).slice(0, 7)
             : String(effectivePending.scheduled_for).slice(0, 10),
+        scheduledTime: effectivePending.scheduled_time ? String(effectivePending.scheduled_time).slice(0, 5) : undefined,
+        estimatedMinutes: effectivePending.estimated_minutes ? Number(effectivePending.estimated_minutes) : undefined,
+        tags: Array.isArray(effectivePending.tags) ? (effectivePending.tags as unknown[]).map(String) : undefined,
+        forwardOrigin: effectivePending.forward_origin as unknown,
+        forwardedText: effectivePending.forwarded_text ? String(effectivePending.forwarded_text) : undefined,
         defaultedToToday: false,
       };
       await createTask(database, userId, capture, today, mutationIdForUpdate(update.update_id, "confirm-voice-task"), id);
@@ -413,6 +567,11 @@ export const createTelegramProcessor = (
       await answerCallback(config, callback.id);
       return;
     }
+  }
+
+  if (isForwarded(message)) {
+    const handled = await handleForward(config, database, userId, message, today, update.update_id);
+    if (handled) return;
   }
 
   if (message.voice) {

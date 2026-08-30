@@ -151,6 +151,26 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
       }
   }, []);
 
+  useEffect(() => {
+      if (isLoading) return;
+      const params = new URLSearchParams(window.location.search);
+      const taskId = params.get('taskId');
+      if (!taskId) return;
+      const task = tasks.find((t) => t.id === taskId);
+      if (task) {
+          setTaskToEdit(task);
+          setTaskDefaults({});
+          setIsTaskModalOpen(true);
+          setCurrentView('current');
+      } else if (params.get('view') === 'current') {
+          setCurrentView('current');
+      }
+      params.delete('taskId');
+      // keep view param for navigation, but clean taskId
+      const remaining = params.toString();
+      window.history.replaceState({}, document.title, `${window.location.pathname}${remaining ? `?${remaining}` : ''}`);
+  }, [isLoading, tasks]);
+
   // Circadian Check Logic - Only active if checked in today
   const isCircadianActive = circadianState.lastCheckIn === getTodayYYYYMMDD();
 
