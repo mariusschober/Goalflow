@@ -144,11 +144,8 @@ final class MenuBarController: NSObject {
             else { display = trimmed }
         } else { display = "Plan the day" }
         let iconName = isPaused ? "pause.circle.fill" : isOvertime ? "exclamationmark.circle.fill" : isActive ? "scope" : "circle.dotted"
-        // Use systemBlue for default so visible on both dark and light Liquid Glass (white/black fails on transparent over wallpaper)
-        let baseColor: NSColor = (isOvertime || isPaused) ? .systemOrange : .systemBlue
-        // Debug: show isDark in title for verification (remove after)
-        let debugDisplay = display + (isDark ? " ◐" : " ◑")
-        button.attributedTitle = NSAttributedString(string: debugDisplay, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: baseColor])
+        let baseColor: NSColor = .systemRed
+        button.attributedTitle = NSAttributedString(string: display, attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .medium), .foregroundColor: baseColor])
         button.imagePosition = .imageLeading
         let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
         icon?.isTemplate = true
