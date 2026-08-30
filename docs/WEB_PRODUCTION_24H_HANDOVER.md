@@ -54,6 +54,7 @@ Excluded unless a direct web production blocker requires otherwise: native Andro
 - Installed the locked dependency graph with Node `v24.19.0` / npm `11.9.0`: 676 packages installed.
 - Executed the complete sequential release script at the isolated head: TypeScript, 102 tests, client/server builds, production health startup, client bundle secret scan, and dependency audit all passed.
 - Installed and executed PostgreSQL `16.15` in a disposable local cluster. The static migration verifier, empty-database migration path, seeded current-schema upgrade path, integrity assertions, and malformed-CASE regression all passed.
+- Reviewed PR #1 against current production with the GitHub compare API. It is diverged: 4 commits ahead and 4 behind, merge base `7a502cd`. Relative to `3b510ca`, its entire delta is documentation only: `docs/AI_CONTEXT_HANDOVER.md`, `docs/PRODUCTION_FINALIZATION_PLAN.md`, `docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`, and `docs/TRANCHE_2_HANDOVER.md` (459 additions, 82 deletions). No web code was admitted.
 - No production branch, production database, or production deployment was modified.
 
 ## Test and command evidence
@@ -87,6 +88,7 @@ Inherited repository documentation claims local PASS at earlier commit `5e30d783
 
 - **Decision:** Current production tip, not the supplied orientation SHA, is the base.
 - **Decision:** PR #1 is review input only. Its older base and integrity scope prohibit blind merge/cherry-pick.
+- **Decision:** Admit nothing from PR #1. Its code-relevant integrity implementation is already in current production ancestry; its remaining diff expands the authoritative workstream into Android/macOS/Telegram and conflicts with this mission's web-only exclusion. Cherry-picking it would add stale status and scope, not release safety.
 - **Decision:** Repeatedly rerunning zero-step GitHub Actions failures has no release value.
 - **Decision:** Direct shell Git authentication remains unavailable, so connector-backed source materialization and connector-backed commits are the safe execution path. This no longer blocks local web gates.
 - **Constraint:** The local mirror omits binary PWA icon files. The remote branch still contains their original blobs. Local build evidence is valid for code and bundling, but PWA icon/install evidence must come from an exact staging deployment or a credentialed full checkout.
@@ -117,12 +119,12 @@ Reason: the current-head web/server/security and PostgreSQL gates are green, but
 
 ## Exact next actions and commands
 
-Review PR #1 against the current production base next:
+Establish a web-only release gate next without weakening existing Android jobs:
 
 ```bash
-git log --oneline --decorate --graph goalflow-production..codex/zero-data-loss-finalization
-git diff --stat goalflow-production...codex/zero-data-loss-finalization
-git diff goalflow-production...codex/zero-data-loss-finalization -- services hooks server supabase scripts package.json .github
+npm run verify:release
+npm run verify:migrations
+npm run test:migrations:postgres
 ```
 
 Then inspect actual scripts before invoking any non-existent aliases:
