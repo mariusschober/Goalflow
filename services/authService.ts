@@ -64,6 +64,48 @@ export const requestOwnerMagicLink = async (email: string): Promise<void> => {
   if (error) throw error;
 };
 
+const TELEGRAM_STATE_KEY = 'goalflow_telegram_state';
+const TELEGRAM_ATTEMPT_KEY = 'goalflow_telegram_attempt';
+
+const generateSecureState = (): string => {
+  try {
+    // Browser crypto
+    const bytes = new Uint8Array(32);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('');
+  } catch {
+    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  }
+};
+
+export const isSafeRedirect = (target: string): boolean => {
+  if (!target || typeof target !== 'string') return false;
+  if (target.includes('\n') || target.includes('\r') || target.includes('\\')) return false;
+  if (/^[a-z][a-z\d+.-]*:/i.test(target)) {
+    try {
+      const origin = new URL(target).origin;
+      return origin === window.location.origin;
+    } catch { return false; }
+  }
+  if (!target.startsWith('/')) return false;
+  if (target.startsWith('//')) return false;
+  return true;
+};
+
+export const consumeSecureState = (expectedKey: string): string | null => {
+  const url = new URL(window.location.href);
+  const provided = url.searchParams.get('state');
+  const expected = sessionStorage.getItem(expectedKey);
+  // Clear state regardless of outcome to prevent replay
+  sessionStorage.removeItem(expectedKey);
+  if (!provided || !expected) return null;
+  // constant-time-ish compare (timing not critical in browser, but avoid early exit)
+  if (provided.length !== expected.length) return null;
+  let mismatch = 0;
+  for (let i = 0; i < provided.length; i++) mismatch |= provided.charCodeAt(i) ^ expected.charCodeAt(i);
+  return mismatch === 0 ? provided : null;
+};
+
 export const beginTelegramSignup = async (inviteCode: string, captchaToken = ''): Promise<void> => {
   if (!supabase) throw new Error('Authentication is not configured.');
   const response = await fetch(apiUrl('/api/v1/auth/telegram/preflight'), {
@@ -73,15 +115,24 @@ export const beginTelegramSignup = async (inviteCode: string, captchaToken = '')
   });
   const result = await response.json() as { attemptToken?: string; provider?: string; error?: { message?: string } };
   if (!response.ok || !result.attemptToken) throw new Error(result.error?.message || 'Telegram signup could not be started.');
-  sessionStorage.setItem('goalflow_telegram_attempt', result.attemptToken);
+  const state = generateSecureState();
+  sessionStorage.setItem(TELEGRAM_ATTEMPT_KEY, result.attemptToken);
+  sessionStorage.setItem(TELEGRAM_STATE_KEY, state);
+  const redirectTo = `${window.location.origin}/?auth=telegram&state=${encodeURIComponent(state)}`;
+  if (!isSafeRedirect(redirectTo)) throw new Error('Redirect target is not allowed.');
   const { error } = await supabase.auth.signInWithOAuth({
     provider: (result.provider || telegramProvider) as never,
     options: {
-      redirectTo: `${window.location.origin}/?auth=telegram`,
-      scopes: 'openid profile telegram:bot_access'
+      redirectTo,
+      scopes: 'openid profile telegram:bot_access',
+      queryParams: { state } as never
     }
   });
-  if (error) throw error;
+  if (error) {
+    sessionStorage.removeItem(TELEGRAM_ATTEMPT_KEY);
+    sessionStorage.removeItem(TELEGRAM_STATE_KEY);
+    throw error;
+  }
 };
 
 export const beginOwnerTelegramLink = async (): Promise<void> => {
@@ -115,8 +166,20 @@ export const activateOwnerTelegramLink = async (session: Session): Promise<void>
 };
 
 export const activateTelegramSignup = async (session: Session): Promise<boolean> => {
-  const attemptToken = sessionStorage.getItem('goalflow_telegram_attempt');
+  const attemptToken = sessionStorage.getItem(TELEGRAM_ATTEMPT_KEY);
   if (!attemptToken) return !session.user.email;
+  // Validate state/nonce before activating — prevents CSRF/open-redirect replay
+  const url = new URL(window.location.href);
+  const providedState = url.searchParams.get('state');
+  const expectedState = sessionStorage.getItem(TELEGRAM_STATE_KEY);
+  // If state is present in URL, it must match; if missing, we allow legacy without state but must have attempt
+  if (providedState || expectedState) {
+    if (!providedState || !expectedState || providedState !== expectedState) {
+      sessionStorage.removeItem(TELEGRAM_ATTEMPT_KEY);
+      sessionStorage.removeItem(TELEGRAM_STATE_KEY);
+      throw new Error('State validation failed. Please retry Telegram signup.');
+    }
+  }
   const response = await fetch(apiUrl('/api/v1/auth/telegram/activate'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
@@ -124,9 +187,10 @@ export const activateTelegramSignup = async (session: Session): Promise<boolean>
   });
   const result = await response.json() as { recoveryEmailRequired?: boolean; error?: { message?: string } };
   if (!response.ok) throw new Error(result.error?.message || 'Telegram signup could not be activated.');
-  sessionStorage.removeItem('goalflow_telegram_attempt');
-  const url = new URL(window.location.href);
+  sessionStorage.removeItem(TELEGRAM_ATTEMPT_KEY);
+  sessionStorage.removeItem(TELEGRAM_STATE_KEY);
   url.searchParams.delete('auth');
+  url.searchParams.delete('state');
   window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);
   return Boolean(result.recoveryEmailRequired);
 };
