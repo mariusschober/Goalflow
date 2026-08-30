@@ -16,9 +16,12 @@ case "$found_apk" in
     *) exit 1 ;;
 esac
 [ "$found_apk" = "$apk" ]
-emulator_apk="$runner_temp/goalflow-production-debug.apk"
-cp "$found_apk" "$emulator_apk"
-printf '%s\n' "$emulator_apk" > "$runner_temp/goalflow-production-debug-apk-path"
+export GOALFLOW_PRODUCTION_DEBUG_APK="$found_apk"
+(
+    cd "$work_dir"
+    apk="$GOALFLOW_PRODUCTION_DEBUG_APK"
+    [ -n "$apk" ] && [ -f "$apk" ] && cmp "$apk" "$found_apk"
+)
 
 (
     cd "$work_dir"
