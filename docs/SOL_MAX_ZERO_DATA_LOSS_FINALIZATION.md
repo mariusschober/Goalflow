@@ -10,11 +10,14 @@ and unverified claims.
 
 - Repository: `mariusschober/Goalflow`
 - Production branch: `goalflow-production`
-- Production tip when this brief was created:
-  `9fa82a7d9c5c440181b8a64774622cf3003ba2fb`
+- Production history integrated before launch:
+  `7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8`
 - Dedicated continuation branch:
   `codex/zero-data-loss-finalization`
-- The continuation branch was created directly from that production tip.
+- The continuation branch was created from `9fa82a7d9c5c440181b8a64774622cf3003ba2fb`;
+  the compatible documentation-only production delta through `7a502cd` was
+  then admitted explicitly by merge commit
+  `c19f9432355afd14cfb9a83813f22abfdc30f8f6`.
 - Historical native reference supplied by the user:
   `34005552de745682e798fce3bb851bb831e2c642`
 - Zero-data-loss integration commit:
@@ -42,8 +45,11 @@ The only objective in this pass is to produce a clean, evidenced baseline for
 Goalflow's persistence and synchronization architecture across:
 
 - web/PWA IndexedDB;
-- server/API and Supabase/PostgreSQL;
 - native Android Room and its sync transport;
+- the native macOS app;
+- the Telegram Bot;
+- the Telegram Mini App;
+- server/API and Supabase/PostgreSQL;
 - backup, restore, conflict, retry, and account-isolation paths.
 
 Do not redesign Goalflow, add features, perform visual polish, broaden
@@ -53,6 +59,36 @@ Product rule:
 
 > A duplicated task is annoying. A visible conflict is acceptable. A
 > temporarily failed sync is acceptable. A silently lost task is unacceptable.
+
+## Unified client synchronization mastergoal
+
+The unit of safety is every mutation-capable surface, not only a platform.
+Web/PWA, native Android, native macOS, the Telegram Bot, and the Telegram Mini
+App are all first-class participants in one canonical synchronization contract.
+
+- Web/PWA remains a full offline client with IndexedDB, WAL, outbox, conflicts,
+  versions, and cursor safety.
+- Android remains a full offline Room client with the same semantic guarantees.
+- macOS must durably persist every accepted local capture/mutation and its
+  outbox entry before showing success; offline use, restart, conflict, cursor,
+  receipt, and account-binding behavior must conform to the shared protocol.
+- The Telegram Bot is a server-side mutation ingress. Telegram `update_id`
+  must derive stable idempotency identity; webhook acknowledgement occurs only
+  after durable processing, and retry/restart cannot duplicate or lose work.
+- The Telegram Mini App must validate Telegram authentication server-side and
+  use the canonical API/protocol. If it shows optimistic or offline success, it
+  requires a durable local queue before success.
+- Future clients may not write canonical data until they pass the same
+  conformance contract.
+
+The exact locations and maturity of the new macOS and Telegram code must be
+discovered and recorded from GitHub; do not guess or rewrite them during the
+current repair phase.
+
+This expansion changes the master T2 architecture and test plan. It does not
+expand the immediate red-gate repair: first close PostgreSQL and Android
+account-isolation, obtain a green baseline, document the five-client
+conformance plan, and stop for approval before implementing new adapters.
 
 ## Required invariants
 
@@ -79,6 +115,9 @@ Product rule:
 19. Cross-account local state can never synchronize under another identity.
 20. Exact receipts, account identity, payload, version, timestamp, and tombstone
     semantics must be verified before acknowledgement removal.
+21. Every mutation-capable client must use the canonical protocol or a
+    semantically equivalent durable adapter and pass the shared conformance
+    suite before release.
 
 ## Implemented architecture to preserve
 
@@ -100,10 +139,13 @@ reverted merely to obtain green CI:
 - durable native account binding and Room v6-to-v7 migration;
 - bidirectional native task-event synchronization and hidden PWA task-event
   storage;
-- canonical task/daily-plan JSON mirrors that preserve unknown client fields.
+- canonical task/daily-plan JSON mirrors that preserve unknown client fields;
+- stable Telegram webhook mutation identities and retryable processing already
+  present in the server path must be preserved and formally certified.
 
 Read these before editing:
 
+- `docs/PRODUCTION_FINALIZATION_PLAN.md`
 - `docs/PRODUCTION_READINESS.md`
 - `docs/TRANCHE_2_HANDOVER.md`
 - `DATA_INTEGRITY_REPORT.md`
@@ -184,15 +226,20 @@ stronger semantic assertions rather than a weaker count.
 6. Diagnose and fix Blocker B in a separate small commit with adversarial
    account-isolation tests.
 7. Run the complete relevant local gates.
-8. Push normally to the continuation branch. Never use force.
-9. Iterate on the draft-PR CI until every existing job is green. Do not skip,
-   disable, soften, or condition away a failing job.
-10. Update `DATA_INTEGRITY_REPORT.md`,
-    `DATA_INTEGRITY_HANDOVER.md`, `docs/PRODUCTION_READINESS.md`, and this
-    document with exact commit SHAs, run URLs, PASS/FAIL/NOT VERIFIED status, and
+8. Inspect and record the actual repositories/paths and mutation capabilities
+   of web/PWA, Android, macOS, Telegram Bot, and Telegram Mini App. Update the
+   T2 plan and conformance matrix without implementing new client adapters in
+   this repair pass.
+9. Push normally to the continuation branch. Never use force.
+10. Iterate on the draft-PR CI until every existing job is green. Do not skip,
+    disable, soften, or condition away a failing job.
+11. Update `DATA_INTEGRITY_REPORT.md`,
+    `DATA_INTEGRITY_HANDOVER.md`, `docs/PRODUCTION_READINESS.md`,
+    `docs/PRODUCTION_FINALIZATION_PLAN.md`, and this document with exact
+    commit SHAs, run URLs, PASS/FAIL/NOT VERIFIED status, client coverage, and
     remaining live risks.
-11. Stop. Do not deploy or merge into production. Ask the user to approve the
-    final promotion and the next tranche.
+12. Stop. Do not deploy or merge into production. Ask the user to approve the
+    final promotion and the first multi-client T2 subtranche.
 
 If `goalflow-production` advances during the pass, do not overwrite it or
 silently rebase. Fetch it, inspect the delta, merge it explicitly into the
@@ -251,6 +298,8 @@ This pass is complete only when:
 - native account-isolation tests pass semantically;
 - Room migration/instrumentation and native build gates pass;
 - reports accurately distinguish PASS from NOT VERIFIED;
+- the five-client registry and per-client synchronization obligations are
+  documented without misrepresenting unaudited clients as verified;
 - the continuation branch is clean and safely pushed;
 - no deployment or production merge has occurred.
 
@@ -283,39 +332,56 @@ Continue Goalflow's zero-silent-data-loss finalization autonomously.
 Repository: https://github.com/mariusschober/Goalflow
 Production branch: goalflow-production
 Exclusive working branch: codex/zero-data-loss-finalization
-Pinned branch baseline: 9fa82a7d9c5c440181b8a64774622cf3003ba2fb
-Authoritative brief:
+Integrated production baseline: 7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8
+Draft PR: https://github.com/mariusschober/Goalflow/pull/1
+Authoritative execution brief:
 docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md
+Authoritative five-tranche roadmap:
+docs/PRODUCTION_FINALIZATION_PLAN.md
 
-First read that brief completely, then read every repository document it marks
+Read both documents completely, then read every repository document they mark
 as required. Verify the live branch SHAs before editing.
 
 Use a fresh isolated clone or worktree. Do not touch, clean, reset, or reuse any
 dirty shared workspace. Only this chat may write to the exclusive branch.
-Treat goalflow-production as read-only. Use a draft PR for clean-checkout CI;
+Treat goalflow-production as read-only. Use draft PR #1 for clean-checkout CI;
 do not merge it.
 
-Close the two existing red gates: the executable PostgreSQL migration failure
-and the native Android cross-account sync regression. Reproduce each failure,
-add or strengthen executable tests, make the smallest evidence-backed fix, and
-preserve every zero-silent-data-loss invariant. Do not weaken assertions,
-delete conflict evidence, drain pending mutations, or revert the hardening
-wholesale merely to make CI green.
+The synchronization mastergoal covers every mutation-capable client: web/PWA,
+native Android, native macOS, Telegram Bot, and Telegram Mini App. They must
+ultimately share one canonical idempotency, ownership, cursor, conflict,
+tombstone, retry, backup, and receipt contract. Discover and record the actual
+locations and capabilities of the newer macOS and Telegram implementations;
+do not guess.
+
+Phase order is strict. First close the two existing red gates: the executable
+PostgreSQL migration failure and the native Android cross-account sync
+regression. Reproduce each failure, add or strengthen executable tests, make
+the smallest evidence-backed fix, and preserve every zero-silent-data-loss
+invariant. Do not weaken assertions, delete conflict evidence, drain pending
+mutations, or revert hardening merely to make CI green.
 
 Run all web/server, PostgreSQL 16, Android unit, Room migration, sync,
 build/lint, and hosted-emulator gates listed in the brief. Android tests are
 authorized. Push only normal non-force commits to the exclusive branch and
-iterate until the draft-PR CI is fully green.
+iterate until draft-PR CI is fully green.
 
-Then update the integrity/readiness/handover documents with exact SHAs, run
-URLs, PASS/FAIL/NOT VERIFIED results, and remaining live risks. Stop without
-deploying or merging into production, and request my approval for promotion.
+After the green baseline, update the master roadmap and integrity/readiness
+documents with the five-client registry, each client's mutation and durability
+obligations, exact SHAs, CI URLs, PASS/FAIL/NOT VERIFIED results, and the
+planned cross-client conformance matrix. Do not implement new macOS, Bot, or
+Mini App sync adapters in this repair pass.
+
+Stop without deploying or merging into production. Request my approval for
+promotion and for the first multi-client Tranche 2 subtranche.
 
 Begin by reporting:
 1. the live production and working-branch SHAs;
 2. confirmation that the worktree is isolated and clean;
 3. the two exact failing tests/gates;
-4. the first executable regression test you will run or add.
+4. the first executable regression test you will run or add;
+5. the discovered repository paths for macOS, Telegram Bot, and Telegram Mini
+   App, marking anything not yet located as NOT VERIFIED.
 
 Then execute.
 ```

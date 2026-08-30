@@ -16,25 +16,30 @@ The governing invariant is:
 
 A visible duplicate, conflict, retry, or temporary sync failure is acceptable. Silent loss is not.
 
-Goalflow remains the existing product: a schedule-first productivity system with Current, Planning, goals, habits, frogs, insights, gamification, circadian planning, AI workflows, PWA support, and native Android support. Production finalization perfects the implementation and verification of that product. It does not replace the product with a redesign.
+Goalflow remains the existing product: a schedule-first productivity system with Current, Planning, goals, habits, frogs, insights, gamification, circadian planning, AI workflows, PWA support, native Android, a native macOS companion, a Telegram Bot, and a Telegram Mini App. Production finalization perfects the implementation and verification of that product. It does not replace the product with a redesign.
 
 ## Document precedence
 
 When repository documents overlap, use this order:
 
-1. This document — authoritative five-tranche scope, sequencing, constraints, and release gates.
-2. `docs/PRODUCTION_READINESS.md` — current evidence, pass/fail status, risks, and checkpoint.
-3. `docs/TRANCHE_2_HANDOVER.md` — current T1 closure instructions and the next-chat execution prompt.
-4. `docs/AI_CONTEXT_HANDOVER.md` — concise agent entrypoint and product context.
-5. Older implementation, integrity, release, and audit documents — useful evidence only; they do not override the documents above.
+1. This document — authoritative five-tranche scope, sequencing, constraints, release gates, and client registry.
+2. `docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md` — isolated-branch execution contract for the current pass.
+3. `docs/PRODUCTION_READINESS.md` — current evidence, pass/fail status, risks, and checkpoint.
+4. `docs/TRANCHE_2_HANDOVER.md` — historical T1 closure evidence and T2 boundary.
+5. `docs/AI_CONTEXT_HANDOVER.md` — concise agent entrypoint and product context.
+6. Older implementation, integrity, release, and audit documents — useful evidence only; they do not override the documents above.
 
 The attached user-supplied plan remains authoritative if it is available in the working session. Do not invent a relaxed interpretation of a release gate.
 
 ## Product and architecture context
 
-- Web/PWA and native Android are first-class clients.
+- Web/PWA, native Android, native macOS, the Telegram Bot, and the Telegram Mini App are first-class mutation surfaces under one synchronization mastergoal.
 - The web client uses IndexedDB and a durable mutation/outbox path.
-- The native client is under `android-native/`, using Kotlin, Compose, Room, DataStore, WorkManager, and local-first persistence.
+- The Android client is under `android-native/`, using Kotlin, Compose, Room, DataStore, WorkManager, and local-first persistence.
+- The macOS app must durably persist accepted mutations and outbox state before showing success, including offline/restart/account-binding behavior.
+- The Telegram Bot is a server mutation ingress: stable identity derives from Telegram `update_id`, acknowledgement follows durable processing, and retries are idempotent.
+- The Telegram Mini App validates Telegram authentication server-side and uses the canonical API; any optimistic/offline success requires a durable local queue.
+- The exact code locations and current capabilities of macOS and both Telegram surfaces must be discovered and recorded before their T2 certification; do not infer verification from their existence.
 - Server synchronization uses the API/Supabase/Postgres/RLS path, idempotent mutations, cursors, receipts, conflicts, and backups.
 - Authentication, sync, and backup must preserve account ownership and must fail visibly rather than discarding data.
 - Existing product behavior and user-facing modules are preserved unless a tranche explicitly authorizes a change.
@@ -100,7 +105,8 @@ A tranche is not complete merely because code exists. Its stated evidence gate m
 - Session recovery.
 - Sync serialization and health.
 - Fault injection.
-- Two-client convergence.
+- Cross-client convergence and protocol conformance across web/PWA, Android,
+  macOS, Telegram Bot, and Telegram Mini App.
 
 **Required properties:**
 
@@ -108,10 +114,14 @@ A tranche is not complete merely because code exists. Its stated evidence gate m
 - Session expiry, restart, revoked credentials, offline recovery, and refresh failures are explicit and recoverable.
 - Mutations serialize safely, are idempotent, preserve ordering where required, expose health/backlog/conflict state, and never advance a cursor past uncommitted data.
 - Fault injection covers response loss, retries, duplicates, server restarts, partial failures, concurrent writes, and restore interruptions.
-- Two independent clients converge deterministically while preserving account isolation, conflicts, unknown fields, and pending work.
+- Independent clients converge deterministically while preserving account isolation, conflicts, unknown fields, tombstones, and pending work.
+- The Bot proves stable `update_id` replay, response-loss, restart, and acknowledgement-after-durable-processing behavior.
+- The Mini App proves server-side Telegram identity validation, account binding, retry/idempotency, and durable optimistic/offline behavior when supported.
+- The macOS app proves local-write-before-success, restart/outbox recovery, exact receipts, cursor safety, conflicts, and account binding.
+- Cross-client tests cover at minimum macOS to Android, Telegram to PWA, Mini App to macOS, same-record conflict, different-record convergence, stale deletion, authentication expiry, and response loss after commit.
 - Tests prove that a failed sync never silently deletes or acknowledges local data.
 
-**T2 gate:** secure callback/session tests, sync protocol tests, fault-injection evidence, two-client convergence evidence, account-isolation/RLS evidence, and hosted validation must pass. Commit, push, update status, and stop.
+**T2 gate:** secure callback/session tests, canonical protocol tests, per-client conformance evidence, fault-injection evidence, cross-client convergence evidence, account-isolation/RLS evidence, and hosted validation must pass. A mutation-capable client cannot be released against canonical data while its conformance status is FAIL or NOT VERIFIED. Commit, push, update status, and stop.
 
 ## Tranche 3 — release engineering
 
@@ -189,7 +199,9 @@ T1 implementation is complete in code, but T1 closure is blocked. The current na
 
 The Room schema asset packaging fix is present and its executable guard passes, but the runtime Room migration instrumentation test has not rerun because the native unit gate fails first. The prior hosted emulator run proved test-only APK installation and first-frame launch.
 
-Current evidence and exact next actions are maintained in [`docs/PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md) and [`docs/TRANCHE_2_HANDOVER.md`](./TRANCHE_2_HANDOVER.md).
+The synchronization mastergoal now formally includes web/PWA, Android, macOS, Telegram Bot, and Telegram Mini App. This does not expand the current T1 repair: establish a green PostgreSQL/native baseline first, then audit and certify each client in T2 without allowing separate sync semantics.
+
+Current evidence and exact next actions are maintained in [`docs/PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md), [`docs/TRANCHE_2_HANDOVER.md`](./TRANCHE_2_HANDOVER.md), and [`docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`](./SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md).
 
 ## Release-finalization rule
 

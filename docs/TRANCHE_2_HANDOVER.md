@@ -2,7 +2,14 @@
 
 ## Purpose
 
-This document is the durable continuation context for the next engineering chat. It preserves the production-finalization constraints, current evidence, unresolved blockers, and the exact prompt to use.
+This document preserves the historical T1 evidence and T2 boundary.
+
+> **Current isolated execution:** use
+> [`docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`](./SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md)
+> and branch `codex/zero-data-loss-finalization`. Its prompt supersedes the
+> older direct-production prompt that previously appeared below. The unified
+> sync mastergoal now covers web/PWA, Android, macOS, Telegram Bot, and Telegram
+> Mini App, but the current repair phase still closes the two red gates first.
 
 ## Repository and authority
 
@@ -82,7 +89,8 @@ After Gate B is green, plan and execute Tranche 2 in reviewable subtranches:
 - session recovery;
 - sync serialization and health;
 - fault injection;
-- two-client convergence.
+- cross-client convergence and canonical protocol conformance for web/PWA,
+  Android, macOS, Telegram Bot, and Telegram Mini App.
 
 Do not start release engineering, visual polish, accessibility/performance audit, signing/publication, or Tranches 3–5.
 
@@ -99,64 +107,10 @@ A clean, reviewed `goalflow-production` branch where:
 
 Only that checkpoint authorizes the first Tranche 2 implementation subtranche.
 
-## Exact start prompt for the next chat
+## Current start prompt
 
-Copy the prompt below verbatim.
-
-```text
-@GitHub
-
-You are continuing Goalflow’s production-finalization mission. Work autonomously in the repository and use GitHub for all repository inspection, commits, and safe pushes.
-
-Repository: https://github.com/mariusschober/Goalflow
-Authoritative branch: goalflow-production
-Pinned baseline: 34005552de745682e798fce3bb851bb831e2c642
-Current T1 implementation/fix commit: 43643038917ac858b30f288aeb91d1e4f29c4fde
-Current branch tip: verify the live `goalflow-production` ref before acting; this document is the durable handover source
-
-Read first:
-- docs/PRODUCTION_READINESS.md
-- docs/TRANCHE_2_HANDOVER.md
-- the attached authoritative production-finalization specification
-
-Mission order is mandatory:
-
-PHASE 1 — CLOSE THE REMAINING T1 GATE
-
-Do not assume that Tranche 1 is green. The current branch contains concurrent commit 6e7244a6e81d76f5890c645c63fc16b773e56759 as the parent of the T1 Room packaging fix. It contains T2-like sync/database changes that were not reviewed or authored by the T1 work.
-
-1. Inspect the current branch tip, ancestry, and complete diff of 6e7244a. Establish exactly which files and behaviors it changes.
-2. Contain and review that commit without force-pushing or rewriting history. Do not silently revert it or weaken tests just to obtain green CI. If correction is required, make a small, explicit, reviewable commit on top of the current branch.
-3. Before or with every correction, add an executable regression test:
-   - PostgreSQL must reject the malformed migration before the fix and apply it after the fix.
-   - The native sync-account test must distinguish a real account-isolation/data-ownership defect from an obsolete expectation. Preserve zero silent data loss and never make the test pass by deleting coverage.
-4. Re-run the complete relevant gates:
-   - web lint, tests, build, migration verification, and audit;
-   - native unit tests;
-   - Room migration instrumentation across all supported schema versions;
-   - APK diagnostic, path handoff, and Room schema asset guards;
-   - native lint/build and hosted emulator install/launch checks.
-5. Update docs/PRODUCTION_READINESS.md with exact commit SHAs, run URLs, pass/fail results, and unresolved risks.
-6. Use small reviewable commits. Push only with a fast-forward-safe GitHub ref update. Stop and report if the branch cannot be made green without a material product decision.
-
-PHASE 2 — START TRANCHE 2 ONLY AFTER PHASE 1 IS GREEN
-
-Once the clean T1 checkpoint is evidenced, begin Tranche 2 in its own small subtranches. The only T2 scope is:
-- secure callback flow;
-- session recovery;
-- sync serialization and health;
-- fault injection;
-- two-client convergence.
-
-For each T2 subtranche:
-- inspect the existing web and native architecture before changing it;
-- write executable tests first or in the same commit as the fix;
-- cover adversarial failure paths, retries, duplicates, offline behavior, account isolation, and zero silent data loss;
-- commit and push safely;
-- update the durable readiness/handover documentation;
-- stop at the T2 boundary after the specified evidence is captured.
-
-Do not begin visual polish, broad refactoring, release engineering, signing, AAB/raw APK publication, owner-device installation, accessibility/performance audits, or Tranches 3–5. Do not claim production readiness while any gate is red or any unresolved risk is undocumented.
-
-Begin by reporting the current branch SHA, the exact remaining blockers, and the first test you will add. Then execute PHASE 1.
-```
+Use the exact prompt in
+[`docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`](./SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md).
+It enforces the isolated branch, draft-PR CI, the current two-blocker closure,
+and the expanded five-client synchronization mastergoal without mixing new
+client implementation into the repair phase.
