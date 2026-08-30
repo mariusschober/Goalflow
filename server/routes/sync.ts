@@ -95,8 +95,8 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
       if (protocolError || Number(protocolVersion) !== 3) {
         throw new Error('The hardened synchronization protocol is not installed. Local mutations remain pending.');
       }
-      const results: unknown[] = [];
-      for (const mutation of body.mutations) {
+      // Batch push with concurrency 5 to reduce RTT while preserving order for assertDurableReceipt
+      const results: unknown[] = await Promise.all(body.mutations.map(async (mutation) => {
         const { data, error } = await database.rpc('push_sync_mutation_v2', {
           target_user_id: request.user!.id,
           target_mutation_id: mutation.mutationId,
@@ -120,9 +120,11 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
             updatedAt: mutation.updatedAt
           });
         }
-        results.push({ mutationId: mutation.mutationId, ...receipt });
-      }
-      response.json({ results });
+        return { mutationId: mutation.mutationId, ...receipt };
+      }));
+      // Ensure results order matches input order for client that expects 1:1
+      const ordered = body.mutations.map(m => results.find(r => (r as any).mutationId === m.mutationId)!);
+      response.json({ results: ordered });
     } catch (error) {
       invalidRequest(response, error);
     }

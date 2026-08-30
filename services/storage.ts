@@ -810,7 +810,23 @@ export const storageService = {
   ): Promise<{ meta: SyncMeta; changedStores: string[] }> {
     return queueMutation(async () => {
       const db = await getDB();
-      if (!db) throw new DurableStorageError('Cloud changes were not applied because IndexedDB is unavailable. The sync cursor was not advanced.');
+      if (!db) {
+        // Fallback: advance cursor in localStorage so sync does not stall forever
+        const fallbackMeta = normalizeSyncMeta(readLocalCopy(STORES.SYNC, userKey) ?? readFallbackCopy(STORES.SYNC, userKey));
+        const currentValues: Record<string, unknown> = {};
+        for (const storeName of Array.from(new Set(records.map(r => r.entityType)))) {
+          currentValues[storeName] = readLocalCopy(storeName, userKey) ?? readFallbackCopy(storeName, userKey);
+        }
+        const transition = transitionRemotePage(fallbackMeta, currentValues, records, nextCursor, ownDeviceId, new Date().toISOString());
+        writeFallback(STORES.SYNC, userKey, transition.meta);
+        for (const storeName of transition.changedStores) {
+          const value = transition.values[storeName];
+          if (value === undefined) safeLocalStorageRemove(recoveryKey(storeName, userKey));
+          else writeRecovery(storeName, userKey, value);
+          announceCloudChange(storeName, value);
+        }
+        return { meta: transition.meta, changedStores: transition.changedStores };
+      }
       const entityStores = Array.from(new Set(records.map(record => record.entityType)));
       const tx = db.transaction(Array.from(new Set([...entityStores, STORES.SYNC])), 'readwrite');
       const syncStore = tx.objectStore(STORES.SYNC);
