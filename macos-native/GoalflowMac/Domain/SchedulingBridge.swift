@@ -33,7 +33,7 @@ func isRealDay(_ value: String) -> Bool {
     comps.timeZone = TimeZone(identifier: "UTC")
     let cal = Calendar(identifier: .gregorian)
     guard let date = cal.date(from: comps) else { return false }
-    let dc = cal.dateComponents(in: TimeZone(identifier: "UTC")!, from: date)
+    let dc = cal.dateComponents(in: TimeZone(identifier: "UTC") ?? .current, from: date)
     return dc.year == parts[0] && dc.month == parts[1] && dc.day == parts[2]
 }
 

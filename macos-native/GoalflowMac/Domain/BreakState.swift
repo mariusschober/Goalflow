@@ -11,7 +11,7 @@ struct BreakState: Codable, Equatable, Sendable {
     var isOpenEnded: Bool { durationSeconds == nil }
 
     init(durationSeconds: Int?, startedAt: Date, startedAtMonotonic: UInt64? = nil, sourcePhase: ExecutionPhase, taskId: String?) {
-        self.durationSeconds = durationSeconds != nil ? max(60, durationSeconds!) : nil
+        self.durationSeconds = durationSeconds.map { max(60, $0) }
         self.startedAt = startedAt
         self.startedAtMonotonic = startedAtMonotonic
         self.sourcePhase = sourcePhase

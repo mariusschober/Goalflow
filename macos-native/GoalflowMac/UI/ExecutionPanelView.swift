@@ -62,7 +62,7 @@ final class ExecutionViewModel: ObservableObject {
         self.calendarService = calendarService; self.breakdownGateway = breakdownGateway
         self.localBreakdown = LocalBreakdownService(taskStore: provider.taskStore, clock: clock, dailyPlanStore: dailyPlanStore)
         self.gateEnabled = gateEnabled; self.appOrigin = appOrigin
-        let syncFile = provider.taskStore is LocalTaskStore ? (provider.taskStore as! LocalTaskStore).fileURL.deletingLastPathComponent().appendingPathComponent("sync.json") : nil
+        let syncFile = (provider.taskStore as? LocalTaskStore)?.fileURL.deletingLastPathComponent().appendingPathComponent("sync.json")
         self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncFile)
         self.syncEngine = syncEngine ?? SyncEngine(metaStore: self.syncMetaStore)
         setupTimerBindings(); restore(); restoreBreak()
@@ -111,7 +111,7 @@ final class ExecutionViewModel: ObservableObject {
             }
         } else {
             task = provider.fetchCurrent()
-            gate = task != nil ? .ready(queue: [task!]) : .empty
+            if let task { gate = .ready(queue: [task]) } else { gate = .empty }
         }
         if let s = store.load() {
             if let t = task, t.id == s.taskId, t.isOpen { execution = s } else { try? store.clear(); execution = nil }
@@ -290,7 +290,7 @@ final class ExecutionViewModel: ObservableObject {
                 overtimeSeconds = paused.overtimeSeconds(now: clock.now())
             }
         }
-        let durationSeconds: Int? = durationMinutes != nil ? durationMinutes! * 60 : nil
+        let durationSeconds: Int? = durationMinutes.map { $0 * 60 }
         let bs = BreakState(durationSeconds: durationSeconds, startedAt: clock.now(), startedAtMonotonic: (clock as? any MonotonicClock)?.monotonicNow, sourcePhase: execution?.phase ?? .idle, taskId: task?.id)
         do {
             try breakStore.save(bs)

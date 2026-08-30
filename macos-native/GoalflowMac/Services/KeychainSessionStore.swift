@@ -80,7 +80,7 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
         guard let urlStr = supabaseUrl, let key = anonKey, !urlStr.isEmpty, !key.isEmpty else {
             throw KeychainError.noRefreshConfig
         }
-        let url = URL(string: "\(urlStr)/auth/v1/token?grant_type=refresh_token")!
+        guard let url = URL(string: "\(urlStr)/auth/v1/token?grant_type=refresh_token") else { throw KeychainError.refreshFailed }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue(key, forHTTPHeaderField: "apikey")

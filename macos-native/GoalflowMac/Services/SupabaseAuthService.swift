@@ -35,7 +35,7 @@ final class SupabaseAuthService: NSObject, @unchecked Sendable {
 
     func requestMagicLink(email: String) async throws {
         guard isConfigured else { throw AuthError.notConfigured }
-        let url = URL(string: "\(supabaseUrl)/auth/v1/otp")!
+        guard let url = URL(string: "\(supabaseUrl)/auth/v1/otp") else { throw AuthError.requestFailed("Invalid URL") }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue(anonKey, forHTTPHeaderField: "apikey")
@@ -62,7 +62,7 @@ final class SupabaseAuthService: NSObject, @unchecked Sendable {
         let c = challenge(for: v)
         let s = UUID().uuidString
         verifier = v; state = s
-        var comps = URLComponents(string: "\(supabaseUrl)/auth/v1/authorize")!
+        guard var comps = URLComponents(string: "\(supabaseUrl)/auth/v1/authorize") else { return }
         comps.queryItems = [
             URLQueryItem(name: "provider", value: provider),
             URLQueryItem(name: "redirect_to", value: "goalflow://auth/callback"),
@@ -109,7 +109,7 @@ final class SupabaseAuthService: NSObject, @unchecked Sendable {
 
     private func exchangeCode(code: String, verifier: String) async {
         guard isConfigured else { return }
-        let url = URL(string: "\(supabaseUrl)/auth/v1/token?grant_type=pkce")!
+        guard let url = URL(string: "\(supabaseUrl)/auth/v1/token?grant_type=pkce") else { return }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue(anonKey, forHTTPHeaderField: "apikey")

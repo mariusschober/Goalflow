@@ -66,7 +66,7 @@ func applyRemotePage(_ input: SyncMeta, currentValues: [String: Any], records: [
             v.local = max(v.local, latest.version)
             meta.versions[key] = v
             // Release dependents
-            for i in meta.outbox.indices where meta.outbox[i].dependsOnMutationId != nil && toRemove.contains(meta.outbox[i].dependsOnMutationId!) {
+            for i in meta.outbox.indices where meta.outbox[i].dependsOnMutationId != nil && meta.outbox[i].dependsOnMutationId.map({ toRemove.contains($0) }) == true {
                 meta.outbox[i].dependsOnMutationId = nil
             }
             continue
