@@ -127,6 +127,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-native-
       - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh
+      - name: Run APK diagnostic regression test
+        run: bash android-native/scripts/test-diagnose-apk.sh
       - run: ./android-native/gradlew -p android-native test --stacktrace --info
       - name: Compile native instrumentation tests
         run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
