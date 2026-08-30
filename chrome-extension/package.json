@@ -8,7 +8,7 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "build": "vite build && npm run build:background",
+    "build": "vite build && mkdir -p dist/sidepanel && mv dist/index.html dist/sidepanel/index.html && cp manifest.json dist/ && npm run build:background",
     "build:background": "esbuild src/background/serviceWorker.ts --bundle --format=iife --target=chrome114 --outfile=dist/background.js --platform=browser",
     "dev": "vite --port 5174"
   },
@@ -23,6 +23,7 @@
     "@vitejs/plugin-react": "^5.0.0",
     "esbuild": "^0.28.0",
     "fake-indexeddb": "^6.2.5",
+    "jsdom": "^29.1.1",
     "typescript": "~5.8.2",
     "vite": "^6.2.0",
     "vitest": "^4.1.8"
