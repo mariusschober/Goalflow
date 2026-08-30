@@ -705,11 +705,6 @@ struct ExecutionPanelView: View {
                 .background(Capsule().stroke(task.isFrog ? Color.green : Color.blue, lineWidth: vm.holding ? 2 : 1.2))
             }
             .buttonStyle(.plain).accessibilityLabel("Hold to complete, \(dur) hold").accessibilityIdentifier("hold-complete-button").accessibilityAddTraits(.isButton)
-            .simultaneousGesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { _ in if !vm.holding { vm.beginHold() } }
-                    .onEnded { _ in vm.endHold(cancelled: vm.holdProgress < 1.0) }
-            )
             .onLongPressGesture(minimumDuration: 0, pressing: { pressing in
                 if pressing { vm.beginHold() } else { vm.endHold(cancelled: vm.holdProgress < 1.0) }
             }, perform: {})
