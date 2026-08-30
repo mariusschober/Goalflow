@@ -28,12 +28,41 @@ android {
         jvmTarget = "21"
     }
 
+    signingConfigs {
+        release {
+            def b64 = System.getenv("ANDROID_KEYSTORE_BASE64")
+            if (b64) {
+                def decoded = new File("/tmp/goalflow.keystore")
+                if (!decoded.exists()) {
+                    decoded.bytes = java.util.Base64.getDecoder().decode(b64)
+                }
+                storeFile decoded
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: findProperty("goalflowStorePassword") ?: ""
+                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: findProperty("goalflowKeyAlias") ?: "goalflow"
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: findProperty("goalflowKeyPassword") ?: ""
+                enableV1Signing true
+                enableV2Signing true
+            } else {
+                def keystorePath = findProperty("goalflowKeystore") ?: ""
+                def keystoreFile = keystorePath ? file(keystorePath) : null
+                if (keystoreFile?.exists()) {
+                    storeFile keystoreFile
+                    storePassword findProperty("goalflowStorePassword") ?: ""
+                    keyAlias findProperty("goalflowKeyAlias") ?: "goalflow"
+                    keyPassword findProperty("goalflowKeyPassword") ?: ""
+                    enableV1Signing true
+                    enableV2Signing true
+                }
+            }
+        }
+    }
+
     defaultConfig {
         applicationId "com.mariusschober.goalflow"
         minSdk 26
         targetSdk 35
-        versionCode 2
-        versionName "0.2.0-native"
+        versionCode 3
+        versionName "0.3.0-tranche3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary true }
         buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
@@ -66,6 +95,7 @@ android {
         release {
             minifyEnabled true
             proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            signingConfig signingConfigs.release
         }
     }
 
