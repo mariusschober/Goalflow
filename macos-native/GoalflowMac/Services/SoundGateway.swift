@@ -49,10 +49,11 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         }
         let engine = AVAudioEngine(); let player = AVAudioPlayerNode()
         engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
-        do { try engine.start(); player.play(); player.scheduleBuffer(buf, at: nil, options: .interrupts, completionHandler: { engine.stop() }); Thread.sleep(forTimeInterval: duration + 0.02) } catch {}
+        do { try engine.start(); player.play(); player.scheduleBuffer(buf, at: nil, options: .interrupts, completionHandler: { engine.stop() }) } catch {}
     }
     func alarm(loop: Bool) {
         audioQueue.async { [weak self] in self?.playAlarm(loop: loop) }
+        // Async variant available via playAlarmAsync for future non-blocking use
     }
     func stopAlarm() {
         // No persistent looping state yet - playAlarm burst is finite, so stop is no-op for now
@@ -62,6 +63,13 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         for _ in 0..<repeats {
             playAlarmBurst()
             if loop { Thread.sleep(forTimeInterval: 0.8) }
+        }
+    }
+    private func playAlarmAsync(loop: Bool) async {
+        let repeats = loop ? 2 : 1
+        for _ in 0..<repeats {
+            await playAlarmBurstAsync()
+            if loop { try? await Task.sleep(nanoseconds: 800_000_000) }
         }
     }
     private func playAlarmBurst() {
