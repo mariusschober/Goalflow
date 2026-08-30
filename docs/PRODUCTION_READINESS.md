@@ -27,7 +27,27 @@ T1 P0 local-integrity is now green locally on the exclusive branch. The two red 
 
 Room schema v7 (`local_account`, identityHash `862f8cbc...`) is exported at `android-native/app/schemas/com.mariusschober.goalflow.nativeapp.data.GoalflowDatabase/7.json` and required by `android-native/scripts/test-room-schema-assets.sh` (now `1..7`). The fix is small, reviewable, fast-forward-safe, and does not weaken coverage.
 
-The test-only APK diagnostics remain PASS. No T2 completion is claimed. Hosted execution is pending billing; local evidence is authoritative for this checkpoint.
+The test-only APK diagnostics remain PASS.
+
+## Tranche 2 — authentication & synchronization (implemented 2026-08-30 at 4b09d32, hosted in_progress)
+
+**Branch:** `codex/zero-data-loss-finalization` at `4b09d32` (on top of `9910ab3` Tranche 2 feature, `50e34bc` docs, `525e8fb` native fix, `4d92222` PG fix)
+**Hosted run:** [33337304564](https://github.com/mariusschober/Goalflow/actions/runs/33337304564) (`workflow_dispatch` at `4b09d32`) — `verify` **SUCCESS**, `secrets` **SUCCESS**, `migrations` **SUCCESS** (PG16 empty+seeded), `android` **SUCCESS**, `native-android` **IN_PROGRESS** (emulator, 8 steps passed: test, assemble, lint, APK diagnostic, etc.; only `Run native emulator journey` pending)
+**Local evidence at 4b09d32 (isolated worktree, same as hosted):** `npm run lint` PASS, `npm test` 18 files 151 tests PASS (was 10/102), `npm run build` PASS, `verify:migrations` PASS, `test-postgres-migrations.sh` PASS, `ROOM_SCHEMA_ASSETS=PASS`, `gradlew -p android-native test` 77 tests PASS (was 70, +7 Tranche2Conformance), `assembleProductionDebugAndroidTest` PASS, `lint` PASS, `assemble*` PASS — all 5 subtranches covered.
+
+**2A — Secure callback flow** (`server/auth/secureCallback.ts:1`, `services/authService.ts:1`): state/nonce (`generateSecureState` 32B base64url), `isSafeRedirect`/`validateState` constant-time, open-redirect rejection (including `/%5c` encoded backslash), Turnstile already present, webhook secret `X-Telegram-Bot-Api-Secret-Token` validation in `server/routes/telegram.ts:1`, Mini App HMAC in `server/telegram/miniAppAuth.ts:1`. Tests: `server/auth/secureCallback.test.ts:1` (11), `services/authService.secure.test.ts:1` (5), `server/routes/telegram.secure.test.ts:1` (5), `server/telegram/miniApp.secure.test.ts:1` (2) — all PASS, no token leakage.
+
+**2B — Session recovery** (`android-native/.../SecureSessionStore.kt:1`, `NativeSyncEngine.kt:67`): `expiresAtMillis` check (`+60s` skew), `AuthenticationExpiredDuringSync` preserves outbox, restart retains pending via WAL/Room tx. Tests: `services/sessionRecovery.test.ts:1` (4) + `Tranche2ConformanceTest.kt:32` (expired/revoked) — PASS, pending not drained.
+
+**2C — Sync serialization & health** (`services/syncProtocol.ts:1`, `.../NativeSyncEngine.kt:170`): stable `mutationId`, dependency `dependsOnMutationId`, cursor `nextCursor == highestReturned`, health `pendingCount`/`conflicts`/`cursor` visible. Tests: `services/syncHealth.test.ts:1` (5) + native `Tranche2ConformanceTest.kt:60` (idempotent, cursor) — PASS.
+
+**2D — Fault injection** (`services/cloudSync.adversarial.test.ts:1`, `.../NativeSyncEngine.kt:79`): response-loss after commit retries same `mutationId`, duplicate not duplicated, server restart preserves receipt, concurrent different-record no conflict, restore atomic. Tests: `services/faultInjection.test.ts:1` (7) + native `Tranche2ConformanceTest.kt:110` (response-loss, different-record) — PASS.
+
+**2E — Cross-client convergence & per-client conformance** (registry in § Five-client registry): web↔Android, Telegram→PWA, Mini→macOS, same-record conflict both sides, tombstone, 401 during sync. Tests: `services/crossClient.test.ts:1` (10) + native `Tranche2ConformanceTest.kt:160` (same-record conflict) — PASS. Per-client: web PASS (102+151), Android PASS (77), macOS NOT VERIFIED (code on `feature/macos-execution-companion`), Bot NOT VERIFIED (server ingress, webhook secret tests PASS locally but no live Telegram drill), Mini App NOT VERIFIED (HMAC tests PASS locally but no live Mini).
+
+**Master rule upheld:** No client writes canonical data while its conformance is NOT VERIFIED. No weakening, no pending dropped, no conflict discarded.
+
+Hosted execution is pending final emulator step; local evidence is green and hosted verify/migrations/android are already SUCCESS. Will update this doc when `native-android` completes.
 
 ## Tranche 1 delivered (now verified locally on 525e8fb)
 
