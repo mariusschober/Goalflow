@@ -18,7 +18,7 @@ private func recordMap(_ value: Any?) -> [String: [String: Any]]? {
     return result
 }
 
-func buildStagedLocalTransaction(storeName: String, userKey: String, previousValue: Any?, nextValue: Any?, order: Int, now: String, randomUuid: () -> String) -> StagedLocalTransaction? {
+func buildStagedLocalTransaction(storeName: String, userKey: String, previousValue: Any?, nextValue: Any?, order: Int, now: String, randomUuid: () -> String) throws -> StagedLocalTransaction? {
     // stableJson equal check
     if stableJson(previousValue) == stableJson(nextValue) { return nil }
     var changes: [StagedEntityChange] = []
@@ -29,13 +29,13 @@ func buildStagedLocalTransaction(storeName: String, userKey: String, previousVal
             // Try to detect duplicate
             if let arr = previousValue as? [[String: Any]] {
                 let ids = arr.compactMap { $0["id"] as? String }
-                if ids.count != Set(ids).count { fatalError("Record identity \(ids) appears more than once. The local change was not applied.") }
+                if ids.count != Set(ids).count { throw SyncError.validation("Record identity \(ids) appears more than once. The local change was not applied.") }
             }
             if let arr = nextValue as? [[String: Any]] {
                 let ids = arr.compactMap { $0["id"] as? String }
-                if ids.count != Set(ids).count { fatalError("Record identity \(ids) appears more than once. The local change was not applied.") }
+                if ids.count != Set(ids).count { throw SyncError.validation("Record identity \(ids) appears more than once. The local change was not applied.") }
             }
-            fatalError("Record-level store \(storeName) contains data without stable identities. The change was not staged.")
+            throw SyncError.validation("Record-level store \(storeName) contains data without stable identities. The change was not staged.")
         }
         // Detect duplicate in prevMap/nextMap already done
         let ids = Set(prevMap.keys).union(nextMap.keys).sorted()

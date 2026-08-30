@@ -33,7 +33,7 @@ func applyRemotePage(_ input: SyncMeta, currentValues: [String: Any], records: [
         if hasPending {
             // Create pull conflict
             let pending = meta.outbox.filter { $0.entityType == rec.entityType && $0.entityId == rec.entityId }
-            let latest = pending.max(by: { $0.version < $1.version })!
+            guard let latest = pending.max(by: { $0.version < $1.version }) else { continue }
             let history = pending.sorted { $0.version < $1.version }.map { m -> AnyCodable in
                 let d: [String: Any] = ["mutationId": m.mutationId, "payload": m.payload.value as Any, "deletedAt": m.deletedAt as Any, "updatedAt": m.updatedAt, "version": m.version]
                 return AnyCodable(d)

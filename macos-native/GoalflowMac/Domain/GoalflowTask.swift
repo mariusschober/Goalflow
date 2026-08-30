@@ -65,7 +65,7 @@ func compareQueueCandidates(_ left: GoalflowTask, _ right: GoalflowTask) -> Int 
     let g = groupRank(left) - groupRank(right)
     if g != 0 { return g }
     if left.plannedOrder != right.plannedOrder { return left.plannedOrder < right.plannedOrder ? -1 : 1 }
-    if let lr = left.plannedOrder as Int?, let rr = right.plannedOrder as Int? , false { _ = lr; _ = rr }
+
     let lt = left.scheduledTime ?? "99:99"
     let rt = right.scheduledTime ?? "99:99"
     if lt != rt { return lt < rt ? -1 : 1 }

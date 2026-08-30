@@ -20,7 +20,8 @@ final class SupabaseAuthService: NSObject, @unchecked Sendable {
 
     private func generateVerifier() -> String {
         var bytes = [UInt8](repeating: 0, count: 32)
-        _ = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        let secStatus = SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes)
+        if secStatus != errSecSuccess { bytes = (0..<32).map { _ in UInt8.random(in: 0...255) } }
         return Data(bytes).base64URLEncodedString()
     }
 
