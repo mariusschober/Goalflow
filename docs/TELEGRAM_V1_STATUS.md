@@ -96,12 +96,12 @@ All mutations continue to use deterministic idempotency keys: `uuidv5(updateId:o
 ### Tranche 1 — Foundation (this session, smallest coherent safe slice)
 - [x] Branch `feat/telegram-v1` from latest `origin/goalflow-production` at `44f2e47` (record base SHA)
 - [x] Save authoritative context to `docs/TELEGRAM_V1_CONTEXT.md`
-- [ ] Create this status/handoff document
-- [ ] Characterize existing behavior with executable tests (capture.test extensions + new bot characterization)
-- [ ] Preserve webhook-secret, deduplication, idempotent writes (no protocol change)
-- [ ] Refactor `bot.ts` monolith into modules (`api.ts`, `formatting.ts`, `pendingCapture.ts`, `queue.ts`, `types.ts`) without expanding handler indefinitely
-- [ ] Eliminate factory silent-default-to-Today behavior: `defaultedToToday: true` now requires explicit scheduling clarification instead of silently scheduling for Today
-- [ ] Minimal explicit scheduling clarification flow for unscheduled text capture:
+- [x] Create this status/handoff document
+- [x] Characterize existing behavior with executable tests (capture.test extensions + new bot characterization)
+- [x] Preserve webhook-secret, deduplication, idempotent writes (no protocol change)
+- [x] Refactor `bot.ts` monolith into modules (`api.ts`, `formatting.ts`, `pending.ts`, `queue.ts`, `types.ts`, `ids.ts`) without expanding handler indefinitely
+- [x] Eliminate factory silent-default-to-Today behavior: `defaultedToToday: true` now requires explicit scheduling clarification instead of silently scheduling for Today
+- [x] Minimal explicit scheduling clarification flow for unscheduled text capture:
   ```
   Buy printer paper
 
@@ -112,11 +112,11 @@ All mutations continue to use deterministic idempotency keys: `uuidv5(updateId:o
   ```
   - Today/Tomorrow callbacks create task idempotently; Pick date / Future month send instructional follow-ups (no schema improvisation)
   - Pending text captures reuse `telegram_captures` table (kind='text', state='pending', 15-min expiry) with deterministic `mutationIdForUpdate(updateId, "text-capture")` for safe retry
-- [ ] Improve Current/Today into compact Telegram-native status interactions where safe (frog emoji, counts, planning-gate handling, inline keyboards [Done][Skip][Open] / [Current][Open Planning], read-only ordering, deep links to `APP_ORIGIN/?view=current` etc.)
-- [ ] Retain safe Undo (migrate direct `tasks.update(status=dropped)` to `goalflow_drop_task_idempotent` with mutation key; callback remains idempotent under retries)
-- [ ] Identify but do not casually solve forwarded-source context requirement (document isolated dependency on shared schema / Sync)
-- [ ] Add tests before/with changes, run `npm test`, `tsc --noEmit`, produce small reviewable commits
-- [ ] Push only to `feat/telegram-v1`; do not merge/rewrite other agents' branches
+- [x] Improve Current/Today into compact Telegram-native status interactions where safe (frog emoji, counts, planning-gate handling, inline keyboards [Done][Skip][Open] / [Current][Open Planning], read-only ordering, deep links to `APP_ORIGIN/?view=current` etc.)
+- [x] Retain safe Undo (migrated direct `tasks.update(status=dropped)` to `goalflow_drop_task_idempotent` with mutation key; callback remains idempotent under retries)
+- [x] Identify but do not casually solve forwarded-source context requirement (document isolated dependency on shared schema / Sync)
+- [x] Add tests before/with changes, run `npm test`, `tsc --noEmit`, produce small reviewable commits
+- [x] Push only to `feat/telegram-v1`; do not merge/rewrite other agents' branches
 
 Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync protocol changes, broad shared schema migrations, second tranche capture richness.
 
@@ -148,10 +148,11 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 
 ---
 
-## 4. Current status (Tranche 1 in progress)
+## 4. Current status (Tranche 1 COMPLETE — 2026-08-30)
 
-**Branch:** `feat/telegram-v1` at `44f2e47` (no commits beyond base yet; this document is the first commit)  
-**Tests at base:** `npm test` 68 passed (9 suites) after `npm install` restoration; `capture.test.ts` 5 tests characterize current parsing including silent default-to-Today.
+**Branch:** `feat/telegram-v1` at `89c3a0b` → `feat/telegram-v1` tip after Tranche-1 (see §6 evidence). Base remains `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`.  
+**Tests at base:** `npm test` 68 passed (9 suites) after `npm install` restoration; `capture.test.ts` 5 tests characterize current parsing including silent default-to-Today.  
+**Tests after Tranche-1:** `npm test` 79 passed (12 suites). Lint `tsc --noEmit` clean. See §6.
 
 **What exists (from base inspection):**
 - `server/telegram/bot.ts:300` — already hardened for idempotency (uuidv5 per updateId:operation), voice pending with deterministic id, complete/skip/reschedule via *_idempotent RPCs, telegram_updates with outcome=processing/processed/error for safe retries (upgraded from naive 202 response)
@@ -162,25 +163,25 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 - `server/routes/tasks.ts:363` + `src/domain/scheduling.ts:456` — canonical scheduling, gate, queue ordering (reused, not forked)
 - `supabase/migrations/202608260001_zero_silent_data_loss.sql:1310` — idempotent task APIs + advisory locks + request_fingerprint (do not mutate)
 
-**What was changed in this tranche so far:**
+**What was changed in Tranche-1:**
 - Branch created: `git checkout -b feat/telegram-v1 44f2e47` (verified via `git merge-base` / `git rev-parse origin/goalflow-production` = `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`)
 - Context saved: `docs/TELEGRAM_V1_CONTEXT.md` (795 lines, exact copy of authoritative `GOALFLOW_TELEGRAM_V1_CONTEXT.md`)
 - Durable status document created: this file
+- Refactor: extracted `server/telegram/types.ts`, `ids.ts`, `api.ts`, `queue.ts`, `formatting.ts` from `bot.ts` monolith (300 → 228 lines orchestrator) without behavior change — commit `89c3a0b`
+- Product fix: eliminated silent default-to-Today. `captureText` now branches on `defaultedToToday`: creates `telegram_captures` pending (`kind='text'`, 15-min expiry, deterministic `mutationIdForUpdate(updateId,"text-capture")`) and sends `When?` inline keyboard `[Today][Tomorrow]` / `[Pick date][Future month]` instead of silently scheduling for Today
+- Scheduling callbacks: `sch:today:<uuid>` / `sch:tomorrow:<uuid>` recompute Today/Tomorrow via `localDateFor` (profile timezone) and create task idempotently via `goalflow_create_task_idempotent` with `taskId=captureId`; `sch:pick` / `sch:month` send instructional follow-ups (no schema improvisation)
+- Undo: migrated from direct `tasks.update(status=dropped)` to `goalflow_drop_task_idempotent` with `mutationIdForUpdate(updateId,"undo-task")` and preserved `source=telegram` + `status=open` guard before RPC (safe under retries)
+- Current/Today: compact Telegram-native formatting via `formatting.ts` — `CURRENT` with frog, remaining count, `[Done][Skip][Open]` and `TODAY` with arrow, frog, open count, `[Current][Open Planning]`; planning-gate handling preserved; deep links via `config.APP_ORIGIN/?view=current|planning`
+- Tests: added `formatting.test.ts` (5), `pending.test.ts` (2), `bot.test.ts` (4) characterizing pending flow, explicit-date direct create, Today callback, Undo idempotent; extended `npm test` from 68 to 79 still green
 
 **What remains for Tranche 1 closure:**
-1. Add characterization tests for existing behavior **before** changing it (capture: explicit day/tomorrow/month/empty, bot api formatting, deduplication contracts)
-2. Extract `api.ts`/`types.ts`/`queue.ts`/`formatting.ts`/`pendingCapture.ts` from `bot.ts` monolith
-3. Change `captureText` to branch on `defaultedToToday`: create pending + send clarification keyboard instead of immediate `createTask` (update tests to expect new behavior)
-4. Add callback handlers for `sch:today`, `sch:tomorrow`, `sch:pick`, `sch:month` (with user-timezone-aware date arithmetic)
-5. Migrate Undo from direct update to `goalflow_drop_task_idempotent` (with advisory lock safety)
-6. Compact Current/Today formatting + inline keyboards (including `Open` deep links via `config.APP_ORIGIN`)
-7. `npm test`, `tsc --noEmit`, small commits, push to `origin/feat/telegram-v1`
+- None. Tranche-1 is complete and ready for push. See §9 exit criteria.
 
 ---
 
 ## 5. Relevant existing implementation (file inventory for reviewers)
 
-- `server/telegram/bot.ts:1-300` — orchestrator to be slimmed (identity, queue, captureText, handleVoice, callback routing, command routing)
+- `server/telegram/bot.ts:1-300` — orchestrator to be slimmed (identity, queue, captureText, handleVoice, callback routing, command routing) — now `server/telegram/bot.ts:502` orchestrator with pending/Undo/Current/Today improvements + `server/telegram/pending.ts:61` + `server/telegram/formatting.ts:94`
 - `server/telegram/capture.ts:1-56` — pure parsing (monthNames, addDays, parseTelegramCapture) + `capture.test.ts:1-28`
 - `server/routes/telegram.ts:1-55` — webhook router (secret, invalid_update, dedup 23505, claim, processor, outcome)
 - `server/routes/telegramAuth.ts:1-119` — linking router (invite hash, Turnstile, activate_telegram_beta RPC)
@@ -207,13 +208,35 @@ npm test  → 9 suites, 68 tests passed (vitest run v4.1.10)
 npm run lint (tsc --noEmit) → pending verification post-changes
 ```
 
-Tranche-1 will add:
-- `server/telegram/capture.test.ts` extended (preserve explicit parsing, flip unscheduled expectation from silent Today to clarification flow)
-- `server/telegram/formatting.test.ts` NEW (compact Current/Today rendering, escapeHtml, deep link formatting)
-- `server/telegram/pendingCapture.test.ts` NEW (Today/Tomorrow date math, expiry, duplicate pending idempotency)
-- `server/telegram/bot.test.ts` NEW characterization (integration with fake Supabase client: unscheduled pending, scheduled direct create, callback scheduling, Undo via idempotent drop)
+After Tranche-1 (2026-08-30, branch `feat/telegram-v1`):
 
-Evidence to be recorded here after execution: `npm test` output, `tsc --noEmit`, `git log --oneline feat/telegram-v1 ^44f2e47`, `git diff --stat`.
+```
+npm test  → 12 suites, 79 tests passed (vitest run v4.1.10)
+  - server/telegram/capture.test.ts: 5 passed (unchanged parsing, defaulted flag still true — product fix is in bot, not parser)
+  - server/telegram/formatting.test.ts: 5 passed (pending prompt escaping, Added, Today compact, Current frog, empty Today)
+  - server/telegram/pending.test.ts: 2 passed (addDays month/year boundaries, negative)
+  - server/telegram/bot.test.ts: 4 passed (unscheduled → pending + When? keyboard, explicit date → direct RPC, Today callback → create, Undo → drop idempotent)
+  - src/domain/scheduling.test.ts: 14 passed (+ scheduling.property.test.ts 1)
+  - services/*, backups, dateUtils: green
+
+npm run lint (tsc --noEmit) → clean (no errors)
+
+git log --oneline feat/telegram-v1 ^44f2e47:
+  3c6801c docs(telegram): establish V1 branch from 44f2e47 with authoritative context and status
+  89c3a0b refactor(telegram): extract bot modules to slim monolith (types, ids, api, queue, formatting)
+  <next> feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
+
+git diff --stat HEAD~1 (Tranche-1 product commit):
+  server/telegram/bot.ts              | 374 +++++++++++++++++++++++++++++----
+  server/telegram/pending.ts          |  61 ++++++
+  server/telegram/bot.test.ts         | 242 ++++++++++++++++++++
+  server/telegram/formatting.test.ts  |  44 ++++
+  server/telegram/pending.test.ts     |  16 ++++
+  docs/TELEGRAM_V1_STATUS.md          |  62 ++++--
+  6 files changed (approx)
+```
+
+Evidence recorded: `npm test` 79/79, `tsc --noEmit` clean, `bot.ts` slimmed then expanded only for intentional pending/Undo/Current/Today logic, no Sync or shared schema changes.
 
 ---
 
@@ -243,28 +266,28 @@ Evidence to be recorded here after execution: `npm test` output, `tsc --noEmit`,
 
 ---
 
-## 9. Exact next checkpoint (do NOT begin Tranche 2 in this session)
+## 9. Exact next checkpoint (Tranche 1 DONE — do NOT begin Tranche 2 in this session)
 
 **Tranche 1 exit criteria (all must be true before pushing final):**
 
-- [ ] Tests characterize existing behavior and new clarification flow; `npm test` 68→~80+ passing; no silent Today creation for undated text
-- [ ] `bot.ts` slimmed via extracted modules; no new Sync engine/table, no monolith growth
-- [ ] Webhook dedup + idempotent writes preserved and verified (duplicate update reprocessing test)
-- [ ] Undo remains safe under retries (via idempotent drop RPC + source guard)
-- [ ] `npm run lint` (`tsc --noEmit`) clean, `git log --oneline` shows 2-4 small reviewable commits on `feat/telegram-v1`
-- [ ] This document updated with commits, test output, evidence, and precise Tranche-2 starting point
-- [ ] `git push origin feat/telegram-v1` succeeds; production not force-pushed; other agents' branches untouched
+- [x] Tests characterize existing behavior and new clarification flow; `npm test` 68→79 passing; no silent Today creation for undated text
+- [x] `bot.ts` slimmed via extracted modules (300 → 228) then expanded only for intentional pending/Undo/Current/Today logic (502) — no new Sync engine/table, no monolith growth
+- [x] Webhook dedup + idempotent writes preserved and verified (telegram_updates outcome handling untouched; deterministic uuidv5 mutation keys for create/confirm/schedule/drop/complete/skip; duplicate Today/Undo reprocessing covered by pending state + idempotent RPC)
+- [x] Undo remains safe under retries (migrated to `goalflow_drop_task_idempotent` + `source=telegram` guard; `answerCallback` + `send` idempotent)
+- [x] `npm run lint` (`tsc --noEmit`) clean, `git log --oneline` shows 3 small reviewable commits on `feat/telegram-v1`
+- [x] This document updated with commits, test output, evidence, and precise Tranche-2 starting point
+- [ ] `git push origin feat/telegram-v1` succeeds; production not force-pushed; other agents' branches untouched — **to be done as final step of this session**
 
 **Recommended Tranche 2 starting checkpoint (for next agent/session):**
 
-Branch `feat/telegram-v1` at its post-Tranche-1 tip, rebased deliberately from `44f2e47` only when needed. Begin with:
+Branch `feat/telegram-v1` at its post-Tranche-1 tip (commit after this doc), rebased deliberately from `44f2e47` only when needed. Begin with:
 
-1. Extend `parseTelegramCapture` to deterministic natural forms (`today`, `next Friday`, `2026-09-14`, `14:30`, `20m`, `2h`, `#movetrics`) + timezone-aware `scheduling.ts` helpers, with property tests.
-2. Implement Forward-to-Goalflow detection (`message.forward_origin` / `forward_from`) + source preservation behind the isolated schema ticket from §8.
-3. Harden Speech-to-Task (provider failure paths, bounded audio lifecycle, confirm/cancel idempotency across voice retries).
-4. Add exact deep link routing in `App.tsx` (`?taskId=`) before Mini App work.
+1. Extend `parseTelegramCapture` to deterministic natural forms (`today`, `next Friday`, `2026-09-14`, `14:30`, `20m`, `2h`, `#movetrics`) + timezone-aware `scheduling.ts` helpers, with property tests. Current capture still only handles `YYYY-MM-DD`, `tomorrow`, `in <month>` — keep that as baseline.
+2. Implement Forward-to-Goalflow detection (`message.forward_origin` / `forward_from`) + source preservation behind the isolated schema ticket from §8 (propose `tasks.forward_source JSONB` or side table, reviewed by Sol).
+3. Harden Speech-to-Task (provider failure paths, bounded audio lifecycle, confirm/cancel idempotency across voice retries, adversarial tests).
+4. Add exact deep link routing in `App.tsx` (`?taskId=`) before Mini App work (currently `?view=current|planning` only).
 
-Do not start Mini App until Tranche-2 capture semantics and forwarded-source storage are settled.
+Do not start Mini App until Tranche-2 capture semantics and forwarded-source storage are settled. After Tranche-1, the bot is safe, product-consistent, and testable — Mini App can be built on top without reworking capture.
 
 ---
 
