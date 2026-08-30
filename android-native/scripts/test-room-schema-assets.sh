@@ -7,7 +7,7 @@ schema_dir="$repo_root/android-native/app/schemas/com.mariusschober.goalflow.nat
 [ -f "$build_gradle" ]
 [ -d "$schema_dir" ]
 grep -F 'assets.srcDirs += "$projectDir/schemas"' "$build_gradle" >/dev/null
-for version in 1 2 3 4 5 6 7; do
+for version in 1 2 3 4 5 6 7 8; do
     [ -f "$schema_dir/$version.json" ]
 done
 
