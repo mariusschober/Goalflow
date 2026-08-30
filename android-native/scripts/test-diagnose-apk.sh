@@ -28,7 +28,7 @@ set -euo pipefail
 if [[ "$1" == "dump" && "$2" == "badging" ]]; then
     printf '%s\n' "package: name='com.example.goalflow' versionCode='7' versionName='1.2'" "targetSdkVersion:'35'"
     if [[ "$AAPT2_INCLUDE_SDK" == "1" ]]; then
-        printf '%s\n' "sdkVersion:'26'"
+        printf '%s\n' "minSdkVersion:'26'"
     fi
     exit 0
 fi
@@ -38,7 +38,7 @@ if [[ "$1" == "dump" && "$2" == "xmltree" ]]; then
     [[ "$4" == "--file" ]]
     [[ "$5" == "AndroidManifest.xml" ]]
     printf '%s\n' "$*" > "$CALL_LOG"
-    printf '%s\n' '    A: android:minSdkVersion(0x0101020c)=(type 0x10)0x1a'
+    printf '%s\n' '    A: http://schemas.android.com/apk/res/android:minSdkVersion(0x0101020c)=26'
     exit 0
 fi
 
