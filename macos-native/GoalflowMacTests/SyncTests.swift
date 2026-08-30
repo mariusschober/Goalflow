@@ -19,7 +19,7 @@ final class StableJsonTests: XCTestCase {
 }
 
 final class SyncMetaTests: XCTestCase {
-    func test_empty_meta() {
+    func test_empty_meta() throws {
         let m = emptySyncMeta()
         XCTAssertEqual(m.schemaVersion, 2)
         XCTAssertEqual(m.cursor, 0)
@@ -41,35 +41,35 @@ final class SyncMetaTests: XCTestCase {
 }
 
 final class BuildStagingTests: XCTestCase {
-    func test_noop_when_equal() {
+    func test_noop_when_equal() throws {
         let prev: [[String: Any]] = [["id":"1","title":"A"]]
         let next: [[String: Any]] = [["id":"1","title":"A"]]
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "2026-09-01T00:00:00Z", randomUuid: { UUID().uuidString })
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "2026-09-01T00:00:00Z", randomUuid: { UUID().uuidString })
         XCTAssertNil(tx)
     }
-    func test_per_record_diff_creates_mutation() {
+    func test_per_record_diff_creates_mutation() throws {
         let prev: [[String: Any]] = [["id":"1","title":"A"]]
         let next: [[String: Any]] = [["id":"1","title":"B"]]
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "2026-09-01T00:00:00Z", randomUuid: { "m1" })
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "2026-09-01T00:00:00Z", randomUuid: { "m1" })
         XCTAssertNotNil(tx)
         XCTAssertEqual(tx?.changes.count, 1)
         XCTAssertEqual(tx?.changes.first?.entityId, "1")
     }
-    func test_added_record() {
+    func test_added_record() throws {
         let prev: [[String: Any]] = []
         let next: [[String: Any]] = [["id":"2","title":"New"]]
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { UUID().uuidString })
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { UUID().uuidString })
         XCTAssertEqual(tx?.changes.count, 1)
         XCTAssertEqual(tx?.changes.first?.entityId, "2")
     }
-    func test_deleted_record() {
+    func test_deleted_record() throws {
         let prev: [[String: Any]] = [["id":"1","title":"A"]]
         let next: [[String: Any]] = []
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { UUID().uuidString })
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { UUID().uuidString })
         XCTAssertEqual(tx?.changes.first?.deletedAt, "now")
     }
-    func test_singleton_store() {
-        let tx = buildStagedLocalTransaction(storeName: "amalgam", userKey: "u", previousValue: "hello", nextValue: "world", order: 1, now: "now", randomUuid: { UUID().uuidString })
+    func test_singleton_store() throws {
+        let tx = try buildStagedLocalTransaction(storeName: "amalgam", userKey: "u", previousValue: "hello", nextValue: "world", order: 1, now: "now", randomUuid: { UUID().uuidString })
         XCTAssertEqual(tx?.changes.count, 1)
         XCTAssertEqual(tx?.changes.first?.entityId, "singleton")
     }
@@ -209,7 +209,7 @@ final class ChaosTests: XCTestCase {
         for i in 0..<20 {
             let prev: [[String: Any]] = (0..<i).map { ["id":"\($0)","title":"T\($0)"] }
             let next: [[String: Any]] = (0...i).map { ["id":"\($0)","title":"T\($0)"] }
-            if let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: i, now: "2026-09-01T00:00:00Z", randomUuid: { UUID().uuidString }) {
+            if let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: i, now: "2026-09-01T00:00:00Z", randomUuid: { UUID().uuidString }) {
                 meta = try appendStagedTransactions(meta, transactions: [tx], deviceId: device)
                 let ready = readyOutbox(meta, limit: 50)
                 if let first = ready.first {
@@ -231,7 +231,7 @@ final class TwoDeviceTests: XCTestCase {
         let taskId = "t1"
         let prev: [[String: Any]] = [["id":taskId,"title":"Task","status":"open"]]
         let next: [[String: Any]] = [["id":taskId,"title":"Task","status":"completed","completedAt":"now"]]
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { "m1" })!
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { "m1" })!
         metaA = try appendStagedTransactions(metaA, transactions: [tx], deviceId: "A")
         XCTAssertEqual(metaA.outbox.count, 1)
         // Pull remote open from B should create conflict, not resurrect
@@ -248,7 +248,7 @@ final class TwoDeviceTests: XCTestCase {
         // Create pending
         let prev: [[String: Any]] = [["id":"1","title":"Local"]]
         let next: [[String: Any]] = [["id":"1","title":"EditedLocal"]]
-        let tx = buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { "m1" })!
+        let tx = try buildStagedLocalTransaction(storeName: "tasks", userKey: "u", previousValue: prev, nextValue: next, order: 1, now: "now", randomUuid: { "m1" })!
         meta = try appendStagedTransactions(meta, transactions: [tx], deviceId: "d")
         // Remote different title
         let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 1, deviceId: "other", payload: AnyCodable(["id":"1","title":"Remote"]), updatedAt: "now", deletedAt: nil)
