@@ -27,6 +27,9 @@ set -euo pipefail
 
 if [[ "$1" == "dump" && "$2" == "badging" ]]; then
     printf '%s\n' "package: name='com.example.goalflow' versionCode='7' versionName='1.2'" "targetSdkVersion:'35'"
+    if [[ "$AAPT2_INCLUDE_SDK" == "1" ]]; then
+        printf '%s\n' "sdkVersion:'26'"
+    fi
     exit 0
 fi
 
@@ -42,6 +45,18 @@ fi
 exit 2
 STUB
 chmod +x "$tool_dir"/*
+
+primary_output="$(
+    PATH="$tool_dir:$PATH" \
+    EXPECTED_APK="$work_dir/test.apk" \
+    CALL_LOG="$work_dir/aapt2-call" \
+    AAPT2_INCLUDE_SDK=0 \
+    AAPT2_INCLUDE_SDK=1 \
+    GOALFLOW_APK_LABEL=TEST-ONLY \
+    "$script_dir/diagnose-apk.sh" "$work_dir/test.apk"
+)"
+grep -Fqx 'MIN_SDK=26' <<<"$primary_output"
+[[ ! -e "$work_dir/aapt2-call" ]]
 
 output="$(
     PATH="$tool_dir:$PATH" \
