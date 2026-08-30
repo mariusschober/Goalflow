@@ -2,88 +2,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppConfig } from "../config";
 import type { Logger } from "../logger";
 import type { SpeechProvider } from "../speech/types";
-import { buildTodayQueue, getPlanningGate, type DailyPlan, type ScheduledTask } from "../../src/domain/scheduling";
 import { parseTelegramCapture } from "./capture";
-import { v5 as uuidv5 } from "uuid";
+import { mutationIdForUpdate } from "./ids";
+import { escapeHtml, sendMessage, answerCallbackQuery, telegramRequest } from "./api";
+import { identityFor, localDateFor, loadQueue } from "./queue";
+import type { TelegramUpdate, TelegramMessage } from "./types";
 
-const TELEGRAM_MUTATION_NAMESPACE = "af6e79e1-c616-4c61-bc96-7207d02c9a95";
-const mutationIdForUpdate = (updateId: number, operation: string): string =>
-  uuidv5(`${updateId}:${operation}`, TELEGRAM_MUTATION_NAMESPACE);
+export type { TelegramUpdate, TelegramMessage, TelegramCallback, TelegramUser, TelegramChat, TelegramVoice } from "./types";
 
-interface TelegramUser { id: number; username?: string }
-interface TelegramChat { id: number }
-interface TelegramVoice { file_id: string; file_size?: number; mime_type?: string }
-interface TelegramMessage {
-  message_id: number;
-  from?: TelegramUser;
-  chat: TelegramChat;
-  text?: string;
-  voice?: TelegramVoice;
-}
-interface TelegramCallback { id: string; from: TelegramUser; message?: TelegramMessage; data?: string }
-export interface TelegramUpdate { update_id: number; message?: TelegramMessage; callback_query?: TelegramCallback }
-
-const escapeHtml = (value: string): string => value
-  .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-
-const rowToTask = (row: Record<string, unknown>): ScheduledTask => ({
-  id: String(row.id), userId: String(row.user_id), title: String(row.title), notes: String(row.notes ?? ""),
-  tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
-  schedulePrecision: row.schedule_precision as "day" | "month",
-  scheduledFor: row.schedule_precision === "month" ? String(row.scheduled_for).slice(0, 7) : String(row.scheduled_for).slice(0, 10),
-  scheduledTime: row.scheduled_time ? String(row.scheduled_time).slice(0, 5) : undefined,
-  plannedOrder: Number(row.planned_order ?? 0), status: row.status as ScheduledTask["status"],
-  isFrog: Boolean(row.is_frog), frogFailures: Number(row.frog_failures ?? 0), beforeFrog: Boolean(row.before_frog),
-  source: row.source as ScheduledTask["source"], parentTaskId: row.parent_task_id ? String(row.parent_task_id) : undefined,
-  habitId: row.habit_id ? String(row.habit_id) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
-  deletedAt: row.deleted_at ? String(row.deleted_at) : undefined, version: Number(row.revision ?? 1)
-});
-
-const telegramRequest = async (config: AppConfig, method: string, payload: Record<string, unknown>) => {
-  const response = await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/${method}`, {
-    method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(10_000)
-  });
-  if (!response.ok) throw new Error(`Telegram ${method} failed with status ${response.status}.`);
-  return response.json() as Promise<{ ok: boolean; result?: unknown }>;
-};
-
-const send = (config: AppConfig, chatId: number, text: string, replyMarkup?: Record<string, unknown>) =>
-  telegramRequest(config, "sendMessage", {
-    chat_id: chatId, text, parse_mode: "HTML", disable_web_page_preview: true,
-    ...(replyMarkup ? { reply_markup: replyMarkup } : {})
-  });
-
-const answerCallback = (config: AppConfig, callbackId: string, text?: string) =>
-  telegramRequest(config, "answerCallbackQuery", { callback_query_id: callbackId, ...(text ? { text } : {}) });
-
-const identityFor = async (database: SupabaseClient, telegramUserId: number) => {
-  const { data, error } = await database.from("telegram_identities")
-    .select("user_id,telegram_chat_id,bot_access_granted")
-    .eq("telegram_user_id", telegramUserId).maybeSingle();
-  if (error) throw error;
-  return data;
-};
-
-const localDateFor = async (database: SupabaseClient, userId: string): Promise<string> => {
-  const { data } = await database.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
-  const timeZone = String(data?.timezone ?? "UTC");
-  try { return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-  catch { return new Date().toISOString().slice(0, 10); }
-};
-
-const loadQueue = async (database: SupabaseClient, userId: string, today: string) => {
-  const [{ data: rows, error }, { data: planRow, error: planError }] = await Promise.all([
-    database.from("tasks").select("*").eq("user_id", userId).eq("status", "open").is("deleted_at", null),
-    database.from("daily_plans").select("local_date,confirmed_at,task_ids").eq("user_id", userId).eq("local_date", today).maybeSingle()
-  ]);
-  if (error) throw error; if (planError) throw planError;
-  const tasks = (rows ?? []).map((row) => rowToTask(row as Record<string, unknown>));
-  const plan: DailyPlan | undefined = planRow ? {
-    localDate: String(planRow.local_date), confirmedAt: String(planRow.confirmed_at), taskIds: (planRow.task_ids ?? []).map(String)
-  } : undefined;
-  return { tasks, gate: getPlanningGate(tasks, today, plan), queue: buildTodayQueue(tasks, today) };
-};
+const send = sendMessage;
+const answerCallback = answerCallbackQuery;
 
 const createTask = async (
   database: SupabaseClient,
