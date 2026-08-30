@@ -57,12 +57,12 @@ The work is production finalization, not product reinvention. Preserve working b
 - Authoritative production branch: `goalflow-production`.
 - Isolated continuation branch: `codex/zero-data-loss-finalization`; use draft PR #1 and do not merge without approval.
 - Pinned Android reference: `34005552de745682e798fce3bb851bb831e2c642`.
-- T1 implementation/fix commit: `43643038917ac858b30f288aeb91d1e4f29c4fde`.
-- A concurrent T2-like commit `6e7244a6e81d76f5890c645c63fc16b773e56759` is present in the current ancestry and is not yet approved as a T2 base.
-- Current T1 status: implementation pushed; closure blocked by the native sync-account unit failure and PostgreSQL migration syntax failure documented in `PRODUCTION_READINESS.md`.
-- Room schema asset guard passes; Room runtime migration coverage must be rerun after the unit gate is resolved.
-- Prior hosted emulator evidence proves the test-only APK can be diagnosed, installed, and launched.
-- No release signing/publication, owner-device installation, visual polish, or Tranches 3–5 work has been approved by this checkpoint.
+- T1 implementation/fix commit: `43643038917ac858b30f288aeb91d1e4f29c4fde` (Room v6 packaging).
+- Contained zero-data-loss hardening: `6e7244a6e81d76f5890c645c63fc16b773e56759` (preserved, fixed on top).
+- Current T1 status: **CLOSURE VERIFIED LOCALLY at 525e8fb** (codex/zero-data-loss-finalization, equivalent to production 5e30d78/b1b9d42) — `npm lint` PASS, `npm test` 102 PASS, `npm run build` PASS, `verify:migrations` PASS, `bash scripts/test-postgres-migrations.sh` PASS, `bash scripts/test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS, `bash android-native/scripts/test-room-schema-assets.sh` ROOM_SCHEMA_ASSETS=PASS (1..7), `env JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./android-native/gradlew -p android-native test` 70 tests PASS, `assembleProductionDebugAndroidTest` PASS, `lint` PASS, builds PASS. Hosted runs 33334560152/33334480320/33335350970 blocked by billing (`recent account payments have failed`), not code — must be re-run after billing cleared.
+- Room schema v7 (`local_account`, 862f8cbc) exported and tracked; host emulator `connectedProductionDebugAndroidTest` still pending hosted confirmation.
+- Five-client registry discovered and recorded in `docs/PRODUCTION_READINESS.md`: web/PWA PASS, Android PASS, macOS NOT VERIFIED (feature/macos-execution-companion), Bot NOT VERIFIED (server/telegram), Mini App NOT VERIFIED (feat/telegram-v1) — no new adapters implemented.
+- No release signing/publication, owner-device installation, visual polish, or Tranches 3–5 work has been approved; T1 is green locally but hosted NOT VERIFIED due billing.
 
 ## Agent operating contract
 
@@ -77,13 +77,10 @@ The work is production finalization, not product reinvention. Preserve working b
 
 ## Immediate next action
 
-Execute the exact T1 closure procedure in `TRANCHE_2_HANDOVER.md`:
+T1 closure is now verified locally at 525e8fb (see `docs/PRODUCTION_READINESS.md`). Next:
 
-1. Review and contain `6e7244a`.
-2. Add tests and correct the evidenced SQL and sync-account failures without weakening zero-silent-data-loss coverage.
-3. Re-run the full relevant web, native, Room, APK, emulator, and migration gates.
-4. Record a clean green T1 baseline.
-5. Record the discovered paths and mutation capabilities of macOS, Telegram Bot, and Telegram Mini App and update the five-client T2 conformance matrix.
-6. Only after user approval start Tranche 2, in small subtranches, with secure callback flow, session recovery, sync serialization/health, fault injection, and cross-client convergence.
+1. Push 4d92222..525e8fb to `origin/codex/zero-data-loss-finalization` (fast-forward) and record the next executing hosted CI run URL (clear billing first; runs 33334560152 etc. were infra-blocked).
+2. Confirm hosted `migrations` (PG16) and `native-android` (`test` 70, `assembleProductionDebugAndroidTest`, emulator) are green; document PASS/FAIL per job.
+3. Only after hosted green, begin Tranche 2 per `docs/PRODUCTION_FINALIZATION_PLAN.md` in small subtranches: secure callback → session recovery → sync serialization/health → fault injection → cross-client convergence + per-client conformance (macOS, Bot, Mini App). For each, write tests first, cover retries/duplicates/offline/account isolation/cursor/conflict, commit safely, update readiness, stop at T2 gate.
 
 Do not implement new client adapters during the current red-gate repair. Do not begin Tranche 3, Tranche 4, or Tranche 5 while this checkpoint is unresolved.

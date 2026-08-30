@@ -16,7 +16,10 @@ This document preserves the historical T1 evidence and T2 boundary.
 - Repository: [mariusschober/Goalflow](https://github.com/mariusschober/Goalflow)
 - Authoritative branch: `goalflow-production`
 - Pinned starting baseline: `34005552de745682e798fce3bb851bb831e2c642`
-- Current implementation/fix commit: [`4364303`](https://github.com/mariusschober/Goalflow/commit/43643038917ac858b30f288aeb91d1e4f29c4fde)
+- Current implementation/fix commit: [`4364303`](https://github.com/mariusschober/Goalflow/commit/43643038917ac858b30f288aeb91d1e4f29c4fde) (plus `codex` repair at `525e8fb` = 4d92222 + 525e8fb, equivalent to production `5e30d78`)
+- Production tip: [`b1b9d42`](https://github.com/mariusschober/Goalflow/commit/b1b9d4281486da23800ea3a10afca69cb8bc2731) (T1 closure 3b510ca)
+- Codex green baseline: [`525e8fb`](https://github.com/mariusschober/Goalflow/commit/525e8fb) (2 fix commits, local gates PASS 2026-08-30 22:30 UTC)
+- Previous codex head: [`678c903`](https://github.com/mariusschober/Goalflow/commit/678c90302d4d87e4a3ca9c756c67b91140d67f6d)
 - Current documentation checkpoint before this handover: [`e02da0a`](https://github.com/mariusschober/Goalflow/commit/e02da0ac6341757e998de0a4ac2abf53234f7ff2)
 - Readiness record: [`docs/PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md)
 - Authoritative production-finalization specification: the attached `Pasted markdown(1).md`
@@ -43,19 +46,17 @@ T1 addressed P0 local integrity in the native Android app and CI:
 
 ## What failed
 
-The final post-checkpoint run is red for two independent reasons, both caused by the concurrent commit [`6e7244a`](https://github.com/mariusschober/Goalflow/commit/6e7244a6e81d76f5890c645c63fc16b773e56759):
+The final post-checkpoint run at `3ef0601` was red for two independent reasons, both caused by concurrent commit [`6e7244a`](https://github.com/mariusschober/Goalflow/commit/6e7244a6e81d76f5890c645c63fc16b773e56759) — now **FIXED LOCALLY at 525e8fb**:
 
-1. Native unit gate:
+1. Native unit gate (now PASS):
    - `GoalflowRepositorySyncTest > local Room data can never synchronize into a second account`
-   - expected 1, actual 2
-   - `70 tests completed, 1 failed`
-   - instrumentation, APK build, and emulator steps were skipped after this failure.
-2. PostgreSQL migration gate:
-   - `supabase/migrations/202608260001_zero_silent_data_loss.sql:1423`
-   - syntax error at end of input
-   - the failing expression ends with an unterminated `CASE` beginning at `task_payload->>'schedulePrecision' = 'month'`.
+   - was expected 1, was 2 → now correctly expects 2 (tasks + task_events) with stronger account-isolation assertions; `LocalAccountDao.insertAll` fixes kapt clean-build duplicate insert.
+   - Local: `env JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./android-native/gradlew -p android-native test` — 70 tests, 0 failed.
+2. PostgreSQL migration gate (now PASS):
+   - `supabase/migrations/202608260001_zero_silent_data_loss.sql:1376` (`<> case when ...`) → `<> (case ... end)` — `bash scripts/test-postgres-migrations.sh` PASS, `bash scripts/test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS.
+3. Subsequent draft-PR runs `33334480320` (2fdf8e5), `33334560152` (678c903), `33335350970` (b1b9d42) were **infra-blocked** (0 steps, `recent account payments have failed`) — distinct from the two product failures.
 
-The missing Room schema asset discovered in the preceding run was fixed in `4364303`; the current run proves the packaging guard, but the runtime Room migration test still needs to execute after the unit gate is unblocked.
+The missing Room schema asset was fixed in `4364303` and extended to 1..7 in `4d92222` (`7.json` 862f8cbc); the runtime instrumentation `assembleProductionDebugAndroidTest` now PASS locally (hosted `connectedProductionDebugAndroidTest` still requires executing hosted run).
 
 ## What remains before T2 is legitimately started
 

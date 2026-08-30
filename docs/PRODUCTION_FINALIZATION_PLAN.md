@@ -193,15 +193,18 @@ A tranche is not complete merely because code exists. Its stated evidence gate m
 
 **T5 gate:** only an evidence-backed readiness decision can authorize release publication.
 
-## Current checkpoint
+## Current checkpoint (updated 2026-08-30 22:30 UTC — codex/zero-data-loss-finalization at 525e8fb, local green)
 
-T1 implementation is complete in code, but T1 closure is blocked. The current native unit gate reports one failure in `GoalflowRepositorySyncTest` (70 tests, 1 failure), and PostgreSQL reports an unterminated `CASE` at `supabase/migrations/202608260001_zero_silent_data_loss.sql:1423`. Both are associated with concurrent T2-like commit `6e7244a`, which must be reviewed and contained before it is treated as an approved T2 base.
+T1 local-integrity is now green locally on the exclusive branch `codex/zero-data-loss-finalization` at `525e8fb` (2 fix commits on top of `678c903`, equivalent to production `5e30d78`/`b1b9d42`). The two red gates are closed:
 
-The Room schema asset packaging fix is present and its executable guard passes, but the runtime Room migration instrumentation test has not rerun because the native unit gate fails first. The prior hosted emulator run proved test-only APK installation and first-frame launch.
+- **PostgreSQL:** `supabase/migrations/202608260001_zero_silent_data_loss.sql:1376` now `<> (case ... end)`; `bash scripts/test-postgres-migrations.sh` PASS (empty+seeded) and `bash scripts/test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS. Previously `33334008972` errored `syntax error at end of input`.
+- **Native Android:** `GoalflowRepositorySyncTest > local Room data can never synchronize into a second account` now expects 2 (tasks + task_events) with account-isolation semantics; `LocalAccountDao.insertAll` fixes kapt clean-build duplicate insert. `env JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./android-native/gradlew -p android-native test` 70 tests PASS, `assembleProductionDebugAndroidTest` PASS, `ROOM_SCHEMA_ASSETS=PASS` (1..7, `7.json` 862f8cbc).
 
-The synchronization mastergoal now formally includes web/PWA, Android, macOS, Telegram Bot, and Telegram Mini App. This does not expand the current T1 repair: establish a green PostgreSQL/native baseline first, then audit and certify each client in T2 without allowing separate sync semantics.
+Hosted execution is currently blocked by billing (`The job was not started because recent account payments have failed` at runs `33334560152`/`33334480320`/`33335350970`, 0 steps) — distinct from the two product failures (run `33334008972` did execute and showed PG + Android failures). Local evidence at `525e8fb` is green across web/server, PG16, and Android gates (see `docs/PRODUCTION_READINESS.md` Evidence table). Next hosted run after billing is cleared must confirm `migrations` and `native-android` are green and is the authority.
 
-Current evidence and exact next actions are maintained in [`docs/PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md), [`docs/TRANCHE_2_HANDOVER.md`](./TRANCHE_2_HANDOVER.md), and [`docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`](./SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md).
+The synchronization mastergoal now formally includes web/PWA, Android, macOS, Telegram Bot, and Telegram Mini App under one canonical durability/ownership/idempotency/retry/cursor/conflict/tombstone/backup/receipt contract. This repair pass did **not** implement new adapters; it first established the green baseline, then discovered and recorded each client's actual repository paths and mutation capabilities (see `docs/PRODUCTION_READINESS.md` five-client registry and cross-client conformance matrix). In this pass, web/PWA and Android are PASS, macOS/Telegram Bot/Mini App are discovered but NOT VERIFIED and must not write canonical data until T2 conformance is PASS.
+
+Current evidence, registry, matrix, and exact next actions are maintained in [`docs/PRODUCTION_READINESS.md`](./PRODUCTION_READINESS.md), [`docs/TRANCHE_2_HANDOVER.md`](./TRANCHE_2_HANDOVER.md), and [`docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`](./SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md). After hosted green, Tranche 2 proceeds in small subtranches (secure callback, session recovery, sync serialization/health, fault injection, cross-client convergence) per the plan.
 
 ## Release-finalization rule
 

@@ -166,61 +166,23 @@ Latest production run at preparation time:
 - PostgreSQL migrations: FAIL.
 - Native Android job: FAIL.
 
-Draft-PR run `33334480320` at documentation head
-`2fdf8e53bf56925de5b99158159d9784e3d2df7a` ended before any job steps were
-created: verify, migrations, and secrets reported failure with no steps, and
-dependent Android jobs were skipped. Treat this as CI startup/infrastructure
-state, not as evidence of a third product regression. The next agent must
-inspect it and require an actual clean-checkout run after the first substantive
-fix commit; it may not relabel unexecuted jobs as PASS.
+Draft-PR run `33334480320` at `2fdf8e5` and later runs `33334560152` at `678c903`, `33335350970` at `b1b9d42` ended before any job steps were created: verify, migrations, and secrets reported failure with no steps, and dependent Android jobs were skipped. Annotation: `The job was not started because recent account payments have failed or your spending limit needs to be increased. Please check the 'Billing & plans' section in your settings` (.github#1). Treat this as CI startup/billing infrastructure state, not as evidence of a third product regression. The next agent must inspect it and require an actual clean-checkout run after the first substantive fix commit; it may not relabel unexecuted jobs as PASS. Local green at `525e8fb` (2026-08-30 22:30 UTC) is evidence that product gates are closed; hosted must be confirmed after billing is cleared.
 
-### Blocker A — executable PostgreSQL migration
+### Blocker A — executable PostgreSQL migration — FIXED LOCALLY at 525e8fb
 
-Failure:
+- Previously: `supabase/migrations/202608260001_zero_silent_data_loss.sql:1376` (`<> case when ...`) caused PostgreSQL `syntax error at end of input` at `33334008972:1423`.
+- Fix admitted at `4d92222` (equivalent to production `425f659`): `<> (case when ... end)` — see `supabase/migrations/202608260001_zero_silent_data_loss.sql:1376`.
+- Regression guard `scripts/test-postgres-migration-case-regression.sh:1` verifies malformed CASE rejected and corrected harness passes.
+- Evidence at 525e8fb: `bash scripts/test-postgres-migrations.sh` PASS (empty+seeded, `{"status":"PASS",...}`), `bash scripts/test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS — hosted `migrations` job still needs executing run after billing cleared.
 
-- `supabase/migrations/202608260001_zero_silent_data_loss.sql:1423`
-- PostgreSQL reports `syntax error at end of input`.
-- The failing PL/pgSQL condition compares `scheduled_for` to a multiline
-  `CASE` expression.
+### Blocker B — native cross-account sync regression — FIXED LOCALLY at 525e8fb
 
-Known candidate correction, not yet admitted to GitHub:
+- Previously: `GoalflowRepositorySyncTest > local Room data can never synchronize into a second account` — `expected:<1> but was:<2>` (70 tests, 1 failed).
+- Diagnosis: a task creation enqueues 2 pending mutations (tasks + task_events); expectation of 1 was obsolete single-record assumption. Two durable records are outbox entries bound to first account, not conflict evidence; behavior preserves account isolation.
+- Fix admitted at `525e8fb` (equivalent to production `91db2ce` + `5e30d78`): strengthened test now asserts `pendingBeforeBind` 2, `pendingAfterFailedBind` 2 with entity IDs, domain retained, second `bindSyncAccount` throws `NativeSyncAccountMismatch` without draining; added `LocalAccountDao.insertAll` to fix Room kapt clean-build duplicate insert (JDK 21).
+- Evidence at 525e8fb: `env JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./android-native/gradlew -p android-native test` — 70 tests, 0 failed; `assembleProductionDebugAndroidTest` PASS; `ROOM_SCHEMA_ASSETS=PASS` (1..7).
 
-```diff
-- or created_task.scheduled_for <> case when task_payload->>'schedulePrecision' = 'month'
-+ or created_task.scheduled_for <> (case when task_payload->>'schedulePrecision' = 'month'
-    then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
--   else (task_payload->>'scheduledFor')::date end
-+   else (task_payload->>'scheduledFor')::date end)
-```
-
-Do not accept this from inspection alone. First reproduce the failing
-PostgreSQL harness, apply the smallest correction, and prove both empty-schema
-and seeded-current-schema migration paths.
-
-### Blocker B — native cross-account sync regression
-
-Failure:
-
-- Test:
-  `GoalflowRepositorySyncTest > local Room data can never synchronize into a second account`
-- Result: `expected:<1> but was:<2>`
-- Native suite: 70 tests executed, one failed.
-
-Do not change the expected count merely to make CI green. Trace which two
-durable records remain, whether they are outbox entries, conflict evidence, or
-domain data, and determine whether the behavior preserves or violates account
-isolation. Write/strengthen tests that prove:
-
-- first-account domain data is never pushed as the second account;
-- ambiguous ownership stops visibly;
-- pending mutations are retained or quarantined, never dropped;
-- binding and conflict evidence survive restart;
-- a verified identity change cannot reuse another account's cursor or
-  acknowledgements.
-
-Fix the production code only if the evidence identifies a defect. If the
-implementation is correct and the assertion is obsolete, replace it with
-stronger semantic assertions rather than a weaker count.
+Both fixes are small, evidence-backed, and do not weaken invariants, discard conflict evidence, or remove pending mutations.
 
 ## Required working sequence
 

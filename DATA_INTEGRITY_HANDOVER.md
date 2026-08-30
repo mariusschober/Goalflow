@@ -1,6 +1,14 @@
 # Goalflow zero-silent-data-loss handover
 
-## Current status — 2026-08-30
+## Current status — 2026-08-30 22:30 UTC (codex/zero-data-loss-finalization at 525e8fb, equivalent to goalflow-production b1b9d42)
+
+- Isolated worktree at `/var/folders/xy/bg1y6lf52nd48j5q9ymy8_th0000gn/T/opencode/goalflow-zero-data-loss` on `codex/zero-data-loss-finalization` (head 525e8fb, previous 678c903) — clean, verified. Dirty `feature/macos-execution-companion` workspace untouched.
+- Live production: `b1b9d4281486da23800ea3a10afca69cb8bc2731` (goalflow-production, T1 closure at 3b510ca). Integrated baseline for this branch: `7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8`.
+- Current codex head after repair: `525e8fb` (fix 4d92222 + 525e8fb) — locally green (see PRODUCTION_READINESS.md). Hosted runs 33334560152, 33334480320, 33335350970 all billing-blocked (0 steps) — distinct from the two reproduced product failures (run 33334008972: PG CASE at 1423, Android expected 1 was 2).
+- Five-client registry discovered: web/PWA (`/`), Android (`android-native/`), macOS (`macos-native/GoalflowMac/` on `feature/macos-execution-companion` — NOT VERIFIED), Telegram Bot (`server/telegram/bot.ts:1` + `server/routes/telegram.ts:1`, expanded on `feat/telegram-v1` — NOT VERIFIED), Mini App (`telegram-mini-app/` on `feat/telegram-v1` — NOT VERIFIED). See `docs/PRODUCTION_READINESS.md` for full registry and conformance matrix.
+
+## Current status — 2026-08-30 (previous)
+
 
 - The implementation and local non-Android release verification are complete.
 - The user-supplied native baseline `34005552de745682e798fce3bb851bb831e2c642` was not the current production tip. The integration preserves the newer production history through `c8999b9cc2ae18b60aa5523df0d9b42bd51ad84d`, including Room schemas, task events, widgets, migration tests, and the corrected emulator APK handoff.

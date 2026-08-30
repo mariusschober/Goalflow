@@ -1,8 +1,8 @@
 # Goalflow data-integrity report
 
-Date: 2026-08-30
-Branch: `goalflow-production`
-Objective: zero silent data loss across web/PWA, API/Supabase, and `android-native`
+Date: 2026-08-30 22:30 UTC
+Branch: `codex/zero-data-loss-finalization` at `525e8fb` (equivalent to `goalflow-production` at `b1b9d42` / `5e30d78`); production baseline `7a502cd`
+Objective: zero silent data loss across web/PWA, Android, macOS, Telegram Bot, Telegram Mini App, API/Supabase
 
 This report distinguishes implemented/tested behavior from infrastructure that
 was unavailable or deliberately excluded. It is not a “production ready” claim.
@@ -17,11 +17,11 @@ The overall status is conservative: a cross-platform invariant remains **NOT VER
 
 ## Required invariants
 
-| # | Invariant | Web/PWA | Server/DB | Native Android | Overall |
-| ---: | --- | --- | --- | --- | --- |
-| 1 | UI success follows durable local persistence | **PASS** — synchronous read-verified WAL | — | **NOT VERIFIED** — Room transaction reviewed; tests excluded | **NOT VERIFIED** |
-| 2 | Cloud mutation remains pending until exact acceptance or durable conflict | **PASS** | **NOT VERIFIED** — SQL not executed locally | **NOT VERIFIED** | **NOT VERIFIED** |
-| 3 | Every mutation is idempotent | **PASS** — stable IDs/receipt tests | **NOT VERIFIED** — PostgreSQL RPC harness unavailable | **NOT VERIFIED** | **NOT VERIFIED** |
+| # | Invariant | Web/PWA | Server/DB | Native Android | macOS | Telegram Bot | Mini App | Overall |
+| ---: | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | UI success follows durable local persistence | **PASS** — synchronous read-verified WAL | — | **PASS** — Room tx + outbox (525e8fb) | NOT VERIFIED | NOT VERIFIED (server ingress) | NOT VERIFIED | **NOT VERIFIED** |
+| 2 | Cloud mutation remains pending until exact acceptance or durable conflict | **PASS** | **PASS** — PG harness executed empty+seeded (`test-postgres-migrations.sh` PASS) | **PASS** — Room tx + outbox retained | NOT VERIFIED | NOT VERIFIED | NOT VERIFIED | **NOT VERIFIED** |
+| 3 | Every mutation is idempotent | **PASS** | **PASS** — PG idempotency + receipt harness PASS | **PASS** — stable mutationId + 2 pending | NOT VERIFIED | PASS (update_id uuidv5) | NOT VERIFIED | **NOT VERIFIED** |
 | 4 | Repeated requests do not duplicate tasks/completions | **PASS** — adversarial/API tests | **NOT VERIFIED** — real PostgreSQL unavailable | **NOT VERIFIED** | **NOT VERIFIED** |
 | 5 | Server retries are safe | **PASS** — TypeScript fake-server/replay tests | **NOT VERIFIED** — live RPC execution | — | **NOT VERIFIED** |
 | 6 | Client retries are safe | **PASS** — pre/post-commit timeout tests | — | **NOT VERIFIED** | **NOT VERIFIED** |
@@ -38,7 +38,7 @@ The overall status is conservative: a cross-platform invariant remains **NOT VER
 | 17 | Authentication expiry cannot lose mutations | **PASS** — 401 recovery test | **PASS** — request rejected before receipt | **NOT VERIFIED** | **NOT VERIFIED** |
 | 18 | Temporary server/Supabase failure cannot affect local execution | **PASS** | **PASS** — cloud errors do not enter local transaction | **NOT VERIFIED** | **NOT VERIFIED** |
 | 19 | Restore is atomic; failed restore preserves old valid data | **PASS** — corruption/collision/owner tests | **NOT VERIFIED** — PostgreSQL restore drill unavailable | **NOT VERIFIED** | **NOT VERIFIED** |
-| 20 | Migrations are forward-only and non-destructive/reversible | **PASS** — IndexedDB additive store migration | **NOT VERIFIED** — static SQL PASS, execution unavailable | **NOT VERIFIED** — Room v6→v7 reviewed, not compiled | **NOT VERIFIED** |
+| 20 | Migrations are forward-only and non-destructive/reversible | **PASS** | **PASS** — 6 migrations PG16 empty+seeded PASS | **PASS** — Room v7 exported 1..7, `ROOM_SCHEMA_ASSETS=PASS`, migration instrumentation compile PASS | NOT VERIFIED | NOT VERIFIED | NOT VERIFIED | **NOT VERIFIED** |
 
 No required invariant is knowingly **FAIL**. The **NOT VERIFIED** results are real release gates, not implied passes.
 
@@ -93,12 +93,12 @@ No required invariant is knowingly **FAIL**. The **NOT VERIFIED** results are re
 | `npm run verify:server` | **PASS** | Production startup and `/api/v1/health` |
 | `npm run verify:client-secrets` | **PASS** | 27 built files scanned |
 | `npm audit --audit-level=high` | **PASS** | 0 vulnerabilities |
-| `npm run verify:migrations` | **PASS** | Static additive/order/protocol checks across 6 migrations |
-| `bash -n scripts/test-postgres-migrations.sh` | **PASS** | Harness shell syntax |
-| `npm run test:migrations:postgres` | **NOT VERIFIED** | `createdb` is not installed in this container |
-| Native non-test Kotlin compile attempt | **NOT VERIFIED** | Gradle distribution unavailable; network blocked before compilation |
-| Android tests | **NOT VERIFIED** | Explicitly excluded by the user for this work session |
-| GitHub clean CI for this final tree | **NOT VERIFIED** | Pending final push/run |
+| `npm run verify:migrations` | **PASS** | Static additive/order/protocol checks across 6 migrations (2026-08-30 525e8fb) |
+| `bash scripts/test-postgres-migrations.sh` | **PASS** | PG16 empty+seeded PASS (`{"status":"PASS",...}`) at 525e8fb, local Homebrew PG17 also PASS |
+| `npm run test:migrations:postgres` | **PASS** | `bash scripts/test-postgres-migrations.sh` PASS (empty+seeded, also `test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS) — local |
+| Native Room v7 compile | **PASS** | JDK21, `./android-native/gradlew -p android-native assembleProductionDebugAndroidTest` BUILD SUCCESSFUL, 7.json identityHash 862f8cbc |
+| Android tests (native) | **PASS** | `env JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./android-native/gradlew -p android-native test` — 70 tests per variant, 0 failed (GoalflowRepositorySyncTest 36) |
+| GitHub hosted CI (this tree) | **NOT VERIFIED** | Billing-blocked (runs 33334560152, 33334480320, 33335350970 all 0 steps, `.github#1` payment failure) — local green must be confirmed after billing cleared |
 
 ## Remaining risks and required live verification
 
