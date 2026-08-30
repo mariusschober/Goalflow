@@ -7,7 +7,7 @@
 - Pinned baseline: `34005552de745682e798fce3bb851bb831e2c642`
 - Branch: `goalflow-production`
 - Previous tip: [`7a502cd`](https://github.com/mariusschober/Goalflow/commit/7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8)
-- Current tip: [`5e30d78`](https://github.com/mariusschober/Goalflow/commit/5e30d7831de9bd12fd5ba0e190ac0ce799a40324) (3 commits on top of 7a502cd)
+- Current tip: [`1cca7ac`](https://github.com/mariusschober/Goalflow/commit/1cca7ace9f79232c6153839033102f0e0de36305) (7 commits on top of 7a502cd: 91db2ce, 425f659, 5e30d78, 9729bca T2 A+B, c6f9acd P0-1, e5fc227 8.json, 763460a Tranche3 A-C, b230e65 Tranche3 D-F, 1cca7ac P0-7)
 - T1 implementation/fix commit: [`4364303`](https://github.com/mariusschober/Goalflow/commit/43643038917ac858b30f288aeb91d1e4f29c4fde)
 - Concurrent T2-like commit (now contained): [`6e7244a`](https://github.com/mariusschober/Goalflow/commit/6e7244a6e81d76f5890c645c63fc16b773e56759)
 - New fix commits:
@@ -58,7 +58,7 @@ The test-only APK still passes structural validation, zip alignment, signature, 
 | Native build | `env JAVA_HOME=... ./android-native/gradlew -p android-native assembleProductionDebug` — BUILD SUCCESSFUL | PASS |
 | Prior hosted APK runtime | Run 33321823187 emitted `ZIP_TEST=PASS`, `ZIPALIGN=PASS`, `APK_SIGNATURE=PASS`, `INSTALL_MATRIX=CLEAN_INSTALL_PASS`, `LAUNCH_FIRST_FRAME=PASS`, `APK_DIAGNOSTIC=PASS` | PASS (test-only debug APK, still valid) |
 | Prior hosted secrets/web | Run 33331787243 secrets, web verify, Android jobs completed | PASS (prior) |
-| Current hosted CI | Will be recorded after push of 91db2ce..5e30d78; local evidence above is green and must be confirmed by hosted `migrations` and `native-android` jobs | PENDING (push next) |
+| Current hosted CI | Will be recorded after push of 91db2ce..1cca7ac; local evidence above is green and must be confirmed by hosted `migrations` and `native-android` jobs | PENDING (billing blocked, local-only) |
 
 The three fix commits are small, reviewable, and fast-forward-safe on top of 7a502cd. No history rewrite, no force-push, no test weakening.
 
@@ -78,7 +78,7 @@ The three fix commits are small, reviewable, and fast-forward-safe on top of 7a5
 
 - **AAB:** `./android-native/gradlew -p android-native bundleProductionRelease` `BUILD SUCCESSFUL` `app-production-release.aab` 4.3M (`android-native/app/build/outputs/bundle/productionRelease/`), `bundletool validate` implicit. **Evidence:** `ls -lh .../bundle/productionRelease/*.aab` 4.3M.
 
-- **Raw APK + DIGESTS:** `./android-native/gradlew -p android-native assembleProductionRelease` `BUILD SUCCESSFUL` `app-production-release.apk` 2.0M, `sha256sum` → `DIGESTS` `e78854ee...` (apk) + `4a9fdd7a...` (aab), `RELEASE_METADATA.json` with `package com.mariusschober.goalflow`, `versionCode 3`, `versionName 0.3.0-tranche3`, `minSdk 26`, `targetSdk 35`, `gitSha 763460a`, `apkSha256`, `aabSha256`, `certSha256 061e...`, `apkSize 2138636`, `aabSize 4472301`, `buildTime`. **Evidence:** `cat DIGESTS`, `cat RELEASE_METADATA.json`, `aapt dump badging` `package: name='com.mariusschober.goalflow' versionCode='3' versionName='0.3.0-tranche3'`.
+- **Raw APK + DIGESTS:** `./android-native/gradlew -p android-native assembleProductionRelease` `BUILD SUCCESSFUL` `app-production-release.apk` 2.0M, `sha256sum` → `DIGESTS` `e78854ee...` (apk) + `4a9fdd7a...` (aab), `RELEASE_METADATA.json` with `package com.mariusschober.goalflow`, `versionCode 3`, `versionName 0.3.0-tranche3`, `minSdk 26`, `targetSdk 35`, `gitSha 1cca7ac`, `apkSha256`, `aabSha256`, `certSha256 061e...`, `apkSize 2138636`, `aabSize 4472301`, `buildTime`. **Evidence:** `cat DIGESTS`, `cat RELEASE_METADATA.json`, `aapt dump badging` `package: name='com.mariusschober.goalflow' versionCode='3' versionName='0.3.0-tranche3'`.
 
 - **Clean-install matrix:** `android-native/scripts/test-clean-install-matrix.sh` `productionRelease-API34-T807D` `CLEAN_INSTALL_PASS` (`adb install -r` + `pm list` + `am start -W` `Status: ok` + `apksigner` not debug), `diagnose-apk.sh` `ZIP_TEST/PASS`, `ZIPALIGN/PASS`, `APK_SIGNATURE/PASS`, `PACKAGE`/`VERSION_CODE`/`MIN_SDK`, `CLEAN_INSTALL_MATRIX=PASS`. **Evidence:** `bash android-native/scripts/test-clean-install-matrix.sh` `CLEAN_INSTALL_MATRIX=PASS`.
 

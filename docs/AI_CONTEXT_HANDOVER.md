@@ -5,11 +5,13 @@
 
 ## Read these first
 
-1. [Authoritative five-tranche production-finalization plan](./PRODUCTION_FINALIZATION_PLAN.md)
-2. [Current production-readiness evidence](./PRODUCTION_READINESS.md)
-3. [Current T1 closure and T2 handover](./TRANCHE_2_HANDOVER.md)
-4. [Product philosophy](./PRODUCT_PHILOSOPHY.md)
-5. The attached user-supplied production-finalization specification, when available.
+1. [Master handover 2026-08-30 (pause→resume)](./HANDOVER_2026-08-30_MASTER.md) — single source for must/should/could + next tasks
+2. [Authoritative five-tranche production-finalization plan](./PRODUCTION_FINALIZATION_PLAN.md)
+3. [Current production-readiness evidence](./PRODUCTION_READINESS.md) (now at 1cca7ac, Tranche 3 A-F + P0-1)
+4. [Starter prompt for next chat](./STARTER_PROMPT_NEXT.md)
+5. [Current T1 closure and T2 handover](./TRANCHE_2_HANDOVER.md)
+6. [Product philosophy](./PRODUCT_PHILOSOPHY.md)
+7. The attached user-supplied production-finalization specification, when available.
 
 The five-tranche plan is the scope authority. The readiness document is the status authority. Older handovers may contain useful historical evidence, but they must not override these documents.
 
