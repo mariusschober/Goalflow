@@ -119,3 +119,4 @@ This release is a free invite beta. Entitlements grant the complete feature set 
 
 For a detailed record of the production rewrite, verification status, and remaining
 launch work, see [docs/IMPLEMENTATION_HANDOFF.md](./docs/IMPLEMENTATION_HANDOFF.md).
+
