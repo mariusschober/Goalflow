@@ -126,11 +126,13 @@ jobs:
           key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-native-
-      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/test-apk-path-handoff.sh
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-room-schema-assets.sh
       - name: Run APK diagnostic regression test
         run: bash android-native/scripts/test-diagnose-apk.sh
       - name: Run APK path handoff regression test
         run: sh android-native/scripts/test-apk-path-handoff.sh
+      - name: Run Room schema asset regression test
+        run: sh android-native/scripts/test-room-schema-assets.sh
       - run: ./android-native/gradlew -p android-native test --stacktrace --info
       - name: Compile native instrumentation tests
         run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
