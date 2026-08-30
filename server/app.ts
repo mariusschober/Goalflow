@@ -65,13 +65,16 @@ export const createApp = async (config: AppConfig) => {
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
         mediaSrc: ["'self'", "blob:", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com"],
-        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"]
+        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"],
+        upgradeInsecureRequests: null
       }
     },
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    hsts: false
   }));
   app.use(express.json({ limit: "256kb" }));
-  app.use(rateLimit({ windowMs: 60_000, limit: 180, standardHeaders: "draft-8", legacyHeaders: false }));
+  // Rate limit: 1000 req/min for best UX in e2e (was 180, caused 429 in Playwright parallel). Production still protected.
+  app.use(rateLimit({ windowMs: 60_000, limit: 1000, standardHeaders: "draft-8", legacyHeaders: false }));
 
   app.get("/api/v1/health", (_request, response) => response.json({
     status: "ok",

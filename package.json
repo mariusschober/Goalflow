@@ -20,6 +20,9 @@
     "test:migrations:postgres": "bash scripts/test-postgres-migrations.sh",
     "restore:backup": "tsx scripts/restore-production-backup.ts",
     "verify:release": "npm run lint && npm test && npm run build && npm run verify:server && npm run verify:client-secrets && npm audit --audit-level=high",
+    "verify:web-release": "npm run lint && npm test && npm run verify:migrations && npm run build && npm run verify:server && npm run verify:client-secrets && npm audit --audit-level=high",
+    "test:e2e": "playwright test",
+    "verify:web-e2e": "playwright test --reporter=list",
     "android:sync": "npm run build:client && cap sync android",
     "build:client:test": "vite build --mode test",
     "android:sync:test": "npm run build:client:test && cap sync android",
@@ -55,6 +58,7 @@
   "devDependencies": {
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
+    "@playwright/test": "^1.48.2",
     "@vitejs/plugin-react": "^5.0.0",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.28.0",
