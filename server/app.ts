@@ -11,6 +11,7 @@ import { createAiRouter } from "./routes/ai";
 import { createTaskRouter } from "./routes/tasks";
 import { createTelegramRouter } from "./routes/telegram";
 import { createTelegramAuthRouter } from "./routes/telegramAuth";
+import { createTelegramMiniRouter } from "./routes/telegramMini";
 import { createSyncRouter } from "./routes/sync";
 import { createAdminInviteRouter } from "./routes/adminInvites";
 import { createAccountRouter } from './routes/account';
@@ -61,11 +62,11 @@ export const createApp = async (config: AppConfig) => {
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
-        defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(localOnly ? ["'unsafe-inline'"] : []), "https://challenges.cloudflare.com"], styleSrc: ["'self'", "'unsafe-inline'"],
+        defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(localOnly ? ["'unsafe-inline'"] : []), "https://challenges.cloudflare.com", "https://telegram.org"], styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"],
-        connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
+        connectSrc: ["'self'", "https://api.telegram.org", "https://telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
         mediaSrc: ["'self'", "blob:", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com"],
-        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"]
+        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com", "https://web.telegram.org"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"]
       }
     },
     crossOriginEmbedderPolicy: false
@@ -86,11 +87,16 @@ export const createApp = async (config: AppConfig) => {
 
   app.use("/api/v1/auth", createTelegramAuthRouter(config, admin));
   app.use("/api/v1/telegram", createTelegramRouter(config, admin, speech, logger));
+  app.use("/api/v1/telegram/mini", createTelegramMiniRouter(config, admin));
   app.use("/api/v1", auth, requireOwnerMfa, createAdminInviteRouter(admin), createAccountRouter(admin, config.TELEGRAM_OIDC_PROVIDER_ID), createSyncRouter(admin), createTaskRouter(admin));
   app.use("/api/v1/ai", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));
   app.use("/api/gemini", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));
 
   if (config.NODE_ENV === "production") {
+    const miniPath = path.resolve(process.cwd(), "dist/mini");
+    app.use("/mini", express.static(miniPath, { index: false, maxAge: "1y", immutable: true, setHeaders(response, filePath) {
+      if (filePath.endsWith("index.html")) response.setHeader("cache-control", "no-cache");
+    }}));
     const clientPath = path.resolve(process.cwd(), "dist/client");
     app.use(express.static(clientPath, { index: false, maxAge: "1y", immutable: true, setHeaders(response, filePath) {
       if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith("manifest.webmanifest")) response.setHeader("cache-control", "no-cache");

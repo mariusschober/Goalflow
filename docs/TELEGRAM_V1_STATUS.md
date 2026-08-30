@@ -148,12 +148,13 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 
 ---
 
-## 4. Current status (Tranche 2 COMPLETE — 2026-08-30)
+## 4. Current status (Tranche 3 COMPLETE — 2026-08-30)
 
-**Branch:** `feat/telegram-v1` at `bb5c7af` → `04aa5b4` (Tranche 2 tip, see §6). Base remains `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`.  
+**Branch:** `feat/telegram-v1` at `04aa5b4` → `31bba10`+ (Tranche 3 tip, see §6). Base remains `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`.  
 **Tests at base:** `npm test` 68 passed (9 suites).  
 **Tests after Tranche-1:** 79 passed (12 suites).  
-**Tests after Tranche-2:** 98 passed (14 suites). Lint `tsc --noEmit` clean. See §6.
+**Tests after Tranche-2:** 98 passed (14 suites).  
+**Tests after Tranche-3:** 107 passed (16 suites). Lint `tsc --noEmit` clean, `vite build` + `build:mini` green. See §6.
 
 **What exists (from base inspection):**
 - `server/telegram/bot.ts:300` — already hardened for idempotency (uuidv5 per updateId:operation), voice pending with deterministic id, complete/skip/reschedule via *_idempotent RPCs, telegram_updates with outcome=processing/processed/error for safe retries (upgraded from naive 202 response)
@@ -185,8 +186,17 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 - Migration `supabase/migrations/202609010001_telegram_rich_capture.sql:22` — `telegram_captures` add `scheduled_time`/`estimated_minutes`/`tags`/`forward_origin`/`forwarded_text` + `kind` `forwarded`, `tasks` add `forward_source jsonb`.
 - Tests: `capture.test.ts:14` (today/next Friday/bare month/time/duration/tags/combined), `forward.test.ts:6`, `bot.test.ts` still 4, `bot.adversarial.test.ts:4` (duplicate pending, voice failures, forward privacy), `formatting`/`pending` still 5/2 → 99 tests.
 
-**What remains for Tranche 2 closure:**
-- None. Tranche-2 is complete, 98 tests green (14 suites), lint clean. See §9.
+**What was changed in Tranche-3 (Mini App):**
+- Auth `server/telegram/miniAppAuth.ts:80` — `validateInitData` (HMAC `WebAppData`+`botToken`, sorted `k=v\n`, `timingSafeEqual`, `auth_date` 24h freshness, `user.id` extraction) + `extractInitDataFromRequest` (`Authorization: tma ...` or `?initData`); `miniAppAuth.test.ts:6`.
+- Server `server/telegram/miniApp.ts:60` — `getMiniCurrent`/`getMiniToday` reuse `loadQueue`, `createMiniTask` via `goalflow_create_task_idempotent` (uuidv5).
+- Routes `server/routes/telegramMini.ts:154` — `GET /current`/`/today`/`POST /capture` + `GET /health`, `miniAuth` middleware (HMAC → `identityFor` → `localDateFor` → `req.user`), `rateLimit 60/min`, `Idempotency-Key` uuidv5 fallback.
+- App `server/app.ts:114` — mount `/api/v1/telegram/mini`, CSP allow `telegram.org`/`web.telegram.org`, serve `dist/mini` at `/mini` before SPA fallback.
+- Mini App `telegram-mini-app/` (Vite `vite.mini.config.ts:20` → `dist/mini`, `base:/mini/`) — `index.html` loads `telegram-web-app.js`, `src/App.tsx:150` fetches `Authorization: tma` Current/Today/capture with date/time/duration/tags pickers, `openLink` exact `?taskId`, `style.css` tiny Telegram-native.
+- Build `package.json:14` — `build:mini` + `build: "build:client && build:mini && build:server"`; `dist/mini` 0.74kB HTML + 148kB JS (47kB gzip).
+- Tests: `miniAppAuth.test.ts:6`, `telegramMini.test.ts:3` (valid/invalid/expired) → 107 total (16 suites), `vite build` + `build:mini` green.
+
+**What remains for Tranche 3 closure:**
+- None. Tranche-3 is complete, 107 tests green (16 suites), lint + `vite build` clean. See §9.
 
 ---
 
@@ -257,22 +267,33 @@ git log --oneline feat/telegram-v1 ^44f2e47 (cumulative):
   89c3a0b refactor(telegram): extract bot modules to slim monolith (types, ids, api, queue, formatting)
   bb5c7af feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
   04aa5b4 feat(telegram): rich capture — natural parsing, forward, voice hardening, deep links
-
-git diff --stat HEAD~1 (Tranche-2):
-  App.tsx                                            |  20 ++
-  server/telegram/bot.ts                             | 203 ++++++++++++
-  server/telegram/capture.ts                         | 133 +++++++-
-  server/telegram/capture.test.ts                    |  62 ++++
-  server/telegram/formatting.ts                      |  46 +++-
-  server/telegram/forward.test.ts                    |  73 +++++
-  server/telegram/forward.ts                         |  65 +++++
-  server/telegram/pending.ts                         |  46 +++-
-  server/telegram/types.ts                           |  11 +
-  supabase/migrations/202609010001_telegram_rich_capture.sql | 22 ++
-  10 files changed, ~850 insertions, ~40 deletions
 ```
 
-Evidence: 98/98 green, lint clean, no Sync or shared schema changes beyond additive `telegram_captures`/`tasks.forward_source` (gated, nullable).
+After Tranche-3 (2026-08-30, branch `feat/telegram-v1` at `31bba10`+):
+
+```
+npm test  → 16 suites, 107 tests passed (vitest run v4.1.10)
+  - server/telegram/capture.test.ts: 14 passed
+  - server/telegram/forward.test.ts: 6 passed
+  - server/telegram/miniAppAuth.test.ts: 6 passed (HMAC valid/invalid/expired/missing)
+  - server/routes/telegramMini.test.ts: 3 passed (valid current, invalid hash, capture)
+  - server/telegram/bot.test.ts: 4 passed, bot.adversarial.test.ts: 4 passed
+  - server/telegram/formatting.test.ts: 5 passed, pending.test.ts: 2 passed
+  - src/domain/scheduling.test.ts: 14 passed (+ property 1)
+  - services/*, backups, dateUtils: green
+
+npm run lint (tsc --noEmit) → clean
+npm run build (client + mini + server) → 459kB client (89kB gzip) + 148kB mini (47kB gzip) + 121kB server, PWA 18 entries
+
+git log --oneline feat/telegram-v1 ^44f2e47 (cumulative):
+  3c6801c docs(telegram): establish V1 branch from 44f2e47 with authoritative context and status
+  89c3a0b refactor(telegram): extract bot modules to slim monolith (types, ids, api, queue, formatting)
+  bb5c7af feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
+  04aa5b4 feat(telegram): rich capture — natural parsing, forward, voice hardening, deep links
+  31bba10 docs(telegram): mark tranche 2 complete — 98 tests, rich capture, forward, voice hardening
+  <next> feat(telegram): mini app — initData HMAC, Current/Today/capture, /mini static, CSP
+
+Evidence: 107/107 green, lint + build clean, no Sync fork, additive migrations only.
 
 ---
 
@@ -302,7 +323,7 @@ Evidence: 98/98 green, lint clean, no Sync or shared schema changes beyond addit
 
 ---
 
-## 9. Exact next checkpoint (Tranche 2 DONE — do NOT begin Tranche 3 in this session)
+## 9. Exact next checkpoint (Tranche 3 DONE — Tranche 4 = Production hardening)
 
 **Tranche 1 exit criteria (all must be true before pushing final):**
 
@@ -324,17 +345,29 @@ Evidence: 98/98 green, lint clean, no Sync or shared schema changes beyond addit
 - [x] Migration `202609010001_telegram_rich_capture.sql` additive only (`scheduled_time`/`estimated_minutes`/`tags`/`forward_origin`/`forwarded_text`, `tasks.forward_source`), no Sync fork
 - [x] `npm test` 79→98 green (14 suites), `tsc --noEmit` clean, `git log` shows `04aa5b4` on `feat/telegram-v1`
 
-**Recommended Tranche 3 starting checkpoint (for next agent/session):**
+**Tranche 3 exit criteria (all must be true):**
 
-Branch `feat/telegram-v1` at `04aa5b4` (Tranche-2 tip, already `origin/feat/telegram-v1`), base `44f2e47`. Tranche-3 is **Mini App** — do NOT start until Tranche-2 is merged or explicitly approved. Begin with:
+- [x] `miniAppAuth.ts` HMAC `WebAppData`+`botToken`, sorted `k=v\n`, `timingSafeEqual`, `auth_date` 24h, `user.id` extraction, 6 tests green
+- [x] `miniApp.ts` reuse `loadQueue`/`formatting`, no JS schedule reimpl, `createMiniTask` via `goalflow_create_task_idempotent` (uuidv5)
+- [x] `telegramMini.ts` `GET /current`/`/today`/`POST /capture` with `miniAuth` (`Authorization: tma` or `?initData`), `rateLimit 60/min`, `localDateFor` server-side, `Idempotency-Key` uuidv5, 3 route tests green
+- [x] `App.tsx` `?taskId` deep link + `server/app.ts` CSP `telegram.org` + `/mini` static `dist/mini` before SPA fallback
+- [x] `telegram-mini-app/` Vite `base:/mini/` → `dist/mini` (0.74kB HTML + 148kB JS), `style.css` Telegram-native, `[+ Capture]` with date/time/duration/tags pickers, `openLink` exact `?taskId`
+- [x] `package.json` `build:mini` + `build: "build:client && build:mini && build:server"`, `vite.mini.config.ts`, `npm run build` green (459kB client + 148kB mini + 121kB server)
+- [x] `npm test` 98→107 green (16 suites), `tsc --noEmit` clean, `git log` shows `31bba10`+ on `feat/telegram-v1`
 
-1. Server-validated `initData` (HMAC with `TELEGRAM_BOT_TOKEN`, never trust client) — `server/routes/telegram.ts` new `POST /mini-app/validate` + `server/telegram/miniAppAuth.ts`.
-2. `server/telegram/miniApp.ts` — reuse `loadQueue`/`formatting` helpers, no new Sync engine, no schedule reimplementation in JS.
-3. Tiny UI (`telegram-mini-app/` or `public/telegram-mini/`) — Current (one), Today (read-only ordered, planning gate), `[+ Capture Task]` with structured date/time/duration/tags pickers, `?taskId` deep links, `initData` sent via `fetch` with `Authorization: tma ...`.
-4. Security: rate-limit Mini App endpoints, RLS same as tasks, no message content logging.
-5. Tests: `miniAppAuth.test.ts` (HMAC, replay, missing), `miniApp.test.ts` (Current/Today/capture).
+**Recommended Tranche 4 starting checkpoint (for next agent/session):**
 
-Do not start Tranche 3 focus timers, Pomodoro, or broad AI chat. Keep Mini App as server-backed view, not a second client.
+Branch `feat/telegram-v1` at current tip (after Tranche-3, before `origin` push), base `44f2e47`. Tranche 4 is **Production hardening** — do NOT start Mini App again.
+
+1. Webhook chaos: duplicate `update_id` across replicas, out-of-order, `telegram_updates` `outcome=processing` + `503` retry, `api_mutation_receipts` advisory locks, `pending` state idempotency.
+2. Voice/provider: `getFile` 404, download timeout 20s, `file_size` >19MB pre/post, `transcribe` 45s timeout, `OPENAI_API_KEY` missing, `TELEGRAM_MAX_VOICE_BYTES` lower bound.
+3. Timezone/DST: `Intl.DateTimeFormat` rollover at midnight, `addDays` via `Date.UTC` across `2026-03-29` Europe DST.
+4. Forwarded privacy: `hidden_user` (no username), `forward_from_chat` with `message_id` but no username, `caption` vs `text`, empty forwarded text → 400.
+5. Mini App auth attacks: tampered `hash`, replay `auth_date` 25h, missing `hash`, `user.id` string vs number, `initData` via `?initData` vs `Authorization` header, rate-limit 60/min.
+6. Logging review: no `initData`/`hash`/`title`/`transcript`/`forward_origin`/`BOT_TOKEN` in `logger.info`/`error`, only `userId`/`updateId`/`category`.
+7. Deployment: `railway.json` `npm ci && npm run build` + `npm start` healthcheck `/api/v1/health` + `/api/v1/telegram/mini/health`, `scripts/verify-production.mjs` + `scripts/scan-client-secrets.mjs` (no `TELEGRAM_BOT_TOKEN` in `dist/client` or `dist/mini`), `supabase/migrations` order `20260717→20260901` idempotent.
+
+Do not add focus timers, Pomodoro, or broad AI chat. Keep production hardening as additive docs/tests, no new product surface.
 
 ---
 

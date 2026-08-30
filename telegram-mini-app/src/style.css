@@ -1,0 +1,7 @@
+.container { max-width: 400px; margin: 0 auto; padding: 16px; }
+.card { background: var(--tg-theme-bg-color, #fff); border: 1px solid #e5e7eb; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+.btn { background: var(--tg-theme-button-color, #4F46E5); color: var(--tg-theme-button-text-color, #fff); border: none; border-radius: 8px; padding: 10px 16px; font-weight: 600; cursor: pointer; width: 100%; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary { background: #f3f4f6; color: #374151; }
+.input { width: 100%; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; margin-bottom: 8px; }
+.label { font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; display: block; }
