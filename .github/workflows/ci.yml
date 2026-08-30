@@ -127,7 +127,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-native-
       - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh
-      - run: ./android-native/gradlew -p android-native test
+      - run: ./android-native/gradlew -p android-native test --stacktrace --info
       - name: Compile native instrumentation tests
         run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
       - name: Compile native startup benchmark
