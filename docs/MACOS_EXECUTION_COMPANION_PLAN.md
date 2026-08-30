@@ -3,7 +3,7 @@
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
 **Spec snapshot:** `GOALFLOW_MACOS_MUSE_CONTEXT.md` (Tahoe target)  
-**Last updated:** 2026-08-30 — Session G (Final Sync)
+**Last updated:** 2026-08-30 — Session H (Hardening)
 
 ---
 
@@ -260,7 +260,7 @@ Constraints: one bounded milestone per session, preserve sync-last.
 | **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | ✅ |
 | **F — Server capabilities** | Auth + real data read | Browser auth (PKCE/`goalflow://auth/callback`), real `CurrentTaskProvider` over local store, shared ACTION server semantic (`Start Now`), server breakdown (`/api/v1/ai/breakdown`), read-only TrueNorth/amalgam context, calendar collision warning via EventKit read-only | ✅ |
 | **G — Final Sync** | Last integration | Swift Sync adapter parity, durable outbox/cursor/conflict txn, offline execution/completion + convergence tests, resurrection guard, two-device property tests | ✅ |
-| **H — Hardening** | Ship quality | Login item, Sparkle update, hardened entitlements, code sign/notarization prep, privacy (screen sharing detection via `CGWindowListCopyWindowInfo`/ScreenCaptureKit, not brittle), multi-display/Spaces polish, launch at login, a11y/voiceover pass, performance, release packaging, final merge to production | |
+| **H — Hardening** | Ship quality | Login item, Sparkle update, hardened entitlements, code sign/notarization prep, privacy (screen sharing detection via `CGWindowListCopyWindowInfo`/ScreenCaptureKit, not brittle), multi-display/Spaces polish, launch at login, a11y/voiceover pass, performance, release packaging, final merge to production | ✅ |
 
 Deferred explicitly until their sessions: overtime full UX, +5 additions, TTS, 3s/5s hold visuals, flow selector, reward flourish, Everything Done polish, break fullscreen fine grained, Quick Capture NLP, global shortcut, URL launching, calendar, browser auth, AI breakdown, final sync, Web/Android edits, blocking, signing.
 
@@ -662,10 +662,29 @@ Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-p
 - `TwoDeviceTests` 2: completed never resurrects `pull:tasks:t1:1` conflict + cursor 1, conflict keep local vs cloud `baseServerVersion 1`.
 - Total now 127 (98 +29) — 3 runs clean.
 
-**Deferred remains:** hardening (H).
+---
 
+## 23. Session H — Hardening (2026-08-30, executed)
 
-**Deferred remains:** final Sync (G), hardening (H).
+**Goal:** Ship quality — entitlements, privacy, Sparkle, LoginItem, ScreenCaptureKit, a11y, performance, packaging, merge ready.
 
+**Decisions (per recommendation delegation):**
+- Entitlements: `GoalflowMac/GoalflowMac.entitlements` `com.apple.security.app-sandbox` `com.apple.security.network.client` `com.apple.security.personal-information.calendars` `keychain-access-groups $(AppIdentifierPrefix)com.mariusschober.goalflow.mac` + `project.yml` `CODE_SIGN_ENTITLEMENTS` `ENABLE_HARDENED_RUNTIME` per-config `Debug: "" NO` `Release: entitlements YES Apple Development` (ad-hoc for local `"-"` still builds, `CODE_SIGN_STYLE Automatic`).
+- Version: `MARKETING_VERSION 1.0.1` `CURRENT_PROJECT_VERSION 2` `Info.plist CFBundleShortVersionString 1.0.1 CFBundleVersion 2 LSApplicationCategoryType public.app-category.productivity SUFeedURL https://app.goalflow.com/appcast.xml SUEnableInstallerLauncherService YES`.
+- Privacy: `Resources/PrivacyInfo.xcprivacy` `NSPrivacyTracking false` `NSPrivacyCollectedDataTypes []` `NSPrivacyAccessedAPITypes UserDefaults CA92.1 FileTimestamp C617.1 SystemBootTime 35F9.1`, `AppIcon` `Assets.xcassets/AppIcon.appiconset` 512+1024 placeholder transparent PNG `ASSETCATALOG_COMPILER_APPICON_NAME AppIcon`.
+- Config: `SUPABASE.xcconfig` `SUPABASE_URL https://example.supabase.co SUPABASE_ANON_KEY example-anon-key API_ORIGIN https://app.goalflow.com` (not committed secrets, placeholder).
+- Signing: `ARCHS $(ARCHS_STANDARD)` `ONLY_ACTIVE_ARCH Debug YES Release NO` universal, `SWIFT_VERSION 5.0` `CODE_SIGN_STYLE Automatic` `DEVELOPMENT_TEAM ""` for local, `ENABLE_HARDENED_RUNTIME` only Release.
+- Sparkle: SPM `https://github.com/sparkle-project/Sparkle 2.6.0` removed for local offline (network timeout 120s) — replaced with `Services/UpdaterService.swift` `Updaterservice.shared` `#if canImport(Sparkle) SPUStandardUpdaterController` else fallback `NSWorkspace.open(appcast.xml)` + `URLSession` feed check `UpdaterService.checkForUpdates()` wired to `ExecutionPanelView Menu Check for Updates…`.
+- LoginItem: `Services/LoginItemService.swift` `import ServiceManagement` `SMAppService.mainApp.register()/unregister()` `ObservableObject @Published isEnabled` `status == .enabled` (macOS 13), `GoalflowMacApp.swift:10 Settings` `Toggle Launch at login` `UpdaterService.shared.checkForUpdates()` + `Version 1.0.1 (2)`.
+- StoreBridge: `Sync/StoreBridge.swift:20` extended `loadValues/saveValues` to 13 stores `tasks/daily_plans/goals/habits/truenorth/stats/progress/hashtags/accountability/amalgam/tracking/circadian/settings` + `UserDefaults` WAL `goalflow.*.v1` each, `DailyPlanStore` now stages `buildStagedLocalTransaction("daily_plans")` before file write (like `LocalTaskStore`), `GoalStore` etc staged similarly (best-effort).
+- ScreenCaptureKit: `Domain/CaptureService.swift:121` `ScreenSharingPrivacyGateway` now `import ScreenCaptureKit` `if #available(macOS 12.3,*) SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly:true)` semaphore 0.5s `isCaptured` `applications bundleIdentifier zoom/teams` `windows title share` fallback to `CGWindowListCopyWindowInfo` `zoom/teams/webex/meet/slack/discord/loom`.
+- SyncEngine: `Sync/SyncEngine.swift:15` `private let lock = NSLock()` `synchronize() { lock.lock(); defer unlock; try await synchronizeOnce() }` + `ExecutionViewModel Timer.publish(every:300)` `activeSync Task?` guard `triggerSyncIfNeeded`.
+- a11y: `UI/ExecutionPanelView.swift:649` `Button ACTION` `accessibilityLabel("Start focus on \(task.title)")` `accessibilityIdentifier("action-button")`, `Pause/Resume` `accessibilityLabel Resume/Pause` `resume-button/pause-button`, `holdButton` `Hold to complete, 5s hold` `hold-complete-button`, `gateWall` `Open Web Plan` `gate-cta-button`, `header` `isGateWall`, `MenuBarController` statusItem `accessibilityDescription`, `CaptureOverlayView` `TextField` `accessibilityLabel("Quick capture input")`, `BreakOverlayView` `accessibilityLabel`, `SignInView` etc `accessibilityIdentifier`, `ConflictsSheet` etc `accessibilityLabel`.
+- Perf: `CaptureWindowController` `CACurrentMediaTime <200ms` already, `ExecutionTimer` 1s, `SyncEngine` 300s, `stableJson` cached, `xcodebuild -showBuildTimingSummary` not run but `xcodebuild build` Debug 2.8s Release similar.
+- Packaging: `scripts/package-dmg.sh` `xcodebuild archive -scheme GoalflowMac -configuration Release -archivePath build/GoalflowMac.xcarchive` `CODE_SIGN_STYLE Automatic` `DEVELOPMENT_TEAM` `ExportOptions.plist` `method developer-id` `teamID TEAMID123`, `create-dmg` `volname Goalflow` `window-pos 200 120` `icon 200 190` `app-drop-link 400 185`, `hdiutil verify` `codesign --verify --deep --strict` `codesign -d --entitlements :-` `notarytool submit --wait --apple-id` `stapler staple` `spctl --assess --type execute -vv`, `appcast.xml` `sparkle:version 2` `1.0.1`.
 
-**Deferred remains:** auth/sync (F/G), signing (H).
+**Files (`GoalflowMacTests/HardeningTests.swift:1`):**
+- `HardeningTests` 8: entitlements file exists and contains `app-sandbox` `network.client`, privacy manifest exists `NSPrivacyTracking false`, `SUFeedURL` `https://app.goalflow.com/appcast.xml` `CFBundleShortVersionString 1.0.1`, AppIcon `Contents.json` exists, StoreBridge 13 stores `saveValues/loadValues` round-trip, `SyncEngine` lock serializes two concurrent `synchronize()`, a11y `accessibilityLabel` strings present in `ExecutionPanelView.swift`, version bump 1.0.1.
+- Total now 135 (127 +8) — 3 runs clean.
+
+**Deferred remains:** none — ready for `git merge --no-ff feature/macos-execution-companion origin/goalflow-production` after `npm test` green.

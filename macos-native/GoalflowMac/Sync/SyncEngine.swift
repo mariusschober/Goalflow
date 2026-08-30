@@ -13,6 +13,7 @@ final class SyncEngine: @unchecked Sendable {
     }
 
     func synchronize() async throws {
+        lock.lock(); defer { lock.unlock() }
         try await synchronizeOnce()
     }
 

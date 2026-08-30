@@ -6,8 +6,11 @@ final class DailyPlanStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
+    private let syncMetaStore: SyncMetaStore
+    private let deviceIdStore: DeviceIdStore
+    private let userKey = "localUser"
 
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.daily_plans.v1") {
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.daily_plans.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
@@ -16,6 +19,10 @@ final class DailyPlanStore: @unchecked Sendable {
         self.defaults = defaults; self.walKey = walKey
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         decoder = JSONDecoder()
+        let dir = self.fileURL.deletingLastPathComponent()
+        let syncURL = dir.appendingPathComponent("sync.json")
+        self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
+        self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
 
     private func ensureDirectory() throws {
@@ -37,12 +44,30 @@ final class DailyPlanStore: @unchecked Sendable {
 
     func saveAll(_ plans: [DailyPlan]) throws {
         let norm = normalized(plans)
+        // Stage for sync
+        do {
+            let prev = loadAll()
+            let prevVal: Any? = prev.map { ["id": $0.localDate, "localDate": $0.localDate, "confirmedAt": $0.confirmedAt, "taskIds": $0.taskIds] as [String: Any] }
+            let nextVal: Any? = norm.map { ["id": $0.localDate, "localDate": $0.localDate, "confirmedAt": $0.confirmedAt, "taskIds": $0.taskIds] as [String: Any] }
+            if let tx = try? buildStagedLocalTransaction(storeName: "daily_plans", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
+                var meta = syncMetaStore.load()
+                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) {
+                    try? syncMetaStore.save(newMeta)
+                }
+            }
+        } catch {}
         let data = try encoder.encode(norm)
         try ensureDirectory()
         do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
         guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after write") }
         if read != data { throw FocusSessionStoreError.readBackMismatch }
         defaults.set(data, forKey: walKey)
+    }
+
+    private func nextOrder() -> Int {
+        struct C { static var counter = 0 }
+        C.counter = (C.counter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + C.counter
     }
 
     func save(_ plan: DailyPlan) throws {

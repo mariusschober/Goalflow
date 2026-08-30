@@ -2,17 +2,17 @@
 
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
-**Latest commit at handoff:** `daef4d079ff339c64efa101a9bf635bbd3021e3e` (Session F — Server Capabilities)  
-**Previous slice commit:** `daef4d079ff339c64efa101a9bf635bbd3021e3e` (Session F — Server Capabilities)  
+**Latest commit at handoff:** `0caab040b7f25b615b6941acb4b641eaa486b05a` (Session H — Hardening)  
+**Previous slice commit:** `003e3c47738710b3531352435c85a4cad1f61c8c` (Session G — Final Sync)  
 **Base:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30, verified via `git merge-base`)  
 **Xcode / SDK at build:** Xcode 26.6 (17F113), macOS SDK 26.5, Swift 6.3.3, Target: arm64-apple-macosx26.0, DeploymentTarget 15.0 (Tahoe target per context is 26 — built against 26.5 SDK; plan deploys to 15.0 for broader beta, tighten to 26 at hardening)  
-**Status:** Session G complete — final sync DONE, ready for Session H
+**Status:** Session H complete — hardening DONE, ready for production merge
 
 ---
 
 ## Current milestone
 
-**Session G — Final Sync: DONE** (predecessors A, B, C, D, E, F remain DONE)
+**Session H — Hardening: DONE** (predecessors A, B, C, D, E, F, G remain DONE)
 
 **Session A scope (traceability):** native shell + Current → ACTION → Active Timer via deterministic local/demo data.
 
@@ -26,7 +26,9 @@
 
 **Session F scope (traceability):** Browser PKCE `goalflow://auth/callback` Keychain JWT, real `CurrentTaskProvider` gate `getPlanningGate` `monthly/daily/ready/empty`, read-only `Goal`/`TrueNorth`/`amalgam` + `goalId` dot, shared `ACTION` prep, server `POST /api/v1/ai/breakdown` + local `broken_down` children `parentTaskId` `plannedOrder` tail, `EventKit` read-only overlap `14:30`.
 
-**Session G scope:** Swift Sync parity `SyncMeta cursor/versions/outbox/conflicts` `stableJson` `RECORD_LEVEL_STORES` `tasks/goals/habits/truenorth/daily_plans`, `buildStagedLocalTransaction` per-entity, `readyOutbox` dependency+one-per-entity limit 50, `applyPushResults` exact proof, `applyRemotePage` cursor monotonicity `nextCursor==max(serverVersion)`, `sync.json` file txn `storeBridge`, `POST /sync/push` + `GET /sync/pull` loops `Bearer` `Keychain`, resurrection guard, conflict ledger explicit
+**Session G scope (traceability):** Swift Sync parity `SyncMeta cursor/versions/outbox/conflicts` `stableJson` `RECORD_LEVEL_STORES` `tasks/goals/habits/truenorth/daily_plans`, `buildStagedLocalTransaction` per-entity, `readyOutbox` dependency+one-per-entity limit 50, `applyPushResults` exact proof, `applyRemotePage` cursor monotonicity `nextCursor==max(serverVersion)`, `sync.json` file txn `storeBridge`, `POST /sync/push` + `GET /sync/pull` loops `Bearer` `Keychain`, resurrection guard, conflict ledger explicit
+
+**Session H scope:** Hardening `app-sandbox` `network.client` `personal-information.calendars` `keychain-access-groups`, `PrivacyInfo`, `AppIcon`, `SUPABASE.xcconfig`, `ARCHS_STANDARD`, `Sparkle` `SUFeedURL` `UpdaterService`, `SMAppService` `launchAtLogin`, `ScreenCaptureKit` `SCShareableContent`, `StoreBridge` 13 stores, `SyncEngine` `NSLock`, `a11y` `VoiceOver`, `DMG` `notarization` `spctl`
 
 **Implemented in Session D:**
 - `BreakState` (`Domain/BreakState.swift:1`) `durationSeconds: Int? (nil=Open)`, `startedAt`, `startedAtMonotonic`, `sourcePhase`, `taskId`, `elapsed/remaining/isExpired/isOpenEnded`, `max(60, duration)` clamp.

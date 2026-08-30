@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import ScreenCaptureKit
 
 enum CaptureIntent: String, Sendable { case add, action }
 
@@ -120,11 +121,36 @@ protocol PrivacyGateway: Sendable { var isScreenSharing: Bool { get } }
 
 struct ScreenSharingPrivacyGateway: PrivacyGateway {
     var isScreenSharing: Bool {
+        if #available(macOS 12.3, *) {
+            var result = false
+            let sem = DispatchSemaphore(value: 0)
+            Task {
+                do {
+                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+                    if content.displays.contains(where: { $0.frame.width > 0 }) {
+                        for app in content.applications where app.bundleIdentifier.lowercased().contains("zoom") || app.bundleIdentifier.lowercased().contains("teams") {
+                            result = true
+                        }
+                    }
+                    for win in content.windows {
+                        let owner = win.owningApplication?.bundleIdentifier.lowercased() ?? ""
+                        let title = win.title?.lowercased() ?? ""
+                        if owner.contains("zoom") || owner.contains("teams") || owner.contains("webex") || owner.contains("meet") || owner.contains("slack") || owner.contains("discord") || owner.contains("loom") {
+                            if title.contains("share") || win.isOnScreen { result = true }
+                        }
+                    }
+                } catch {}
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 0.5)
+            if result { return true }
+        }
+        // Fallback to CGWindowList
         guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
         for win in info {
             if let owner = win[kCGWindowOwnerName as String] as? String {
                 let lower = owner.lowercased()
-                if lower.contains("zoom") || lower.contains("teams") || lower.contains("webex") || lower.contains("meet") {
+                if lower.contains("zoom") || lower.contains("teams") || lower.contains("webex") || lower.contains("meet") || lower.contains("slack") || lower.contains("discord") || lower.contains("loom") {
                     if let name = win[kCGWindowName as String] as? String, name.lowercased().contains("share") { return true }
                 }
             }

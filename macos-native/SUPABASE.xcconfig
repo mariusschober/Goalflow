@@ -1,0 +1,5 @@
+// SUPABASE.xcconfig — injected via INFOPLIST_PREPROCESS
+// Set actual values via `export SUPABASE_URL=...` before archive, or edit here (not committed with secrets)
+SUPABASE_URL = https://example.supabase.co
+SUPABASE_ANON_KEY = example-anon-key
+API_ORIGIN = https://app.goalflow.com

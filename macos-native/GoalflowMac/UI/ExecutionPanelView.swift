@@ -507,6 +507,8 @@ struct ExecutionPanelView: View {
                 Button("Toggle Frog") { vm.toggleFrog() }
                 Button("Reset Demo (clear session)") { vm.resetDemo() }
                 Divider()
+                Button("Check for Updates…") { UpdaterService.shared.checkForUpdates() }
+                Divider()
                 if vm.isAuthenticated {
                     Button("Sign out") { KeychainSessionStore().clear(); vm.isAuthenticated = false; NotificationCenter.default.post(name: .authDidChange, object: nil) }
                 } else {
@@ -626,12 +628,12 @@ struct ExecutionPanelView: View {
                                 Button(action: { vm.resume() }) {
                                     HStack(spacing: 6) { Image(systemName: "play.fill").font(.system(size: 11, weight: .bold)); Text("Resume").font(.system(size: 12, weight: .bold, design: .rounded)) }
                                     .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.green)).shadow(color: Color.green.opacity(0.25), radius: 8, x: 0, y: 4)
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).accessibilityLabel("Resume focus").accessibilityIdentifier("resume-button")
                             } else {
                                 Button(action: { vm.pause() }) {
                                     HStack(spacing: 6) { Image(systemName: "pause.fill").font(.system(size: 11, weight: .bold)); Text("Pause").font(.system(size: 12, weight: .bold, design: .rounded)) }
                                     .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.orange)).shadow(color: Color.orange.opacity(0.25), radius: 8, x: 0, y: 4)
-                                }.buttonStyle(.plain)
+                                }.buttonStyle(.plain).accessibilityLabel("Pause focus").accessibilityIdentifier("pause-button")
                             }
                         }
                         HStack(spacing: 6) {
@@ -647,7 +649,7 @@ struct ExecutionPanelView: View {
                     Button(action: { vm.action() }) {
                         HStack(spacing: 8) { Text("ACTION").font(.system(size: 14, weight: .heavy, design: .rounded)).tracking(1.2); Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold)) }
                         .foregroundStyle(.white).padding(.horizontal, 22).padding(.vertical, 12).background(Capsule().fill(task.isFrog ? Color.green : Color(red: 0.36, green: 0.36, blue: 0.84))).shadow(color: (task.isFrog ? Color.green : Color.blue).opacity(0.30), radius: 10, x: 0, y: 6)
-                    }.buttonStyle(.plain).keyboardShortcut(.defaultAction)
+                    }.buttonStyle(.plain).keyboardShortcut(.defaultAction).accessibilityLabel("Start focus on \(task.title)").accessibilityIdentifier("action-button").accessibilityAddTraits(.isButton)
                 }
             }.padding(.vertical, 4).animation(.easeInOut(duration: 0.35), value: vm.isActive).animation(.easeInOut(duration: 0.35), value: vm.isPaused).animation(.easeInOut(duration: 0.35), value: vm.isOvertime)
             if vm.isActive || vm.isPaused {
@@ -702,7 +704,7 @@ struct ExecutionPanelView: View {
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .background(Capsule().stroke(task.isFrog ? Color.green : Color.blue, lineWidth: vm.holding ? 2 : 1.2))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.plain).accessibilityLabel("Hold to complete, \(dur) hold").accessibilityIdentifier("hold-complete-button").accessibilityAddTraits(.isButton)
             .simultaneousGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in if !vm.holding { vm.beginHold() } }
@@ -738,7 +740,7 @@ struct ExecutionPanelView: View {
             Button(action: { vm.openWebPlan() }) {
                 HStack(spacing: 6) { Image(systemName: "arrow.up.forward.app"); Text(gateCTA).font(.system(size: 12, weight: .bold, design: .rounded)) }
                 .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 8).background(Capsule().fill(Color.blue))
-            }.buttonStyle(.plain)
+            }.buttonStyle(.plain).accessibilityLabel(gateCTA).accessibilityIdentifier("gate-cta-button")
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
          .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08))).padding(10)
     }

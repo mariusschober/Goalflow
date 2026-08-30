@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Goalflow</title>
+    <item>
+      <title>1.0.1</title>
+      <pubDate>Sat, 30 Aug 2026 00:00:00 +0000</pubDate>
+      <enclosure url="https://app.goalflow.com/releases/GoalflowMac-1.0.1.dmg" sparkle:version="2" sparkle:shortVersionString="1.0.1" type="application/octet-stream"/>
+    </item>
+  </channel>
+</rss>
