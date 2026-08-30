@@ -5,6 +5,7 @@ import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Rule
@@ -23,7 +24,7 @@ class GoalflowDatabaseMigrationInstrumentedTest {
     )
 
     @Test
-    fun migrateEverySupportedVersionWithoutDestructiveFallback() {
+    fun migrateEverySupportedVersionWithoutDestructiveFallback() = runBlocking {
         for (startVersion in 1..5) {
             val databaseName = "goalflow-migration-$startVersion.db"
             context.deleteDatabase(databaseName)
