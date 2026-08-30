@@ -270,7 +270,7 @@ object GoalflowWidgetUpdater {
             val undoTask = undoState?.let { application.repository.taskSnapshot(it.taskId) }
                 ?.takeIf { it.status.name == "COMPLETED" && it.updatedAt == undoState.expectedUpdatedAt }
             if (undoState != null && undoTask == null) GoalflowWidgetState.clearUndo(appContext)
-            render(manager, ids, appContext, snapshot, undoTask, GoalflowWidgetState.error(appContext))
+            render(manager, ids, appContext, snapshot, undoTask, undoState, GoalflowWidgetState.error(appContext))
         }
     }
 
@@ -280,6 +280,7 @@ object GoalflowWidgetUpdater {
         context: Context,
         snapshot: NativeWidgetSnapshot,
         undoTask: com.mariusschober.goalflow.nativeapp.domain.GoalflowTask?,
+        undoState: WidgetUndoState?,
         error: String?
     ) {
         val views = RemoteViews(context.packageName, R.layout.widget_goalflow)
@@ -308,19 +309,19 @@ object GoalflowWidgetUpdater {
             GoalflowWidgetProvider.actionPendingIntent(context, GoalflowWidgetIntent.ACTION_SKIP, snapshot)
         )
         views.setViewVisibility(R.id.widget_undo, if (undoTask != null) View.VISIBLE else View.GONE)
-            undoTask?.let {
+        if (undoTask != null && undoState != null) {
                 views.setOnClickPendingIntent(
                     R.id.widget_undo,
                     GoalflowWidgetProvider.undoPendingIntent(
                         context = context,
-                        taskId = it.id,
-                        expectedUpdatedAt = undoState!!.expectedUpdatedAt,
+                        taskId = undoTask.id,
+                        expectedUpdatedAt = undoState.expectedUpdatedAt,
                         localDate = undoState.localDate,
                         planFingerprint = undoState.planFingerprint,
                         expectedPriorUpdatedAt = undoState.expectedPriorUpdatedAt
                     )
                 )
-            }
+        }
         views.setOnClickPendingIntent(R.id.widget_add, GoalflowWidgetProvider.addPendingIntent(context))
         views.setViewVisibility(R.id.widget_status, if (error.isNullOrBlank()) View.GONE else View.VISIBLE)
         error?.let { views.setTextViewText(R.id.widget_status, it) }
