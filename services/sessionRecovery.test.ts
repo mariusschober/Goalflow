@@ -1,6 +1,4 @@
-import { describe, expect, it, beforeEach } from 'vitest';
-import { syncProtocol } from './syncProtocol';
-import { cloudSync } from './cloudSync';
+import { describe, expect, it } from 'vitest';
 
 // Tranche 2B: Session recovery — expiry, revoke, offline, refresh must not drain outbox
 describe('Tranche 2B — session recovery', () => {

@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { syncProtocol } from './syncProtocol';
 
 // Tranche 2C: Sync serialization & health — idempotency, cursor, health/backlog
 describe('Tranche 2C — sync serialization & health', () => {

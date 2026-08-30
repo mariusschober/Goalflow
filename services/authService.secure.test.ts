@@ -79,7 +79,6 @@ describe('authService secure callback — Tranche 2A', () => {
 
   it('rejects open-redirect via isSafeRedirect', async () => {
     const mod = await import('./authService');
-    // @ts-expect-error private helper is exported for test
     const safe = (mod as unknown as { isSafeRedirect?: (u: string) => boolean }).isSafeRedirect;
     if (safe) {
       expect(safe('https://evil.com/?auth=telegram')).toBe(false);

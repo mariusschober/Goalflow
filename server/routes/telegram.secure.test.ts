@@ -9,8 +9,8 @@ describe('Telegram webhook — secure callback & idempotency', () => {
     expect(isValid).toBe(false);
   });
   it('rejects invalid webhook secret (401)', () => {
-    const header = 'wrong-secret';
-    const expected = 'secret123';
+    const header: string | undefined = 'wrong-secret';
+    const expected: string | undefined = 'secret123';
     expect(header === expected).toBe(false);
   });
   it('accepts valid secret (200)', () => {
