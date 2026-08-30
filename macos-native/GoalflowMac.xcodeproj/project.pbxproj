@@ -9,26 +9,36 @@
 /* Begin PBXBuildFile section */
 		007E36C66EAF2106D3514231 /* GoalflowTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 880B660E82110CAAE59ADDFE /* GoalflowTask.swift */; };
 		0673FCDD5C3E69F35FE7F688 /* BreakTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5038BA3EE94A007C361CAFD /* BreakTests.swift */; };
+		0DFF4D3EAF7F06C09A8F8493 /* CaptureViewModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6E296D6144E2B16A2FC290 /* CaptureViewModelTests.swift */; };
 		10E03DAA781503AFBC6E19F1 /* SessionCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED8B433835052765E7E6AE45 /* SessionCTests.swift */; };
 		135DD9D3DA32A0612CAF1B71 /* Clock.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE52DE69BD05AC4D252BB4DA /* Clock.swift */; };
 		1718155336168592F9FA0148 /* FocusSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */; };
 		1E01F12735B34083BC188EEE /* CircularProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F5A6ED2FD04BD29C94E7EF /* CircularProgress.swift */; };
+		257D9D35C45D592E5BA3B1D8 /* CaptureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EB398F1027FB785F68950CA8 /* CaptureTests.swift */; };
+		2709E179A9CC51DC2B3F6782 /* CaptureServiceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 722BA1A138750DE8CCE66295 /* CaptureServiceTests.swift */; };
+		3512EA68100890F4C6ECF0E1 /* SchedulingBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F891D96F9CDBBBD21645216 /* SchedulingBridge.swift */; };
+		3B0FE01CFCC2F98080341D62 /* CaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86CE938717E68CEB8A89E444 /* CaptureService.swift */; };
 		41C26C25928103F38F273B10 /* ExecutionPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */; };
 		4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */; };
 		5710A612E06235FF7D483818 /* ExecutionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C87EF4808BAD06681002F0 /* ExecutionState.swift */; };
 		5722A6922CE4FE200C36E23A /* CompletionHoldController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB038AE360BE1536348F106 /* CompletionHoldController.swift */; };
 		5DB9286BBA73464CB5CD7461 /* BreakOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1185E4C2299C0A53C9A8DB57 /* BreakOverlayView.swift */; };
+		5DCFC2343C9E8B291391E2C1 /* CaptureViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF2377FB8912E8D48A31ECD9 /* CaptureViewModel.swift */; };
 		5DD963E313BFF17381576342 /* SessionBTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */; };
 		5E8389CAEA35DDE445C7804B /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6684235E22D79D819CB18A13 /* AppDelegate.swift */; };
 		60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */; };
+		6D30DA73D50C8EA23559A124 /* CaptureOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A97BCADB57ECF8C2990EACB7 /* CaptureOverlayView.swift */; };
 		6E81AEC4FAB93E2DF00A4011 /* CurrentTaskProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F21CF60C75DE1529F13E73B8 /* CurrentTaskProvider.swift */; };
 		71277A0BC301D62C9B673151 /* SchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBBFC89A865C6633CBBE07A /* SchedulingTests.swift */; };
+		758552750C22A7B9DB721FD1 /* HotkeyGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B3158B7CA4CFF3E5568D8D9 /* HotkeyGateway.swift */; };
 		86B679D5B2466E6BD59435F8 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 709EFFFA262264B84A634724 /* MenuBarController.swift */; };
+		9BAC7B5DA76027A6D8426517 /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3CC5C7FC26EAE04E420212F /* CaptureParser.swift */; };
 		B1A52A598B41671F499F5869 /* GoalflowMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */; };
 		B8B37BAA6ED1ECAA1C97FA43 /* TTSGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA4039F314B59CFA20F0483 /* TTSGateway.swift */; };
 		BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */; };
 		BF355797A88E29C871B9C6D4 /* FrogBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4381C35D15C589E1D40DDEC /* FrogBadge.swift */; };
 		C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */; };
+		CD62EEAF9C6FF0C232F54773 /* CaptureWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23DBB9DA0C262E3AF627174A /* CaptureWindowController.swift */; };
 		D0819892FBD4BB230AF1A8AE /* BreakCoverWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC962937822DE8C2E51E9D0B /* BreakCoverWindowController.swift */; };
 		E4CDA98D62567B9132B74BA7 /* BreakState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */; };
 		E78C949924887CD6318461D3 /* BreakTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0660F5AC970BC266A22A532D /* BreakTimer.swift */; };
@@ -54,16 +64,23 @@
 		1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimerTests.swift; sourceTree = "<group>"; };
 		1EB038AE360BE1536348F106 /* CompletionHoldController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionHoldController.swift; sourceTree = "<group>"; };
 		22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGateway.swift; sourceTree = "<group>"; };
+		23DBB9DA0C262E3AF627174A /* CaptureWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureWindowController.swift; sourceTree = "<group>"; };
 		4DB08E5F433C83D224127157 /* GoalflowMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GoalflowMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4E6E296D6144E2B16A2FC290 /* CaptureViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureViewModelTests.swift; sourceTree = "<group>"; };
 		515E9C93B6B9719CF468116B /* ExecutionTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimer.swift; sourceTree = "<group>"; };
 		5AE465DAECF78F1FB607F6C2 /* BreakSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakSessionStore.swift; sourceTree = "<group>"; };
 		6684235E22D79D819CB18A13 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		68F5A6ED2FD04BD29C94E7EF /* CircularProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularProgress.swift; sourceTree = "<group>"; };
 		70482D819537B5A5EA7A89F7 /* GoalflowMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GoalflowMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		709EFFFA262264B84A634724 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
+		722BA1A138750DE8CCE66295 /* CaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureServiceTests.swift; sourceTree = "<group>"; };
+		7F891D96F9CDBBBD21645216 /* SchedulingBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchedulingBridge.swift; sourceTree = "<group>"; };
+		86CE938717E68CEB8A89E444 /* CaptureService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureService.swift; sourceTree = "<group>"; };
 		880B660E82110CAAE59ADDFE /* GoalflowTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalflowTask.swift; sourceTree = "<group>"; };
+		8B3158B7CA4CFF3E5568D8D9 /* HotkeyGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HotkeyGateway.swift; sourceTree = "<group>"; };
 		A4381C35D15C589E1D40DDEC /* FrogBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrogBadge.swift; sourceTree = "<group>"; };
 		A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionBTests.swift; sourceTree = "<group>"; };
+		A97BCADB57ECF8C2990EACB7 /* CaptureOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureOverlayView.swift; sourceTree = "<group>"; };
 		ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSessionStore.swift; sourceTree = "<group>"; };
 		B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionPanelView.swift; sourceTree = "<group>"; };
 		C5038BA3EE94A007C361CAFD /* BreakTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakTests.swift; sourceTree = "<group>"; };
@@ -71,8 +88,11 @@
 		D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalflowMacApp.swift; sourceTree = "<group>"; };
 		E5C87EF4808BAD06681002F0 /* ExecutionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionState.swift; sourceTree = "<group>"; };
 		E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionStateTests.swift; sourceTree = "<group>"; };
+		EB398F1027FB785F68950CA8 /* CaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureTests.swift; sourceTree = "<group>"; };
 		ED8B433835052765E7E6AE45 /* SessionCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCTests.swift; sourceTree = "<group>"; };
+		EF2377FB8912E8D48A31ECD9 /* CaptureViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureViewModel.swift; sourceTree = "<group>"; };
 		F21CF60C75DE1529F13E73B8 /* CurrentTaskProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentTaskProvider.swift; sourceTree = "<group>"; };
+		F3CC5C7FC26EAE04E420212F /* CaptureParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureParser.swift; sourceTree = "<group>"; };
 		F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakState.swift; sourceTree = "<group>"; };
 		FAE072D1C4311EFEA0DC0B39 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		FE52DE69BD05AC4D252BB4DA /* Clock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clock.swift; sourceTree = "<group>"; };
@@ -94,6 +114,9 @@
 			children = (
 				CC962937822DE8C2E51E9D0B /* BreakCoverWindowController.swift */,
 				1185E4C2299C0A53C9A8DB57 /* BreakOverlayView.swift */,
+				A97BCADB57ECF8C2990EACB7 /* CaptureOverlayView.swift */,
+				EF2377FB8912E8D48A31ECD9 /* CaptureViewModel.swift */,
+				23DBB9DA0C262E3AF627174A /* CaptureWindowController.swift */,
 				B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */,
 				709EFFFA262264B84A634724 /* MenuBarController.swift */,
 				DEC072C4D1BB68140659E710 /* Components */,
@@ -135,8 +158,11 @@
 			isa = PBXGroup;
 			children = (
 				F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */,
+				F3CC5C7FC26EAE04E420212F /* CaptureParser.swift */,
+				86CE938717E68CEB8A89E444 /* CaptureService.swift */,
 				E5C87EF4808BAD06681002F0 /* ExecutionState.swift */,
 				880B660E82110CAAE59ADDFE /* GoalflowTask.swift */,
+				7F891D96F9CDBBBD21645216 /* SchedulingBridge.swift */,
 			);
 			path = Domain;
 			sourceTree = "<group>";
@@ -145,6 +171,9 @@
 			isa = PBXGroup;
 			children = (
 				C5038BA3EE94A007C361CAFD /* BreakTests.swift */,
+				722BA1A138750DE8CCE66295 /* CaptureServiceTests.swift */,
+				EB398F1027FB785F68950CA8 /* CaptureTests.swift */,
+				4E6E296D6144E2B16A2FC290 /* CaptureViewModelTests.swift */,
 				E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */,
 				1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */,
 				07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */,
@@ -164,6 +193,7 @@
 				1EB038AE360BE1536348F106 /* CompletionHoldController.swift */,
 				515E9C93B6B9719CF468116B /* ExecutionTimer.swift */,
 				ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */,
+				8B3158B7CA4CFF3E5568D8D9 /* HotkeyGateway.swift */,
 				22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */,
 				FFA4039F314B59CFA20F0483 /* TTSGateway.swift */,
 			);
@@ -278,6 +308,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				0673FCDD5C3E69F35FE7F688 /* BreakTests.swift in Sources */,
+				2709E179A9CC51DC2B3F6782 /* CaptureServiceTests.swift in Sources */,
+				257D9D35C45D592E5BA3B1D8 /* CaptureTests.swift in Sources */,
+				0DFF4D3EAF7F06C09A8F8493 /* CaptureViewModelTests.swift in Sources */,
 				60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */,
 				BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */,
 				C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */,
@@ -297,6 +330,11 @@
 				FF21BC7017A6812FB051FF56 /* BreakSessionStore.swift in Sources */,
 				E4CDA98D62567B9132B74BA7 /* BreakState.swift in Sources */,
 				E78C949924887CD6318461D3 /* BreakTimer.swift in Sources */,
+				6D30DA73D50C8EA23559A124 /* CaptureOverlayView.swift in Sources */,
+				9BAC7B5DA76027A6D8426517 /* CaptureParser.swift in Sources */,
+				3B0FE01CFCC2F98080341D62 /* CaptureService.swift in Sources */,
+				5DCFC2343C9E8B291391E2C1 /* CaptureViewModel.swift in Sources */,
+				CD62EEAF9C6FF0C232F54773 /* CaptureWindowController.swift in Sources */,
 				1E01F12735B34083BC188EEE /* CircularProgress.swift in Sources */,
 				135DD9D3DA32A0612CAF1B71 /* Clock.swift in Sources */,
 				5722A6922CE4FE200C36E23A /* CompletionHoldController.swift in Sources */,
@@ -308,7 +346,9 @@
 				BF355797A88E29C871B9C6D4 /* FrogBadge.swift in Sources */,
 				B1A52A598B41671F499F5869 /* GoalflowMacApp.swift in Sources */,
 				007E36C66EAF2106D3514231 /* GoalflowTask.swift in Sources */,
+				758552750C22A7B9DB721FD1 /* HotkeyGateway.swift in Sources */,
 				86B679D5B2466E6BD59435F8 /* MenuBarController.swift in Sources */,
+				3512EA68100890F4C6ECF0E1 /* SchedulingBridge.swift in Sources */,
 				4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */,
 				B8B37BAA6ED1ECAA1C97FA43 /* TTSGateway.swift in Sources */,
 			);

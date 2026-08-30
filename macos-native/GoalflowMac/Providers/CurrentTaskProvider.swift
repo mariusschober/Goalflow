@@ -6,7 +6,7 @@ protocol TaskStore: Sendable {
     func updateTask(_ task: GoalflowTask) throws; func queueCount(today: String) -> Int; func completedCount(today: String) -> Int
 }
 final class LocalTaskStore: TaskStore, @unchecked Sendable {
-    private let fileURL: URL; private let walKey: String; private let defaults: UserDefaults
+    let fileURL: URL; private let walKey: String; let defaults: UserDefaults
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.demo.tasks.v1") {
         if let u = fileURL { self.fileURL = u } else {
@@ -76,7 +76,7 @@ enum TaskStoreError: Error, LocalizedError {
     }
 }
 final class DemoCurrentTaskProvider: CurrentTaskProvider, @unchecked Sendable {
-    private let taskStore: any TaskStore
+    let taskStore: any TaskStore
     private let defaults: UserDefaults
     init(taskStore: any TaskStore = LocalTaskStore(), defaults: UserDefaults = .standard) {
         self.taskStore = taskStore; self.defaults = defaults

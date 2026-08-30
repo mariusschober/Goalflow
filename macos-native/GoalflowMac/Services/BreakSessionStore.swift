@@ -42,7 +42,13 @@ final class BreakSessionStore: @unchecked Sendable {
         guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after atomic write") }
         if read != data { throw FocusSessionStoreError.readBackMismatch }
         let decoded = try decoder.decode(BreakState.self, from: read)
-        if decoded != state { throw FocusSessionStoreError.readBackMismatch }
+        if decoded.durationSeconds != state.durationSeconds
+            || decoded.sourcePhase != state.sourcePhase
+            || decoded.taskId != state.taskId
+            || abs(decoded.startedAt.timeIntervalSince(state.startedAt)) > 0.001
+            || decoded.startedAtMonotonic != state.startedAtMonotonic {
+            throw FocusSessionStoreError.readBackMismatch
+        }
     }
 
     func clear() throws {

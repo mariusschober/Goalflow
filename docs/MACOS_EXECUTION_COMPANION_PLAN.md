@@ -507,4 +507,58 @@ Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-p
 - `BreakReturnTests` 2: pause-before-break freeze, break does not bleed into focus (600 s break elapsed but focus remaining still 500, break remaining 0).
 - Total now 45 (36 + 9) — all passing.
 
-**Deferred remains:** capture (E), auth/sync (F/G), signing (H).
+**Deferred remains:** auth/sync (F/G), signing (H).
+
+---
+
+## 20. Session E — Quick Capture & Context Launch (2026-08-30, executed)
+
+**Goal:** Enter intent without planning drift — global `⌘⇧G` summon, Spotlight-like overlay, schedule-first `Select date` invariant, `ADD` vs `ACTION`.
+
+**Decisions (per user delegation to recommendations):**
+- Hotkey: Carbon `RegisterEventHotKey` `Cmd+Shift+G` zero-dep `HotkeyGateway`, no `CGEventTap` entitlement; `CarbonHotkeyGateway` installs `kEventHotKeyPressed` handler, AppDelegate owns `hotkey` lifetime.
+- Default `⌘+Shift+G` (no conflict with `⌘Space` Spotlight), user-configurable via future `KeyboardShortcuts` switch kept behind `HotkeyGateway` protocol.
+- Parser simplified E: `*f/*frog`, `@quick`, `@25m` + `1h 15m` accumulative, natural `for 2 hours`, `#tag`, `https://…`, `YYYY-MM-DD`, future `YYYY-MM`, `HH:mm` (first only). `YYYY-MM` validates `> monthOf(today)` else `Select date` fallback.
+- Date picker: SwiftUI `DatePicker(.graphical)` for day + `Picker` menu for future 12 months `> currentMonth`; factory `Select date` until user confirms.
+- ADD vs ACTION: `ACTION` creates then starts focus only if idle and `precision==day && scheduledFor==today`; else deferred to `ADD` (no preempt). Future month `ACTION` stays `ADD`.
+- Hashtag routing `TagRoutingService` `UserDefaults goalflow.hashtag.routes.v1` → `NSWorkspace.open`. Privacy `PrivacyGateway` blanks `titlePreview` to `••••` when `CGWindowListCopyWindowInfo` finds `zoom/teams/webex/meet` sharing.
+
+**SchedulingBridge (`Domain/SchedulingBridge.swift:1`):**
+- Port `src/domain/scheduling.ts:92-145` `isRealDay/isRealMonth/monthOf/assertSchedule` with `DAY_PATTERN ^\d{4}-\d{2}-\d{2}$`, `MONTH_PATTERN ^\d{4}-\d{2}$`, `TIME_PATTERN ^(?:[01]\d|2[0-3]):[0-5]\d$`. UTC calendar check, `year>=1`, `month 1..12`. `SchedulingError(code: invalidDay|invalidMonth|currentMonthRequiresDay|invalidTime|invalidTitle)`.
+- `assertSchedule` mirrors TS: day needs `isRealDay`, month needs `isRealMonth` + `scheduledFor > monthOf(today)` else `currentMonthRequiresDay`, `scheduledTime` only with day.
+
+**CaptureParser (`Domain/CaptureParser.swift:1`):**
+- `ParsedCapture` `cleanTitle/durationMinutes/tags/urls/scheduledFor/schedulePrecision/scheduledTime/isFrog/isQuickie/notes`. Injected `today`.
+- Steps: frog `*f(rog)?\b`, quick `@quick(ie)?` →2, URLs `https?://\S+` stripped first, duration `@(\d+)(m|min|mins|h|hr|hrs)` accumulative, natural `for (\d+)\s*(min|…|hour|hours)`, adjective `(\d+)-(minute|…)`, bare `\b(\d+)(m|min|mins|h|hr|hrs)\b` for `1h 15m`, clamp `1..1440`, hashtags `#[a-zA-Z0-9_]+`, time `HH:mm` first only, then day `YYYY-MM-DD` `isRealDay` else month `YYYY-MM` `isRealMonth && > monthOf(today)` (month+time drops time). Collapse `\s+`.
+
+**CaptureService (`Domain/CaptureService.swift:1`):**
+- `CaptureIntent add|action`, `LocalCaptureService(taskStore:clock:idGenerator)` validates `title` non-empty → `invalidTitle`, `assertSchedule`, tail `plannedOrder = max(siblings for scheduledFor)+1`, `duration ??25`, tags, notes+urls `"\n"` join, `GoalflowTask` `version=1` `source=.manual`, `saveAll` atomic+WAL+read-back, `TagRoutingService.shared.handleTags`.
+- `TagRoutingService` `routes() -> [String:String]` from `UserDefaults`, `setRoutes`, `handleTags` lowercased lookup `routes[tag]` or `"#tag"` → `NSWorkspace.open` on main.
+- `PrivacyGateway` `isScreenSharing` via `CGWindowListCopyWindowInfo([.optionOnScreenOnly])` owners `zoom/teams/webex/meet` with `share` window name.
+
+**CaptureViewModel (`UI/CaptureViewModel.swift:1`):**
+- `@MainActor ObservableObject` `@Published rawText/parsed/notes/showNotes/showDatePicker/selectedDate/selectedMonth/isMonthMode/isScreenSharing/errorMessage`, `taskStore/captureService/clock/privacy` injected, `onCreated: (GoalflowTask,CaptureIntent)->Void`.
+- `parse()` on `rawText.didSet` via `CaptureParser.parse(today:)`. `titlePreview` blanks when sharing, `needsDate` true if `parsed.scheduledFor==nil && !showDatePicker`, `effectiveScheduledFor/effectivePrecision/effectiveTime` merges parsed vs picker, `canSubmit` needs non-empty title + effective date.
+- `handleEnter(intent:)` : if `needsDate` → show `DatePicker` `isMonthMode=false` default today + next month `yyyy-MM`, return false; else `captureService.createTask` with `notes` if shown, `onCreated`, reset fields. `submitAdd/submitAction/cancel/toggleNotes/checkPrivacy`.
+
+**Hotkey (`Services/HotkeyGateway.swift:1`):**
+- `HotkeyGateway` `register(action:) / unregister()`. `CarbonHotkeyGateway` `RegisterEventHotKey(kVK_ANSI_G, cmdKey|shiftKey, 'GF01', GetApplicationEventTarget(), handler kEventHotKeyPressed)` installs `EventHandler` with `Unmanaged<CarbonHotkeyGateway>`. `NoopHotkeyGateway` stub.
+
+**Overlay (`UI/CaptureOverlayView.swift:1`):**
+- `CaptureOverlayView(vm:onDismiss)` 520pt `ultraThinMaterial` `RoundedRectangle 16` shadow 24. Header `bolt.fill` `Quick Capture` `FROG` badge `Esc` `cancelAction`. Field `pencil` `TextField` `What needs doing? e.g. Draft proposal @25m #focus 2026-09-01` `submit .defaultAction` `ADD`. Notes `TextEditor` 60pt revealed `⌘↵`. Date picker `Segmented Exact day/Future month` → `DatePicker.graphical` or `Picker month` 12 next months `>currentMonth`. Chips: `doc.text titlePreview`, `25m`/orange, ` #tag` accent, `scheduledFor` green / `Select date` red, `HH:mm` blue, `🔗n` purple. Action row `ADD plus` accent vs `ACTION bolt` green `⌘A`, disabled when `!canSubmit`. Hint `Enter→ADD • ⌘↵→Notes • ⌘A→ACTION • Esc→Dismiss` + `eye.slash Privacy`.
+
+**Window (`UI/CaptureWindowController.swift:1`):**
+- `CaptureWindowController: NSObject @MainActor` `NSPanel(contentRect 520x260, style [.borderless,.nonactivatingPanel], .buffered)` `isFloatingPanel true` `level=.floating` `.canJoinAllSpaces .fullScreenAuxiliary` `background .clear` `isOpaque false` `hasShadow true` `isMovableByWindowBackground true`. `configure(taskProvider:store:clock:executionVM:taskStore)` creates `CaptureViewModel` + `LocalCaptureService` with `ScreenSharingPrivacyGateway`, `onCreated` → `handleCreated(task:intent)`. `show()` guards `!isOnBreak`, `checkPrivacy`, `ensurePanel` `NSHostingView(CaptureOverlayView)`, centers `NSScreen.main visibleFrame mid`, `CACurrentMediaTime` measure >200 log, `makeKeyAndOrderFront` `NSApp.activate`. `hide/toggle` `orderOut` `cancel`. `ensurePanel` installs `NSEvent.addLocalMonitorForEvents(.keyDown)` `Esc 53` hide. `handleCreated` `executionVM.restore()` then if `ACTION` and not `isActive/isPaused` and `day && scheduledFor==today` → `startFocus(for:)` creates `ExecutionState(taskId, .active, clock.now(), mono, plannedDurationSeconds)` `store.save` `restore`, else `ADD` deferred.
+
+**MenuBar/App (`UI/MenuBarController.swift:1`, `App/AppDelegate.swift:1`):**
+- `MenuBarController` adds `captureController: CaptureWindowController?` `store/clock`, `start` calls `setupCapture()` `DemoCurrentTaskProvider.taskStore`, `toggleCapture/showCapture` wrappers, `handleCaptureMenu`. `DemoCurrentTaskProvider.taskStore` made internal `let taskStore: any TaskStore` for sharing.
+- `AppDelegate` adds `hotkey: (any HotkeyGateway)?`, after `menuBar.start` registers `CarbonHotkeyGateway.register { Task { @MainActor in menuBar.toggleCapture() } }`.
+
+**Tests (`GoalflowMacTests/CaptureTests.swift:1`, `CaptureServiceTests.swift:1`, `CaptureViewModelTests.swift:1`):**
+- `SchedulingBridgeTests` 7: day valid/invalid, month future/currentRequiresDay, month+time invalid, time format, isRealDay/isRealMonth/monthOf.
+- `CaptureParserTests` 13: ` @25m`, `1h 15m`, natural `for 2 hours`, `#tag`, `https://`, `*f`/`@quick`, day `2026-09-15`, future month `2026-11`, current month `nil`, `14:30`, month drops time, collapse, empty title.
+- `CaptureServiceTests` 6: ADD persists + no resurrection, empty title `invalidTitle`, tail `plannedOrder 0/1/0`, month future+time validation, URL→notes+tags, day `14:30` vs invalid.
+- `CaptureViewModelTests` 7 @MainActor: `needsDate` factory, parsed date `canSubmit`, picker flow `ADD` creates with `selectedDate`, month picker `future month`, notes+URL, privacy blank `••••`, empty title fails `errorMessage`.
+- Total now 78 (45 +33) — all passing.
+
+**Deferred remains:** auth/sync (F/G), signing (H).

@@ -8,10 +8,13 @@ final class MenuBarController: NSObject {
     private var viewModel: ExecutionViewModel!
     private var taskProvider: DemoCurrentTaskProvider!
     private var breakCover = BreakCoverWindowController()
+    private var captureController: CaptureWindowController?
+    private var store: (any FocusSessionStore)?
+    private var clock: (any Clock)?
     private var cancellables: Set<AnyCancellable> = []
     override init() { super.init() }
     func start(taskProvider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock()) {
-        self.taskProvider = taskProvider; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock)
+        self.taskProvider = taskProvider; self.store = store; self.clock = clock; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow"); button.imagePosition = .imageOnly
@@ -20,6 +23,8 @@ final class MenuBarController: NSObject {
         popover = NSPopover(); popover.contentSize = NSSize(width: 400, height: 420); popover.behavior = .transient; popover.animates = true
         let hosting = NSHostingView(rootView: ExecutionPanelView(vm: viewModel))
         let vc = NSViewController(); vc.view = hosting; popover.contentViewController = vc
+        // Capture controller (lazy, needs viewModel)
+        setupCapture()
         viewModel.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
         viewModel.$overtimeSeconds.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
         viewModel.$isPaused.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
@@ -37,6 +42,21 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func appDidBecomeActive() { viewModel.restore(); updateStatusTitle(); if viewModel.isOnBreak { updateBreakCover() } }
+
+    // MARK: - Capture
+
+    private func setupCapture() {
+        guard let store = store, let clock = clock else { return }
+        let cap = CaptureWindowController()
+        let taskStore: any TaskStore = taskProvider.taskStore
+        cap.configure(taskProvider: taskProvider, store: store, clock: clock, executionVM: viewModel, taskStore: taskStore)
+        captureController = cap
+    }
+
+    func toggleCapture() { captureController?.toggle() }
+    func showCapture() { captureController?.show() }
+
+    @objc private func handleCaptureMenu() { showCapture() }
 
     private func handleBreakChange(onBreak: Bool) {
         if onBreak {

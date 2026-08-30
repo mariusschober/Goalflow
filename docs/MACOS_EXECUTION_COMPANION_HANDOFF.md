@@ -2,17 +2,17 @@
 
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
-**Latest commit at handoff:** `499a0e19f94b9ffde2329d6de4db4b6f07e1a3c2` (Session D — Break Environment)  
-**Previous slice commit:** `739ad5af59a8b74f1824d97cfb944943867f7085` (Session C — Accomplishment Loop)  
+**Latest commit at handoff:** `40115f58e1dff0e1edad97150da73e99e7284df6` (Session E — Quick Capture)  
+**Previous slice commit:** `1de960693eaf30c83b4cfe6e207293e2190182b6` (Session D — Break Environment)  
 **Base:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30, verified via `git merge-base`)  
 **Xcode / SDK at build:** Xcode 26.6 (17F113), macOS SDK 26.5, Swift 6.3.3, Target: arm64-apple-macosx26.0, DeploymentTarget 15.0 (Tahoe target per context is 26 — built against 26.5 SDK; plan deploys to 15.0 for broader beta, tighten to 26 at hardening)  
-**Status:** Session D complete — break environment DONE, ready for Session E
+**Status:** Session E complete — quick capture DONE, ready for Session F
 
 ---
 
 ## Current milestone
 
-**Session D — Break environment: DONE** (predecessors A, B, C remain DONE)
+**Session E — Quick Capture: DONE** (predecessors A, B, C, D remain DONE)
 
 **Session A scope (traceability):** native shell + Current → ACTION → Active Timer via deterministic local/demo data.
 
@@ -20,7 +20,9 @@
 
 **Session C scope (traceability):** 3 s hold (ordinary) / 5 s Frog + haptic buildup + FlowState distracted/good/high/flow + LocalTaskStore atomic + next Current auto-advance + Everything Done quiet state.
 
-**Session D scope:** Break selector `5/10/15/20/Open`, fullscreen black cover per-screen `level=.screenSaver` + `.canJoinAllSpaces`, `BreakState`/`BreakTimer` reference-time, alarm `SoundGateway.alarm` looping, `Esc`/`End Early` return, pause-before-break frozen `remaining`.
+**Session D scope (traceability):** Break selector `5/10/15/20/Open`, fullscreen black cover per-screen `level=.screenSaver` + `.canJoinAllSpaces`, `BreakState`/`BreakTimer` reference-time, alarm `SoundGateway.alarm` looping, `Esc`/`End Early` return, pause-before-break frozen `remaining`.
+
+**Session E scope:** Global `⌘⇧G` hotkey, centered Spotlight-like `NSPanel` `level=.floating` ultraThin, schedule-first `Select date` invariant via `assertSchedule`, `ADD` vs `ACTION`, parsing `@25m/#tag/2026-09-01/YYYY-MM/14:30/*f/@quick/https://`, `TagRoutingService` + `PrivacyGateway`.
 
 **Implemented in Session D:**
 - `BreakState` (`Domain/BreakState.swift:1`) `durationSeconds: Int? (nil=Open)`, `startedAt`, `startedAtMonotonic`, `sourcePhase`, `taskId`, `elapsed/remaining/isExpired/isOpenEnded`, `max(60, duration)` clamp.
@@ -35,7 +37,21 @@
 - `AppDelegate` (`App/AppDelegate.swift:1`) no extra wiring needed for break (ViewModel creates default `BreakSessionStore`); `restoreBreak()` called in `init` after `restore()`; `MenuBarController` owns cover lifecycle.
 - Tests: SessionD added 9 tests (BreakState 3, BreakSessionStore 2, BreakTimer 2, BreakReturn 2) → total 45 tests across 9 suites, all passing (3 runs clean)
 
-**Still deferred (per plan):** Quick Capture (E), browser auth + real Current (F), final Sync (G), signing/hardening (H). No Web/Android/server changes.
+**Implemented in Session E:**
+- `SchedulingBridge` (`Domain/SchedulingBridge.swift:1`) `isRealDay/isRealMonth/monthOf/assertSchedule` port of `scheduling.ts:92` `DAY/MONTH/TIME` regex, UTC calendar, `SchedulingError invalidDay|invalidMonth|currentMonthRequiresDay|invalidTime|invalidTitle`.
+- `CaptureParser` (`Domain/CaptureParser.swift:1`) `ParsedCapture` plus accumulative `@25m`/`1h 15m`/`for 2 hours`/`2-minute`, `#tag`, `https://`, `*f`/`@quick`, `YYYY-MM-DD`/`YYYY-MM` future, `HH:mm` first only, collapse whitespace, `month+time` drops time.
+- `CaptureService` (`Domain/CaptureService.swift:1`) `LocalCaptureService(taskStore:clock:idGenerator)` validates title+`assertSchedule`, tail `plannedOrder = max(siblings)+1`, `duration ??25`, merges notes+urls, `version=1` atomic+WAL, `TagRoutingService.shared.handleTags`.
+- `TagRoutingService` (`Domain/CaptureService.swift:1`) `UserDefaults goalflow.hashtag.routes.v1` → `NSWorkspace.open` main async lowercased lookup.
+- `PrivacyGateway` (`Domain/CaptureService.swift:1`) `CGWindowListCopyWindowInfo(.optionOnScreenOnly)` owners `zoom/teams/webex/meet` with `share` window.
+- `HotkeyGateway` (`Services/HotkeyGateway.swift:1`) `CarbonHotkeyGateway RegisterEventHotKey kVK_ANSI_G cmd+shift 'GF01' kEventHotKeyPressed` + `NoopHotkeyGateway`.
+- `CaptureViewModel` (`UI/CaptureViewModel.swift:1`) `@MainActor` `rawText/parsed/notes/showNotes/showDatePicker/selectedDate/selectedMonth/isMonthMode/isScreenSharing/errorMessage`, `effectiveScheduledFor/Precision/Time`, `needsDate` factory `Select date`, `handleEnter(intent:)` shows picker on `Enter` without date else `createTask`+`onCreated`+reset, `toggleNotes/checkPrivacy`.
+- `CaptureOverlayView` (`UI/CaptureOverlayView.swift:1`) 520pt `ultraThinMaterial` `16` shadow 24, header `bolt` `FROG` `Esc`, field `pencil` `What needs doing? e.g. Draft proposal @25m #focus 2026-09-01` `submit ADD`, notes `TextEditor` `⌘↵`, date picker `Segmented Exact day/Future month` graphical/`Picker` 12 months `>currentMonth`, chips `25m/#tag/scheduledFor/Select date` red, `HH:mm/🔗`, action `ADD accent` `ACTION green ⌘A` disabled when `!canSubmit`, hint `Enter→ADD • ⌘↵→Notes • ⌘A→ACTION`.
+- `CaptureWindowController` (`UI/CaptureWindowController.swift:1`) `NSPanel 520x260 borderless nonactivatingPanel isFloatingPanel level=.floating canJoinAllSpaces+fullScreenAuxiliary clear isOpaque false` `configure(taskProvider:store:clock:executionVM:taskStore)` → `CaptureViewModel` `ScreenSharingPrivacyGateway`, `show()` guards `!isOnBreak` `CACurrentMediaTime` `<200ms` `makeKeyAndOrderFront NSApp.activate`, `hide/toggle` `orderOut cancel`, `ensurePanel NSHostingView` + `Esc 53` monitor, `handleCreated` `restore()` then `ACTION` only if idle + `day && scheduledFor==today` else `ADD` deferred, `startFocus` save `ExecutionState`.
+- `MenuBarController` (`UI/MenuBarController.swift:1`) adds `captureController/store/clock`, `setupCapture()`+`toggleCapture/showCapture/handleCaptureMenu`, `DemoCurrentTaskProvider.taskStore` made `let` for sharing.
+- `AppDelegate` (`App/AppDelegate.swift:1`) adds `hotkey: (any HotkeyGateway)?` and registers `CarbonHotkeyGateway { menuBar.toggleCapture() }` after `menuBar.start`.
+- Tests: SessionE added 33 tests (SchedulingBridge 7, CaptureParser 13, CaptureService 6, CaptureViewModel 7) → total 78 tests across 13 suites, all passing (3 runs clean)
+
+**Still deferred (per plan):** browser auth + real Current (F), final Sync (G), signing/hardening (H). No Web/Android/server changes.
 
 ---
 
@@ -147,6 +163,33 @@ xcodebuild test ... -destination 'platform=macOS'
     FocusSessionStoreTests: 3 passed
     MonotonicClockTests: 1 passed
     SchedulingTests: 3 passed
+
+# Session E (verified 2026-08-30 on Xcode 26.6 / SDK 26.5 / Swift 6.3.3 / arm64)
+xcodegen generate --spec macos-native/project.yml --project macos-native
+  => Created project at macos-native/GoalflowMac.xcodeproj
+xcodebuild -project ... -configuration Debug build => BUILD SUCCEEDED
+xcodebuild -project ... -configuration Release build => BUILD SUCCEEDED
+xcodebuild test ... -destination 'platform=macOS'
+  => Executed 78 tests, 0 failures (3 runs clean)
+  Suites:
+    CaptureViewModelTests: 7 passed (needsDate, parsed date, picker ADD, month future, notes+URL, privacy blank, empty title)
+    CaptureServiceTests: 6 passed (ADD persists+no resurrection, empty title, tail, month future+time validation, URL notes tags, day time validation)
+    CaptureParserTests: 13 passed (@25m, 1h 15m, natural, #tag, https, *f/@quick, day, future month, current month nil, 14:30, month drops time, collapse, empty title)
+    SchedulingBridgeTests: 7 passed (day valid/invalid, month future/currentRequiresDay, month+time invalid, time format, isRealDay/isRealMonth/monthOf)
+    BreakStateTests: 3 passed
+    BreakSessionStoreTests: 2 passed
+    BreakTimerTests: 2 passed
+    BreakReturnTests: 2 passed
+    CompletionHoldTests: 4 passed
+    FlowStateTests: 3 passed
+    TaskCompletionPersistenceTests: 3 passed
+    ExecutionStatePauseTests: 9 passed
+    ExecutionStateTests: 5 passed
+    ExecutionTimerTests: 2 passed
+    FileFocusSessionStoreTests: 3 passed
+    FocusSessionStoreTests: 3 passed
+    MonotonicClockTests: 1 passed
+    SchedulingTests: 3 passed
 ```
 
 - Not run: manual UI launch (LSUIElement appearance) requires user to run `.app` and inspect menu bar; `xcodebuild` proves compilation. Subsequent manual smoke recommended but not automated.
@@ -154,16 +197,17 @@ xcodebuild test ... -destination 'platform=macOS'
 
 ---
 
-## Known defects / limitations (A+B+C remain) + D updates
+## Known defects / limitations (A+B+C+D remain) + E updates
 
-- Deployment target still 15.0 not 26.0 — intentional (see plan §19).
+- Deployment target still 15.0 not 26.0 — intentional (see plan §20).
 - `xcodegen` still required to regenerate `.xcodeproj` after `project.yml` edits.
-- Timer wired via Combine (B); hold/flow via `CompletionHoldController` 50 Hz; break via `BreakTimer` 1 s.
-- Persistence now triple: `execution.json` (Composite WAL) + `goalflow.tasks.json` (LocalTaskStore) + `break.json` (FileBreakSessionStore atomic+read-back, not in SyncMeta). All verified.
+- Timer via Combine (B); hold `CompletionHoldController` 50 Hz; break `BreakTimer` 1 s; capture `CaptureViewModel` + `CarbonHotkey` `RegisterEventHotKey`.
+- Persistence still triple: `execution.json` (Composite WAL) + `goalflow.tasks.json` (LocalTaskStore) + `break.json` (FileBreakSessionStore atomic+read-back, not in SyncMeta). Capture reuses `goalflow.tasks.json` tail `plannedOrder`. All verified.
 - Overtime distinct `+mm:ss` orange; completion via hold 3 s/5 s Frog; flow picker blocks next until `1-4`/`Esc`.
 - Break: `Take Break` teal capsule when active/paused; picker `5/10/15/20/Open`; cover per-screen `level=.screenSaver` `.canJoinAllSpaces` `.stationary` `.fullScreenAuxiliary`, `frame=screen.frame` (covers menu bar), `orderFrontRegardless`, `NSApp.activate`. Alarm `alarm(loop:true)` 6-beep 880 Hz square, loops 2×; `stopAlarm` on early end. Sleep during break counts for break but not focus (paused freeze).
+- Capture: `⌘⇧G` Carbon `RegisterEventHotKey` `kVK_ANSI_G cmd+shift` summons centered `NSPanel` `level=.floating` `canJoinAllSpaces` `ultraThin` `520pt` `<200ms` `CACurrentMediaTime`; `Esc` hides, break suppresses capture. `Select date` factory until `Enter` → inline `DatePicker.graphical` / month `Picker 12` `>currentMonth`. Chips preview `25m/#tag/date/14:30/🔗`. `ADD` accent `ACTION` green deferred if active or future month. Notes `⌘↵` reveals `TextEditor` merged with `https://`. `TagRoutingService` `UserDefaults goalflow.hashtag.routes.v1` → `NSWorkspace.open` lowercased. `PrivacyGateway` blanks `••••` when `CGWindowListCopyWindowInfo` finds sharing.
 - No `undo` after completion; no break stats `trackBreak` local-only (not in `STORES.STATS`).
-- No capture/auth/sync — still deferred (E/F/G). No idle/away reconciliation dialog yet (stretch for D, B observers already recompute).
+- No auth/sync — still deferred (F/G). No idle/away reconciliation dialog yet (stretch for D, B observers already recompute).
 - AppIcon still deferred to H.
 
 ---
@@ -197,29 +241,29 @@ xcodebuild test ... -destination 'platform=macOS'
 
 ---
 
-## Exact recommended scope for Session D — DONE
+## Exact recommended scope for Session E — DONE
 
-**Completed 2026-08-30 — verified above (45 tests, BUILD SUCCEEDED, DoD met).**
+**Completed 2026-08-30 — verified above (78 tests, BUILD SUCCEEDED, DoD met).**
 
-Next scope moves to **Session E — Quick Capture and context launch** (bounded, do not bleed into F):
+Next scope moves to **Session F — Server capabilities (Auth + real Current)** (bounded, do not bleed into G):
 
-1. Global customizable shortcut (e.g., `⌘+Shift+G` or `Ctrl+Space` fallback) — `CGEventTap`/`MASShortcut` style, `Hardened Runtime` TCC prompt deferred but design `HotkeyGateway` now.
-2. Centered Spotlight/Raycast-like native overlay — borderless `NSPanel` `level=.floating`, `collectionBehavior .canJoinAllSpaces`, `NSVisualEffectView` ultraThin, one dominant input field, very fast keyboard-first flow (`Esc` dismiss, `Enter` confirm, `⌘Enter` reveal note field).
-3. Scheduling invariant — `Select date` factory default, `Enter` transitions to inline date/month picker if no date parsed; no Inbox/Someday; `CreateScheduledTask` validation via `assertSchedule` parity.
-4. Natural-language parsing (title, exact date `YYYY-MM-DD`, future month `YYYY-MM`, time `HH:mm`, duration `25m`/`1h`, hashtags `#tag`, URLs `https://…`) — share parser with Web `utils/timeAndTagParser.ts` + future AI breakdown placeholder.
-5. Notes text + URLs, `⌘Enter` to reveal note field, `ADD` vs `ACTION` abstraction (create vs create+start), hashtag→app/URL mappings via `NSWorkspace.open` (user-configurable), privacy mode (hide task text during screen sharing where reliable).
+1. Browser PKCE auth `goalflow://auth/callback` or Supabase `auth` flow — `KeychainAuthGateway` storing JWT, `AuthGateway.isAuthenticated` real, `LSUIElement` deep-link handling via `Info.plist CFBundleURLSchemes`.
+2. Real `CurrentTaskProvider` over local store — replace `DemoCurrentTaskProvider` seed with `SyncBackedCurrentTaskProvider` reading `LocalTaskStore` after `DailyPlan` gate; respect `getPlanningGate` `monthly_planning_required/daily_planning_required/ready/empty` → show `Plan the day` CTA linking to Web when not ready (do not present actionable Current when planning required).
+3. Shared `ACTION` server semantic (`Start Now`) — local `ExecutionState` creation mirrors server `POST /api/v1/action` intent; gateway prepares `taskId,start,planned` payload but local-first until G sync.
+4. Server breakdown `POST /api/v1/ai/breakdown` via `BreakdownGateway` — provider-side DeepSeek, closing parent `broken_down` and creating children with `parentTaskId` + `plannedOrder` tails.
+5. Read-only TrueNorth/amalgam context + calendar `EventKit` collision warning (read-only `EKEventStore` requestAccess, no write); surface in panel when `scheduledTime` overlaps.
 
-**Session E definition of done:** global shortcut opens overlay in <200 ms, typing `Title @25m #tag 2026-09-01` parses correctly, `Enter` creates task with exact day, `Select date` fallback works, `ADD` creates under ordering, `ACTION` creates and starts focus, no unscheduled queue, tests for parsing + scheduling invariant + ADD vs ACTION.
+**Session F definition of done:** browser auth completes and persists in Keychain, `fetchCurrent` returns real queue head respecting planning gate (not demo seed), `ACTION` server semantic prepared, breakdown creates children and closes parent, calendar warning appears for overlapping `14:30` slot, tests for gate + auth Keychain + breakdown parent closing + EventKit read-only.
 
 ---
 
-## Handoff checklist for next agent (Session E)
+## Handoff checklist for next agent (Session F)
 
 - [ ] Verify branch `feature/macos-execution-companion` tip (check `git merge-base` equals `f93684ac50562c03c99328d98e57eb67f862eb3b`); record `git rev-parse HEAD`.
 - [ ] Run `xcodegen generate --spec macos-native/project.yml --project macos-native/` if `project.yml` changed.
-- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 45 passing.
+- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 78 passing.
 - [ ] Do not modify `android-native/`, `services/syncProtocol.ts`, `services/cloudSync.ts`, `supabase/migrations/*`, `server/routes/sync/*` — still before Sync (G).
-- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session E) and §19 before coding; respect `LSUIElement` + break cover `Esc` handling.
+- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session F) and §20 before coding; respect `LSUIElement` + break `Esc` + capture `⌘⇧G` hotkey + `Select date` invariant.
 
 ---
 
