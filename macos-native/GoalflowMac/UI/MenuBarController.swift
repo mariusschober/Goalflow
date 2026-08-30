@@ -1,6 +1,8 @@
 import AppKit
 import SwiftUI
 import Combine
+import os
+private let menuBarLogger = Logger(subsystem: "com.mariusschober.goalflow.mac", category: "MenuBar")
 @MainActor
 final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
@@ -36,8 +38,9 @@ final class MenuBarController: NSObject {
         viewModel.$isOnBreak.receive(on: DispatchQueue.main).sink { [weak self] onBreak in self?.handleBreakChange(onBreak: onBreak) }.store(in: &cancellables)
         viewModel.$breakRemaining.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateBreakCover(); self?.updateStatusTitle() }.store(in: &cancellables)
         viewModel.$breakElapsed.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateBreakCover(); self?.updateStatusTitle() }.store(in: &cancellables)
-        Timer.publish(every: 5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: NSApplication.didBecomeActiveNotification, object: nil)
+        DistributedNotificationCenter.default().addObserver(self, selector: #selector(appearanceDidChange), name: NSNotification.Name("AppleInterfaceThemeChangedNotification"), object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appearanceDidChange), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
     @objc private func togglePopover() {
         // Suppress popover during break — cover is fullscreen
@@ -92,11 +95,12 @@ final class MenuBarController: NSObject {
             }
             return NSApp.effectiveAppearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
         }()
-        // Log for debugging
+        #if DEBUG
         let debugAppearance = button.effectiveAppearance.name.rawValue
         let winAppearance = button.window?.effectiveAppearance.name.rawValue ?? "nil-window"
         let appAppearance = NSApp.effectiveAppearance.name.rawValue
-        print("[MenuBar] isDark=\(isDark) button.effective=\(debugAppearance) window=\(winAppearance) app=\(appAppearance) display=\(isDark ? "dark":"light")")
+        menuBarLogger.debug("[MenuBar] isDark=\(isDark, privacy: .public) button.effective=\(debugAppearance, privacy: .public) window=\(winAppearance, privacy: .public) app=\(appAppearance, privacy: .public)")
+        #endif
         button.appearance = NSAppearance(named: isDark ? .vibrantDark : .vibrantLight)
         // Force explicit white/black via attributedTitle, not labelColor which still resolves against wrong appearance on Tahoe
         let titleColor: NSColor = isDark ? .white : .black

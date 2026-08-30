@@ -47,8 +47,17 @@ final class ExecutionTimer: ObservableObject {
         sleepObservers = [s, w]
     }
     private func removeSleepObservers() { for o in sleepObservers { NSWorkspace.shared.notificationCenter.removeObserver(o) }; sleepObservers.removeAll() }
-    private func handleSleep() {}
-    private func handleWake() { tick() }
+    private func handleSleep() { tick() }
+    private func handleWake() {
+        if let s = state, let startMono = s.startedAtMonotonic, let mono = (clock as? any MonotonicClock)?.monotonicNow {
+            let wallElapsed = clock.now().timeIntervalSince(s.startedAt)
+            let monoElapsed = Double(mono > startMono ? mono - startMono : 0) / 1_000_000_000
+            if abs(wallElapsed - monoElapsed) > 2 {
+                // Wall jumped (sleep/clock skew) — re-tick will clamp via wall; monotonic drift detectable
+            }
+        }
+        tick()
+    }
     var formattedRemaining: String { let m = remainingSeconds / 60; let s = remainingSeconds % 60; return String(format: "%02d:%02d", m, s) }
     var formattedOvertime: String { let m = overtimeSeconds / 60; let s = overtimeSeconds % 60; return String(format: "+%02d:%02d", m, s) }
     var isOvertime: Bool { overtimeSeconds > 0 }

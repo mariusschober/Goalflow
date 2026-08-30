@@ -42,18 +42,30 @@ targets:
         COMBINE_HIDPI_IMAGES: YES
         SUPPORTED_PLATFORMS: macosx
         SWIFT_EMIT_LOC_STRINGS: NO
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mariusschober.goalflow.mac
+        INFOPLIST_FILE: GoalflowMac/Resources/Info.plist
+        SWIFT_VERSION: 5.0
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        LSUIElement: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        DEVELOPMENT_TEAM: ""
+        COMBINE_HIDPI_IMAGES: YES
+        SUPPORTED_PLATFORMS: macosx
+        SWIFT_EMIT_LOC_STRINGS: NO
+        CODE_SIGN_ENTITLEMENTS: ""
       configs:
         Debug:
-          settings:
-            ONLY_ACTIVE_ARCH: YES
-            CODE_SIGN_ENTITLEMENTS: ""
-            ENABLE_HARDENED_RUNTIME: NO
+          ONLY_ACTIVE_ARCH: YES
+          ENABLE_HARDENED_RUNTIME: NO
+          CODE_SIGN_ENTITLEMENTS: ""
         Release:
-          settings:
-            ONLY_ACTIVE_ARCH: NO
-            CODE_SIGN_ENTITLEMENTS: ""
-            ENABLE_HARDENED_RUNTIME: NO
-            CODE_SIGN_IDENTITY: "-"
+          ONLY_ACTIVE_ARCH: NO
+          ENABLE_HARDENED_RUNTIME: YES
+          CODE_SIGN_ENTITLEMENTS: ""
+          CODE_SIGN_IDENTITY: "-"
 
   GoalflowMacTests:
     type: bundle.unit-test

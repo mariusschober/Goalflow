@@ -18,27 +18,28 @@ final class NoopSoundGateway: SoundGateway, @unchecked Sendable {
 }
 final class TickSoundGateway: SoundGateway, @unchecked Sendable {
     private var isEnabled: Bool = true; private var volume: Float = 0.6; private let lock = NSLock()
+    private let audioQueue = DispatchQueue(label: "com.mariusschober.goalflow.sound", qos: .userInitiated)
     init() {}
-    func setEnabled(_ enabled: Bool) { lock.lock(); isEnabled = enabled; lock.unlock() }
-    func setVolume(_ volume: Float) { lock.lock(); self.volume = max(0, min(1, volume)); lock.unlock() }
+    func setEnabled(_ enabled: Bool) { lock.lock(); defer { lock.unlock() }; isEnabled = enabled }
+    func setVolume(_ volume: Float) { lock.lock(); defer { lock.unlock() }; self.volume = max(0, min(1, volume)) }
     func tick(volume vol: Float) {
-        lock.lock(); let enabled = isEnabled; let baseVol = volume; lock.unlock()
+        let (enabled, baseVol): (Bool, Float) = { lock.lock(); defer { lock.unlock() }; return (isEnabled, volume) }()
         guard enabled else { return }
         let v = baseVol * max(0, vol); guard v > 0.01 else { return }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.playTick(volume: v) }
+        audioQueue.async { [weak self] in self?.playTick(volume: v) }
     }
     func complete(frog: Bool) {
-        lock.lock(); let enabled = isEnabled; let baseVol = volume; lock.unlock()
+        let (enabled, baseVol): (Bool, Float) = { lock.lock(); defer { lock.unlock() }; return (isEnabled, volume) }()
         guard enabled else { return }
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.playCompletion(frog: frog, volume: baseVol) }
+        audioQueue.async { [weak self] in self?.playCompletion(frog: frog, volume: baseVol) }
     }
     private func playTick(volume: Float) {
         let sampleRate: Double = 44_100; let duration: Double = 0.05
         let frames = AVAudioFrameCount(sampleRate * duration)
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
         guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
         buf.frameLength = frames
-        let ptr = buf.floatChannelData![0]
+        guard let ptr = buf.floatChannelData?[0] else { return }
         for i in 0..<Int(frames) {
             let noise = Float.random(in: -1...1)
             let t = Float(i) / Float(sampleRate)
@@ -51,8 +52,7 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         do { try engine.start(); player.play(); player.scheduleBuffer(buf, at: nil, options: .interrupts, completionHandler: { engine.stop() }); Thread.sleep(forTimeInterval: duration + 0.02) } catch {}
     }
     func alarm(loop: Bool) {
-        // Simple fire-and-forget 6-beep burst; loop via repeating timer if loop true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.playAlarm(loop: loop) }
+        audioQueue.async { [weak self] in self?.playAlarm(loop: loop) }
     }
     func stopAlarm() {
         // No persistent looping state yet - playAlarm burst is finite, so stop is no-op for now
@@ -66,7 +66,7 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
     }
     private func playAlarmBurst() {
         let sampleRate: Double = 44_100
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
         let engine = AVAudioEngine(); let player = AVAudioPlayerNode()
         engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
         do {
@@ -77,7 +77,7 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
                 let frames = AVAudioFrameCount(sampleRate * dur)
                 guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { continue }
                 buf.frameLength = frames
-                let ptr = buf.floatChannelData![0]
+                guard let ptr = buf.floatChannelData?[0] else { continue }
                 for i in 0..<Int(frames) {
                     let phase = 2 * .pi * Double(freq) * Double(i) / sampleRate
                     ptr[i] = Float(sin(phase) * 0.22)
@@ -93,12 +93,12 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         let sampleRate: Double = 44_100
         let gap: Double = 0.025
         var buffers: [AVAudioPCMBuffer] = []
-        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }
         for (freq, dur) in notes {
             let frames = AVAudioFrameCount(sampleRate * dur)
             guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { continue }
             buf.frameLength = frames
-            let ptr = buf.floatChannelData![0]
+            guard let ptr = buf.floatChannelData?[0] else { continue }
             for i in 0..<Int(frames) {
                 let t = Float(i) / Float(sampleRate)
                 let attack = min(1, Float(i) / Float(sampleRate * 0.012))

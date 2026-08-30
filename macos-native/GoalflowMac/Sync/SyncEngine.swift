@@ -1,20 +1,38 @@
 import Foundation
 
+private actor SyncGate {
+    private var busy = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    func acquire() async {
+        if !busy { busy = true; return }
+        await withCheckedContinuation { c in waiters.append(c) }
+    }
+    func release() {
+        if !waiters.isEmpty { let w = waiters.removeFirst(); w.resume() } else { busy = false }
+    }
+}
+
 final class SyncEngine: @unchecked Sendable {
     static let shared = SyncEngine()
     private let metaStore: SyncMetaStore
     private let deviceIdStore: DeviceIdStore
     private let transport: any SyncTransport
     private let storeBridge: any SyncStoreBridge
-    private let lock = NSLock()
+    private let gate = SyncGate()
 
     init(metaStore: SyncMetaStore = SyncMetaStore(), deviceIdStore: DeviceIdStore = DeviceIdStore(), transport: any SyncTransport = URLSessionSyncTransport(), storeBridge: any SyncStoreBridge = FileSyncStoreBridge()) {
         self.metaStore = metaStore; self.deviceIdStore = deviceIdStore; self.transport = transport; self.storeBridge = storeBridge
     }
 
     func synchronize() async throws {
-        lock.lock(); defer { lock.unlock() }
-        try await synchronizeOnce()
+        await gate.acquire()
+        do {
+            try await synchronizeOnce()
+            await gate.release()
+        } catch {
+            await gate.release()
+            throw error
+        }
     }
 
     private func synchronizeOnce() async throws {
