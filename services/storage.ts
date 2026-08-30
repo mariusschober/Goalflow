@@ -1197,3 +1197,15 @@ export const storageService = {
     }
   }
 };
+
+// Test hook: expose storage for Playwright durability verification (only in test/dev builds)
+if (typeof window !== 'undefined') {
+  try {
+    const env = (import.meta as unknown as { env: Record<string, unknown> }).env;
+    const isTest = env?.VITE_TEST_MODE === 'true' || Boolean(env?.DEV);
+    if (isTest) {
+      (window as unknown as Record<string, unknown>).__storageService = storageService;
+      (window as unknown as Record<string, unknown>).__STORES = STORES;
+    }
+  } catch {}
+}

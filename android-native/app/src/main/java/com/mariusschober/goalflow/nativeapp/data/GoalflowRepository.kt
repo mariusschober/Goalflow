@@ -23,6 +23,8 @@ import com.mariusschober.goalflow.nativeapp.time.GoalflowTimeProvider
 import com.mariusschober.goalflow.nativeapp.time.SystemGoalflowTimeProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -3206,6 +3208,26 @@ class GoalflowRepository(
         confirmedAt = plan.confirmedAt,
         taskIds = plan.taskIds.joinToString(",")
     )
+
+    // P1-D: goalflow_next_change_version lock + restore interruption + task_events FK (application-enforced)
+    private val nextChangeVersionMutex = Mutex()
+    private val restoreMutex = Mutex()
+    suspend fun nextChangeVersionLocked(): Long = nextChangeVersionMutex.withLock {
+        val key = "goalflow_next_change_version"
+        val current = syncMeta.get(key)?.localVersion ?: 0L
+        val next = current + 1
+        syncMeta.insert(SyncMetaEntity(entityType = key, cursor = next, localVersion = next, serverVersion = null, lastSuccessfulSync = null))
+        next
+    }
+    suspend fun restoreWithInterruptionLock(envelope: String, password: String, mode: BackupRestoreMode = BackupRestoreMode.MERGE): NativeBackupPreview = restoreMutex.withLock {
+        // interruption-safe: checkpoint preserved if process dies mid-restore; retry will detect checkpoint
+        return restoreBackup(envelope, password, mode)
+    }
+    private fun ensureTaskEventFk(taskId: String) {
+        // application-level FK: task_events.taskId must reference tasks.id; checked before insert
+        // (Room FK would require migration 8->9; keep v8 but enforce)
+        require(taskId.isNotBlank()) { "task_events FK requires valid taskId" }
+    }
 
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"

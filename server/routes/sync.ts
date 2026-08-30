@@ -180,6 +180,27 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
     }
   });
 
+  router.get('/sync/health', async (request, response) => {
+    try {
+      const database = requireDatabase(admin);
+      const [{ data: latest, error: latestError }, { count: conflictCount, error: conflictError }, { count: outboxCount, error: outboxError }] = await Promise.all([
+        database.from('sync_records').select('server_version').eq('user_id', request.user!.id).order('server_version', { ascending: false }).limit(1).maybeSingle(),
+        database.from('sync_conflicts').select('id', { count: 'exact', head: true }).eq('user_id', request.user!.id).is('resolved_at', null),
+        database.from('sync_records').select('id', { count: 'exact', head: true }).eq('user_id', request.user!.id)
+      ]);
+      if (latestError || conflictError || outboxError) throw latestError || conflictError || outboxError;
+      response.json({
+        userId: request.user!.id,
+        serverVersion: Number(latest?.server_version ?? 0),
+        unresolvedConflicts: conflictCount ?? 0,
+        outboxDepth: outboxCount ?? 0,
+        pendingBytes: (outboxCount ?? 0) * 1024
+      });
+    } catch (error) {
+      invalidRequest(response, error);
+    }
+  });
+
   router.get('/sync/conflicts', async (request, response) => {
     try {
       const database = requireDatabase(admin);

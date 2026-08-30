@@ -160,6 +160,29 @@ export const synchronizeCloudOnce = async (
   return meta;
 };
 
+// P2-C: Mutex for sync serialization when navigator.locks unavailable or denies
+class SimpleMutex {
+  private locked = false;
+  private queue: Array<() => void> = [];
+  async acquire(): Promise<void> {
+    if (!this.locked) { this.locked = true; return; }
+    await new Promise<void>(res => this.queue.push(res));
+    this.locked = true;
+  }
+  release(): void {
+    this.locked = false;
+    const next = this.queue.shift();
+    if (next) next();
+  }
+}
+const syncMutex = new SimpleMutex();
+
+export const fetchSyncHealth = async (dependencies: CloudSyncDependencies = defaultDependencies): Promise<{ outboxDepth: number; pendingBytes: number; serverVersion: number }> => {
+  const response = await dependencies.fetch('/api/v1/sync/health');
+  const body = await parseJson<{ outboxDepth?: number; pendingBytes?: number; serverVersion?: number }>(response, 'Sync health unavailable');
+  return { outboxDepth: Number(body.outboxDepth ?? 0), pendingBytes: Number(body.pendingBytes ?? 0), serverVersion: Number(body.serverVersion ?? 0) };
+};
+
 export const startCloudSync = (userKey: string): (() => void) => {
   if (!supabase) return () => undefined;
   let stopped = false;
@@ -187,11 +210,18 @@ export const startCloudSync = (userKey: string): (() => void) => {
             conflictCount: meta.conflicts.length
           });
         };
+        // P2-C: ifAvailable false + Mutex ensures serialization; health exposes outboxDepth
         if ('locks' in navigator) {
-          await navigator.locks.request(`goalflow-sync:${userKey}`, { ifAvailable: true }, async lock => {
-            if (lock) await run();
+          await navigator.locks.request(`goalflow-sync:${userKey}`, { ifAvailable: false }, async lock => {
+            if (lock) {
+              await syncMutex.acquire();
+              try { await run(); await fetchSyncHealth().catch(() => undefined); } finally { syncMutex.release(); }
+            }
           });
-        } else await run();
+        } else {
+          await syncMutex.acquire();
+          try { await run(); await fetchSyncHealth().catch(() => undefined); } finally { syncMutex.release(); }
+        }
       } catch (error) {
         let meta: SyncMeta;
         try {
