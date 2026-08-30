@@ -6,7 +6,12 @@ final class GoalStore: @unchecked Sendable {
     private let defaults: UserDefaults
     private let encoder: JSONEncoder
     private let decoder: JSONDecoder
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.goals.v1") {
+    private let syncMetaStore: SyncMetaStore
+    private let deviceIdStore: DeviceIdStore
+    private let userKey = "localUser"
+    private static let orderLock = NSLock()
+    private static var orderCounter = 0
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.goals.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
@@ -15,6 +20,10 @@ final class GoalStore: @unchecked Sendable {
         self.defaults = defaults; self.walKey = walKey
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
         decoder = JSONDecoder()
+        let dir = self.fileURL.deletingLastPathComponent()
+        let syncURL = dir.appendingPathComponent("sync.json")
+        self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
+        self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
     private func ensureDirectory() throws {
         let dir = fileURL.deletingLastPathComponent()
@@ -30,6 +39,16 @@ final class GoalStore: @unchecked Sendable {
         return []
     }
     func saveAll(_ goals: [Goal]) throws {
+        // Stage for sync (best-effort)
+        do {
+            let prev = loadAll()
+            let prevVal: Any? = prev.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+            let nextVal: Any? = goals.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+            if let tx = try? buildStagedLocalTransaction(storeName: "goals", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
+                var meta = syncMetaStore.load()
+                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
+            }
+        } catch {}
         let data = try encoder.encode(goals)
         try ensureDirectory()
         do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
@@ -37,12 +56,22 @@ final class GoalStore: @unchecked Sendable {
         if read != data { throw FocusSessionStoreError.readBackMismatch }
         defaults.set(data, forKey: walKey)
     }
+    private func nextOrder() -> Int {
+        Self.orderLock.lock(); defer { Self.orderLock.unlock() }
+        Self.orderCounter = (Self.orderCounter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + Self.orderCounter
+    }
 }
 
 final class TrueNorthStore: @unchecked Sendable {
     let fileURL: URL; private let walKey: String; private let defaults: UserDefaults
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.truenorth.v1") {
+    private let syncMetaStore: SyncMetaStore
+    private let deviceIdStore: DeviceIdStore
+    private let userKey = "localUser"
+    private static let orderLock = NSLock()
+    private static var orderCounter = 0
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.truenorth.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
@@ -50,6 +79,10 @@ final class TrueNorthStore: @unchecked Sendable {
         }
         self.defaults = defaults; self.walKey = walKey
         encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]; decoder = JSONDecoder()
+        let dir = self.fileURL.deletingLastPathComponent()
+        let syncURL = dir.appendingPathComponent("sync.json")
+        self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
+        self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
     private func ensureDirectory() throws {
         let dir = fileURL.deletingLastPathComponent()
@@ -63,23 +96,46 @@ final class TrueNorthStore: @unchecked Sendable {
         return []
     }
     func saveAll(_ goals: [TrueNorthGoal]) throws {
+        do {
+            let prev = loadAll()
+            let prevVal: Any? = prev.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
+            let nextVal: Any? = goals.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
+            if let tx = try? buildStagedLocalTransaction(storeName: "truenorth", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
+                var meta = syncMetaStore.load()
+                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
+            }
+        } catch {}
         let data = try encoder.encode(goals); try ensureDirectory()
         do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
         guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after write") }
         if read != data { throw FocusSessionStoreError.readBackMismatch }
         defaults.set(data, forKey: walKey)
     }
+    private func nextOrder() -> Int {
+        Self.orderLock.lock(); defer { Self.orderLock.unlock() }
+        Self.orderCounter = (Self.orderCounter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + Self.orderCounter
+    }
 }
 
 final class AmalgamStore: @unchecked Sendable {
     let fileURL: URL; private let walKey: String; private let defaults: UserDefaults
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.amalgam.v1") {
+    private let syncMetaStore: SyncMetaStore
+    private let deviceIdStore: DeviceIdStore
+    private let userKey = "localUser"
+    private static let orderLock = NSLock()
+    private static var orderCounter = 0
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.amalgam.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
             self.fileURL = dir.appendingPathComponent("amalgam.json")
         }
         self.defaults = defaults; self.walKey = walKey
+        let dir = self.fileURL.deletingLastPathComponent()
+        let syncURL = dir.appendingPathComponent("sync.json")
+        self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
+        self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
     private func ensureDirectory() throws {
         let dir = fileURL.deletingLastPathComponent()
@@ -93,8 +149,22 @@ final class AmalgamStore: @unchecked Sendable {
         return defaults.string(forKey: walKey) // fallback legacy string
     }
     func save(_ value: String) throws {
+        do {
+            let prev = load()
+            let prevVal: Any? = prev
+            let nextVal: Any? = value
+            if let tx = try? buildStagedLocalTransaction(storeName: "amalgam", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
+                var meta = syncMetaStore.load()
+                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
+            }
+        } catch {}
         let data = try JSONEncoder().encode(value); try ensureDirectory()
         do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
         defaults.set(data, forKey: walKey)
+    }
+    private func nextOrder() -> Int {
+        Self.orderLock.lock(); defer { Self.orderLock.unlock() }
+        Self.orderCounter = (Self.orderCounter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + Self.orderCounter
     }
 }
