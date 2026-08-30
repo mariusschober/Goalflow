@@ -112,7 +112,7 @@ Repository: https://github.com/mariusschober/Goalflow
 Authoritative branch: goalflow-production
 Pinned baseline: 34005552de745682e798fce3bb851bb831e2c642
 Current T1 implementation/fix commit: 43643038917ac858b30f288aeb91d1e4f29c4fde
-Current handover checkpoint: e378e3b7e93a94bc4b8a20b83248189431de583e
+Current branch tip: verify the live `goalflow-production` ref before acting; this document is the durable handover source
 
 Read first:
 - docs/PRODUCTION_READINESS.md
