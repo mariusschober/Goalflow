@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Combine
 @MainActor
@@ -7,6 +8,12 @@ final class ExecutionViewModel: ObservableObject {
     @Published var remainingSeconds: Int = 0
     @Published var overtimeSeconds: Int = 0
     @Published var isPaused: Bool = false
+    @Published var holdProgress: Double = 0
+    @Published var holding: Bool = false
+    @Published var flowPickerVisible: Bool = false
+    @Published var showReward: Bool = false
+    @Published var completedTodayCount: Int = 0
+    @Published var queueCount: Int = 0
     private let provider: DemoCurrentTaskProvider
     private let store: any FocusSessionStore
     private let clock: any Clock
@@ -14,6 +21,9 @@ final class ExecutionViewModel: ObservableObject {
     private let sound: any SoundGateway
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
+    private var holdController: CompletionHoldController?
+    private var holdTimer: AnyCancellable?
+    private var pendingCompletedId: String?
     init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway()) {
         self.provider = provider; self.store = store; self.clock = clock; self.sound = sound
         setupTimerBindings(); restore()
@@ -30,6 +40,8 @@ final class ExecutionViewModel: ObservableObject {
     }
     func restore() {
         task = provider.fetchCurrent()
+        completedTodayCount = provider.completedCount(today: todayString())
+        queueCount = provider.queueCount(today: todayString())
         if let s = store.load() {
             if let t = task, t.id == s.taskId, t.isOpen { execution = s } else { try? store.clear(); execution = nil }
         } else { execution = nil }
@@ -79,8 +91,75 @@ final class ExecutionViewModel: ObservableObject {
         do { try store.save(next); execution = next; timer.reflectExtend(next) } catch { print("[Execution] extend persist failed:", error) }
     }
     func add5() { extend(by: 5*60) }; func add15() { extend(by: 15*60) }; func add30() { extend(by: 30*60) }
+    var holdDuration: TimeInterval { (task?.isFrog == true) ? 5.0 : 3.0 }
+    func beginHold() {
+        guard let t = task, execution != nil, !holding else { return }
+        holdController = CompletionHoldController(isFrog: t.isFrog, clock: clock)
+        holdController?.start(at: clock.now())
+        holding = true; holdProgress = 0
+        holdTimer?.cancel()
+        holdTimer = Timer.publish(every: 0.02, on: .main, in: .common).autoconnect().sink { [weak self] _ in
+            guard let self, let hc = self.holdController else { return }
+            let p = hc.progress(at: self.clock.now())
+            self.holdProgress = p
+            if p >= 0.33 && p < 0.35 { self.haptic(1) }
+            if p >= 0.66 && p < 0.68 { self.haptic(1) }
+            if hc.isCompleted(at: self.clock.now()) {
+                self.holdTimer?.cancel(); self.holding = false; self.holdProgress = 1; self.confirmCompletion()
+            }
+        }
+        haptic(0)
+    }
+    func endHold(cancelled: Bool) {
+        guard holding else { return }
+        holdTimer?.cancel(); holdTimer = nil
+        if cancelled || !(holdController?.isCompleted(at: clock.now()) ?? false) {
+            withAnimation(.easeOut(duration: 0.2)) { holdProgress = 0 }
+            holding = false; holdController?.cancel()
+        }
+    }
+    private func haptic(_ type: Int) {
+        if #available(macOS 11.0, *) {
+            if type == 0 { NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .default) }
+            else if type == 1 { NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .default) }
+            else { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .default) }
+        }
+    }
+    private func confirmCompletion() {
+        guard let t = task, let exec = execution else { return }
+        let elapsed = exec.elapsedSeconds(now: clock.now())
+        let actual = max(1, Int(ceil(Double(elapsed) / 60.0)))
+        do {
+            let completed: GoalflowTask
+            completed = try provider.completeTask(id: t.id, actualDurationMinutes: actual, flowState: nil)
+            pendingCompletedId = completed.id
+            try store.clear(); timer.stop(); execution = nil
+            sound.complete(frog: t.isFrog)
+            withAnimation(.easeOut(duration: 0.3)) { showReward = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.showReward = false; self?.flowPickerVisible = true }
+            haptic(2)
+            task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString())
+        } catch {
+            print("[Execution] completion persist failed:", error)
+            holdProgress = 0; holding = false; holdController?.cancel()
+        }
+    }
+    func selectFlow(_ flow: FlowState) {
+        guard let id = pendingCompletedId else { flowPickerVisible = false; return }
+        do { try provider.updateFlowState(taskId: id, flow: flow) } catch { print("[Execution] flowState persist failed:", error) }
+        flowPickerVisible = false; pendingCompletedId = nil
+        task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString()); configureTimer()
+    }
+    func skipFlow() {
+        flowPickerVisible = false; pendingCompletedId = nil
+        task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString()); configureTimer()
+    }
     func toggleFrog() { guard let t = task else { return }; provider.setFrogDemo(isFrog: !t.isFrog); task = provider.fetchCurrent() }
-    func resetDemo() { try? store.clear(); provider.resetDemo(); execution = nil; task = provider.fetchCurrent(); configureTimer() }
+    func resetDemo() { try? store.clear(); provider.resetDemo(); execution = nil; task = provider.fetchCurrent(); flowPickerVisible = false; pendingCompletedId = nil; holdProgress = 0; holding = false; showReward = false; configureTimer() }
+    private func todayString() -> String {
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
+        return f.string(from: Date())
+    }
 }
 struct ExecutionPanelView: View {
     @ObservedObject var vm: ExecutionViewModel
@@ -89,7 +168,7 @@ struct ExecutionPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().opacity(0.08)
-            if let task = vm.task { content(task: task) } else { empty }
+            if vm.flowPickerVisible { flowPicker } else if let task = vm.task { content(task: task) } else { empty }
             footer
         }
         .frame(width: 380)
@@ -98,13 +177,14 @@ struct ExecutionPanelView: View {
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
         .shadow(color: Color.black.opacity(colorScheme == .dark ? 0.5 : 0.18), radius: 18, x: 0, y: 10)
         .padding(10)
+        .overlay(rewardOverlay)
     }
     private var panelBackground: some View {
         Group {
             if #available(macOS 13.0, *) {
                 ZStack {
                     RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial)
-                    if vm.isActive || vm.isPaused || vm.isOvertime {
+                    if vm.isActive || vm.isPaused || vm.isOvertime || vm.showReward {
                         RoundedRectangle(cornerRadius: 18, style: .continuous).fill((vm.isOvertime ? Color.orange.opacity(0.08) : Color.accentColor.opacity(0.06)))
                     }
                 }
@@ -134,6 +214,29 @@ struct ExecutionPanelView: View {
         }
         .padding(.horizontal, 16).padding(.vertical, 12)
     }
+    private var flowPicker: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("How was your focus?").font(.system(size: 14, weight: .semibold, design: .rounded))
+            Text("Pick one — ~1 sec, no typing. Esc to skip.").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ForEach(FlowState.allCases, id: \.rawValue) { flow in
+                    Button(action: { vm.selectFlow(flow) }) {
+                        VStack(spacing: 4) {
+                            Text(flow.shortLabel).font(.system(size: 12, weight: .bold, design: .rounded))
+                            Text(flow == .distracted ? "1" : flow == .good ? "2" : flow == .high ? "3" : "4").font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(Capsule().fill(colorForFlow(flow).opacity(0.14)))
+                        .overlay(Capsule().stroke(colorForFlow(flow).opacity(0.22), lineWidth: 1))
+                    }.buttonStyle(.plain).keyboardShortcut(flow == .distracted ? "1" : flow == .good ? "2" : flow == .high ? "3" : "4")
+                }
+            }
+            Button("Skip (Esc)") { vm.skipFlow() }.font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).keyboardShortcut(.cancelAction)
+        }.padding(.horizontal, 16).padding(.vertical, 18)
+    }
+    private func colorForFlow(_ flow: FlowState) -> Color {
+        switch flow { case .distracted: return Color.gray; case .good: return Color.blue; case .high: return Color.indigo; case .flow: return Color.purple }
+    }
     private func content(task: GoalflowTask) -> some View {
         VStack(alignment: .leading, spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
@@ -153,21 +256,27 @@ struct ExecutionPanelView: View {
                 ZStack {
                     CircularProgress(progress: vm.progress, lineWidth: 4, tint: vm.isOvertime ? Color.orange : task.isFrog ? Color.green : Color.accentColor, inactive: !(vm.isActive || vm.isPaused || vm.isOvertime))
                         .frame(width: 72, height: 72)
+                    if vm.holding {
+                        CircularProgress(progress: vm.holdProgress, lineWidth: 6, tint: task.isFrog ? Color.green : Color.accentColor, inactive: false)
+                            .frame(width: 84, height: 84).opacity(0.9)
+                    }
                     Text(vm.displayTime).font(.system(size: vm.isActive || vm.isPaused ? 18 : 16, weight: .semibold, design: .monospaced)).monospacedDigit().foregroundStyle((vm.isActive || vm.isPaused || vm.isOvertime) ? (vm.isOvertime ? Color.orange : .primary) : .secondary)
                 }.id(vm.execution?.startedAt)
                 Spacer(minLength: 8)
                 if vm.isActive || vm.isPaused {
-                    HStack(spacing: 8) {
-                        if vm.isPaused {
-                            Button(action: { vm.resume() }) {
-                                HStack(spacing: 6) { Image(systemName: "play.fill").font(.system(size: 11, weight: .bold)); Text("Resume").font(.system(size: 12, weight: .bold, design: .rounded)) }
-                                .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.green)).shadow(color: Color.green.opacity(0.25), radius: 8, x: 0, y: 4)
-                            }.buttonStyle(.plain)
-                        } else {
-                            Button(action: { vm.pause() }) {
-                                HStack(spacing: 6) { Image(systemName: "pause.fill").font(.system(size: 11, weight: .bold)); Text("Pause").font(.system(size: 12, weight: .bold, design: .rounded)) }
-                                .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.orange)).shadow(color: Color.orange.opacity(0.25), radius: 8, x: 0, y: 4)
-                            }.buttonStyle(.plain)
+                    VStack(alignment: .trailing, spacing: 8) {
+                        HStack(spacing: 8) {
+                            if vm.isPaused {
+                                Button(action: { vm.resume() }) {
+                                    HStack(spacing: 6) { Image(systemName: "play.fill").font(.system(size: 11, weight: .bold)); Text("Resume").font(.system(size: 12, weight: .bold, design: .rounded)) }
+                                    .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.green)).shadow(color: Color.green.opacity(0.25), radius: 8, x: 0, y: 4)
+                                }.buttonStyle(.plain)
+                            } else {
+                                Button(action: { vm.pause() }) {
+                                    HStack(spacing: 6) { Image(systemName: "pause.fill").font(.system(size: 11, weight: .bold)); Text("Pause").font(.system(size: 12, weight: .bold, design: .rounded)) }
+                                    .foregroundStyle(.white).padding(.horizontal, 14).padding(.vertical, 10).background(Capsule().fill(Color.orange)).shadow(color: Color.orange.opacity(0.25), radius: 8, x: 0, y: 4)
+                                }.buttonStyle(.plain)
+                            }
                         }
                         HStack(spacing: 6) {
                             ForEach([(5,"+5"),(15,"+15"),(30,"+30")], id: \.0) { sec, label in
@@ -176,6 +285,7 @@ struct ExecutionPanelView: View {
                                 }.buttonStyle(.plain)
                             }
                         }
+                        holdButton(task: task)
                     }
                 } else {
                     Button(action: { vm.action() }) {
@@ -188,32 +298,83 @@ struct ExecutionPanelView: View {
                 Text("Tap ACTION to start. The timer counts from \(task.durationMinutes) minutes — it will persist if Goalflow restarts. Pause is low friction; overtime counts separately.")
                     .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
             } else if vm.isPaused {
-                Text("Paused — elapsed frozen. Resume to continue, or add time.").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
+                Text("Paused — elapsed frozen. Resume to continue, or add time. Hold to complete (Frog 5s, others 3s).").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
             } else if vm.isOvertime {
-                Text("Overtime — planned time elapsed. Keep flowing or add +5/+15/+30.").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.orange)
+                Text("Overtime — planned time elapsed. Keep flowing or add +5/+15/+30. Hold to complete when done.").font(.system(size: 11, weight: .medium)).foregroundStyle(Color.orange)
+            } else {
+                Text("Focusing — hold to mark complete (Frog 5s).").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 18)
         .background(RoundedRectangle(cornerRadius: 14).fill((vm.isActive || vm.isPaused || vm.isOvertime) ? (vm.isOvertime ? Color.orange.opacity(0.06) : Color.accentColor.opacity(0.04)) : Color.clear))
         .padding(.horizontal, 10)
     }
+    private func holdButton(task: GoalflowTask) -> some View {
+        let dur = task.isFrog ? "5s" : "3s"
+        return ZStack {
+            Capsule().fill(task.isFrog ? Color.green : Color.accentColor).opacity(vm.holding ? 0.12 : 0.0)
+            Button(action: {}) {
+                HStack(spacing: 6) {
+                    Image(systemName: task.isFrog ? "checkmark.circle.fill" : "checkmark.circle").font(.system(size: 12, weight: .bold))
+                    Text("Done \(dur)").font(.system(size: 12, weight: .bold, design: .rounded))
+                }
+                .foregroundStyle(task.isFrog ? Color.green : Color.accentColor)
+                .padding(.horizontal, 14).padding(.vertical, 8)
+                .background(Capsule().stroke(task.isFrog ? Color.green : Color.accentColor, lineWidth: vm.holding ? 2 : 1.2))
+            }
+            .buttonStyle(.plain)
+            .simultaneousGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in if !vm.holding { vm.beginHold() } }
+                    .onEnded { _ in vm.endHold(cancelled: vm.holdProgress < 1.0) }
+            )
+            .onLongPressGesture(minimumDuration: 0, pressing: { pressing in
+                if pressing { vm.beginHold() } else { vm.endHold(cancelled: vm.holdProgress < 1.0) }
+            }, perform: {})
+            if vm.holding {
+                Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 1)
+                GeometryReader { geo in
+                    Capsule().fill((task.isFrog ? Color.green : Color.accentColor).opacity(0.18))
+                        .frame(width: geo.size.width * CGFloat(vm.holdProgress))
+                        .animation(.linear(duration: 0.02), value: vm.holdProgress)
+                }
+            }
+        }.frame(height: 36).animation(.easeOut(duration: 0.2), value: vm.holding)
+    }
     private var empty: some View {
         VStack(spacing: 10) {
-            Image(systemName: "checkmark.seal.fill").font(.system(size: 28)).foregroundStyle(.secondary)
-            Text("Everything done").font(.system(size: 16, weight: .semibold, design: .rounded))
-            Text("Plan tomorrow when ready.").font(.system(size: 12)).foregroundStyle(.secondary)
+            Image(systemName: "checkmark.seal.fill").font(.system(size: 28)).foregroundStyle(.green)
+            Text("Everything done").font(.system(size: 16, weight: .semibold, design: .rounded)).foregroundStyle(.green)
+            Text(vm.completedTodayCount > 0 ? "\(vm.completedTodayCount) completed today. Quiet — plan tomorrow when ready." : "Quiet — plan tomorrow when ready.")
+                .font(.system(size: 12)).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }.frame(maxWidth: .infinity).padding(28)
     }
     private var footer: some View {
         HStack {
             Text("Goalflow • Execution").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.tertiary)
             Spacer()
-            Text(vm.isPaused ? "Paused" : vm.isOvertime ? "Overtime" : vm.isActive ? "Active" : "Ready")
+            if vm.queueCount > 0 {
+                Text("\(vm.completedTodayCount) / \(vm.completedTodayCount + vm.queueCount)").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+            }
+            let footerText: String = vm.isPaused ? "Paused" : vm.isOvertime ? "Overtime" : vm.isActive ? "Active" : vm.task == nil ? "Done" : "Ready"
+            let footerColor: Color = vm.isOvertime ? Color.orange : vm.isPaused ? Color.orange : vm.isActive ? Color.green : vm.task == nil ? Color.green : Color.secondary
+            let footerBG: Color = vm.isOvertime ? Color.orange.opacity(0.14) : vm.isPaused ? Color.orange.opacity(0.12) : vm.isActive ? Color.green.opacity(0.14) : vm.task == nil ? Color.green.opacity(0.14) : Color.primary.opacity(0.06)
+            Text(footerText)
                 .font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(0.6).textCase(.uppercase)
-                .foregroundStyle(vm.isOvertime ? Color.orange : vm.isPaused ? Color.orange : vm.isActive ? Color.green : .secondary)
+                .foregroundStyle(footerColor)
                 .padding(.horizontal, 8).padding(.vertical, 3)
-                .background((vm.isOvertime ? Color.orange.opacity(0.14) : vm.isPaused ? Color.orange.opacity(0.12) : vm.isActive ? Color.green.opacity(0.14) : Color.primary.opacity(0.06)))
+                .background(footerBG)
                 .clipShape(Capsule())
         }.padding(.horizontal, 14).padding(.vertical, 10)
+    }
+    private var rewardOverlay: some View {
+        Group {
+            if vm.showReward {
+                ZStack {
+                    Circle().stroke(Color.primary.opacity(0.10), lineWidth: 1).scaleEffect(vm.showReward ? 1.22 : 1.0).opacity(vm.showReward ? 0 : 0.3)
+                    Circle().fill(Color.accentColor.opacity(vm.task?.isFrog == true ? 0.10 : 0.06)).scaleEffect(vm.showReward ? 1.18 : 0.92).opacity(vm.showReward ? 0.5 : 0)
+                }.animation(.easeOut(duration: 0.9), value: vm.showReward)
+            }
+        }
     }
 }

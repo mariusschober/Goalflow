@@ -3,7 +3,7 @@
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
 **Spec snapshot:** `GOALFLOW_MACOS_MUSE_CONTEXT.md` (Tahoe target)  
-**Last updated:** 2026-08-30 — Session B (Focus Engine)
+**Last updated:** 2026-08-30 — Session C (Accomplishment Loop)
 
 ---
 
@@ -254,6 +254,7 @@ Constraints: one bounded milestone per session, preserve sync-last.
 |---|---|---|---|
 | **A — Foundation** | Native shell + Current→ACTION→Timer | Audit, plan+handoff, branch, Xcode project Tahoe/arm64, menu-bar-only lifecycle, popover panel, `GoalflowTask`+`ExecutionState`+`ExecutionTimer`, `DemoCurrentTaskProvider` with deterministic ordering & frog visual, ACTION hero, countdown from `duration`, inactive/active coherent Tahoe design, persistence surviving relaunch, unit tests, build | ✅ |
 | **B — Focus engine** | Robust timing | Monotonic `ContinuousClock` + pause/resume + overtime (+5/+15/+30 inline), sleep/away observers recompute, file-backed `execution.json` atomic + WAL, Combine ticker wiring, `SoundGateway`/`TTSGateway` slots | ✅ |
+| **C — Accomplishment loop** | Completion ritual | 3 s hold (ordinary) / 5 s Frog + haptic buildup, `FlowState` distracted/good/high/flow, `LocalTaskStore` atomic + no resurrection, next Current auto-advance, `Everything Done` quiet state, reward burst, `SoundGateway.complete` 2/4-tone | ✅ |
 | **C — Accomplishment loop** | Completion ritual | 3s hold (ordinary), 5s hold (frog), haptic buildup (NSHapticFeedbackManager), audio slot, canonical FlowState capture `distracted/good/high/flow` rapid picker, reward animation (tasteful), next Current auto-advance, `Everything Done` quiet state | |
 | **D — Break environment** | Rest as contrast | Break duration selector, fullscreen black cover on all displays/Spaces, break alarm, return transition, idle/away reconciliation options (keep/discard/stop/breakdown) dialog | |
 | **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | |
@@ -399,3 +400,48 @@ Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-p
 - Total now 26 tests (5+1+9+2+3+1+3+3) — earlier 13 + 13 new — all passing.
 
 **Deferred remains:** full hold completion (C), break fullscreen (D), capture (E), auth/sync (F/G), signing (H).
+
+
+---
+
+## 18. Session C — Accomplishment Loop (2026-08-30, executed)
+
+**Goal:** Deliver the reward ritual `COMPLETE → FLOW STATE → REWARD → NEXT` without adding break/capture surfaces.
+
+**Decisions (per user-approved plan, user confirmed all 4):**
+- Hold visual: circular `CircularProgress` hold arc over timer ring (not separate button fill) — calm, no extra chrome.
+- Flow picker inline under timer, 2×2 chips `Distracted/Good/High/Flow` mapped `1-4`, `Esc` skip.
+- `actualDuration = ceil(elapsedSeconds/60)` from `ExecutionState.elapsedSeconds` (includes overtime, excludes pauses).
+- Frog reward stronger `scale 1.15` + `alignment` haptic at `0.5 s`, same `TickSoundGateway` frequencies but 4-tone vs 2-tone.
+
+**Domain (`Domain/GoalflowTask.swift:1`):**
+- NEW `FlowState` enum `distracted|good|high|flow` with `displayTitle/shortLabel`.
+- `withCompleted(at:actualDurationMinutes:flowState:)` bumps `version`, sets `status=.completed`, `updatedAt`, merges `actualDuration/completedAt/flowState` into `extraJson` loss-lessly (keep unknown keys via `JSONSerialization`).
+- `withFlowState(_:)` second persist step (version bump again).
+- `flowState` / `actualDurationMinutes` computed accessors.
+
+**TaskStore (`Providers/CurrentTaskProvider.swift:1`):**
+- NEW `TaskStore` protocol + `LocalTaskStore(fileURL: goalflow.tasks.json atomic + WAL goalflow.demo.tasks.v1 + read-back verify)`.
+- `loadAll()` prefers file, migrates WAL once; `saveAll` sorted + atomic + WAL mirror.
+- `completeTask(id:actualDuration:flowState:)` guards `isOpen`, writes `withCompleted`; `updateTask` / `queueCount` / `completedCount` / `seedIfEmpty` / `clearAll`.
+- `DemoCurrentTaskProvider` refactored to `init(taskStore:)` (keeps `init(defaults:)` for tests), now `allDemoTasks` reads `taskStore`, `fetchCurrent` via `buildTodayQueue`, `completeTask` / `updateFlowState` / `resetDemo` / `setFrogDemo` via `TaskStore`.
+
+**Hold (`Services/CompletionHoldController.swift:1`):**
+- Pure `CompletionHoldController(isFrog:clock:)` with `duration 3.0/5.0`, `start/cancel/progress/isCompleted/isHolding`, injectable `Clock`, `NSLock` thread-safe.
+
+**Sound (`Services/SoundGateway.swift:1`):**
+- Extend `SoundGateway` with `complete(frog:Bool)`; `NoopSoundGateway` no-ops; `TickSoundGateway.complete` generates 2-tone vs 4-tone PCM via `AVAudioEngine` (same path as tick).
+
+**ViewModel + View (`UI/ExecutionPanelView.swift:1`):**
+- `ExecutionViewModel` now owns `holdProgress/holding/flowPickerVisible/showReward/completedTodayCount/queueCount`, `holdController/holdTimer/pendingCompletedId`, `CompletionHoldController` 50 Hz tick, haptics `.generic` start, `.levelChange` at 0.33/0.66, `.alignment` at completion.
+- `beginHold()` guards `task && execution && !holding`; `endHold(cancelled:)` springs back if `progress<1`; `confirmCompletion()` computes `actualDuration = ceil(elapsed/60)`, `provider.completeTask` with `nil` flow, `store.clear()`, `timer.stop()`, `sound.complete`, `showReward` 0.3 s + `flowPickerVisible` after 0.9 s, `haptic(.alignment)`, refresh `task = fetchCurrent()`.
+- `selectFlow(_:)` merges `withFlowState` via `provider.updateFlowState`, dismisses picker, refreshes `task`; `skipFlow()` persists nil flow.
+- `header`/`content` now shows `Done 3s/5s` hold button with `holdProgress` fill, inline flow picker `HStack 4 chips` keyboard `1-4`, `Everything Done` shows `X completed today` when `task==nil`.
+
+**Tests (`GoalflowMacTests/SessionCTests.swift:1`):**
+- `CompletionHoldTests` 4: frog 5s vs ordinary 3s, progress/completion, cancel before threshold, frog requires 5s.
+- `FlowStateTests` 3: allCases 4, withCompleted preserves extraJson, withFlowState merges.
+- `TaskCompletionPersistenceTests` 3: complete persists before next, no resurrection after reload, complete only open.
+- Total now 36 (26 + 10) — all passing.
+
+**Deferred remains:** break fullscreen (D), capture (E), auth/sync (F/G), signing (H).

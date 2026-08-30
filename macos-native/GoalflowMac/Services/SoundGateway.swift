@@ -1,7 +1,17 @@
 import Foundation
 import AVFoundation
-protocol SoundGateway: Sendable { func tick(volume: Float); func setEnabled(_ enabled: Bool); func setVolume(_ volume: Float) }
-final class NoopSoundGateway: SoundGateway, @unchecked Sendable { func tick(volume: Float) {}; func setEnabled(_ enabled: Bool) {}; func setVolume(_ volume: Float) {} }
+protocol SoundGateway: Sendable {
+    func tick(volume: Float)
+    func complete(frog: Bool)
+    func setEnabled(_ enabled: Bool)
+    func setVolume(_ volume: Float)
+}
+final class NoopSoundGateway: SoundGateway, @unchecked Sendable {
+    func tick(volume: Float) {}
+    func complete(frog: Bool) {}
+    func setEnabled(_ enabled: Bool) {}
+    func setVolume(_ volume: Float) {}
+}
 final class TickSoundGateway: SoundGateway, @unchecked Sendable {
     private var isEnabled: Bool = true; private var volume: Float = 0.6; private let lock = NSLock()
     init() {}
@@ -12,6 +22,11 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         guard enabled else { return }
         let v = baseVol * max(0, vol); guard v > 0.01 else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.playTick(volume: v) }
+    }
+    func complete(frog: Bool) {
+        lock.lock(); let enabled = isEnabled; let baseVol = volume; lock.unlock()
+        guard enabled else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in self?.playCompletion(frog: frog, volume: baseVol) }
     }
     private func playTick(volume: Float) {
         let sampleRate: Double = 44_100; let duration: Double = 0.05
@@ -30,5 +45,35 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
         let engine = AVAudioEngine(); let player = AVAudioPlayerNode()
         engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
         do { try engine.start(); player.play(); player.scheduleBuffer(buf, at: nil, options: .interrupts, completionHandler: { engine.stop() }); Thread.sleep(forTimeInterval: duration + 0.02) } catch {}
+    }
+    private func playCompletion(frog: Bool, volume: Float) {
+        let notes: [(Float, Double)] = frog ? [(523.25,0.13),(659.25,0.13),(783.99,0.13),(1046.50,0.22)] : [(880.0,0.18),(1046.50,0.22)]
+        let sampleRate: Double = 44_100
+        let gap: Double = 0.025
+        var buffers: [AVAudioPCMBuffer] = []
+        let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
+        for (freq, dur) in notes {
+            let frames = AVAudioFrameCount(sampleRate * dur)
+            guard let buf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { continue }
+            buf.frameLength = frames
+            let ptr = buf.floatChannelData![0]
+            for i in 0..<Int(frames) {
+                let t = Float(i) / Float(sampleRate)
+                let attack = min(1, Float(i) / Float(sampleRate * 0.012))
+                let release = min(1, Float(Int(frames) - i) / Float(sampleRate * 0.045))
+                let env = max(0, min(1, attack * release * 0.22)) * volume
+                let phase = 2.0 * .pi * Double(freq) * Double(t)
+                let sample: Double = sin(phase) * Double(env) * 0.22
+                ptr[i] = Float(sample)
+            }
+            buffers.append(buf)
+        }
+        let engine = AVAudioEngine(); let player = AVAudioPlayerNode()
+        engine.attach(player); engine.connect(player, to: engine.mainMixerNode, format: format)
+        do {
+            try engine.start(); player.play()
+            for buf in buffers { player.scheduleBuffer(buf, at: nil, options: .interrupts); Thread.sleep(forTimeInterval: Double(buf.frameLength)/sampleRate + gap) }
+            Thread.sleep(forTimeInterval: 0.08); engine.stop()
+        } catch {}
     }
 }

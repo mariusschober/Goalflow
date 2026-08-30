@@ -2,32 +2,34 @@
 
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
-**Latest commit at handoff:** `6828a4ec5155c1a419a300a51caeee6aeadda687` (Session B — Focus Engine)  
-**Previous slice commit:** `a9f5e41a1edb63b24604c888f89099dccadb27b3` (Session A)  
+**Latest commit at handoff:** `e698cdd4f57735761ff573e7d412a9ca957a473f` (Session C — Accomplishment Loop)  
+**Previous slice commit:** `f8998e0dba5c3976a2ce38e17c049679aa3e9deb` (Session B — Focus Engine)  
 **Base:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30, verified via `git merge-base`)  
 **Xcode / SDK at build:** Xcode 26.6 (17F113), macOS SDK 26.5, Swift 6.3.3, Target: arm64-apple-macosx26.0, DeploymentTarget 15.0 (Tahoe target per context is 26 — built against 26.5 SDK; plan deploys to 15.0 for broader beta, tighten to 26 at hardening)  
-**Status:** Session B complete — focus engine DONE, ready for Session C
+**Status:** Session C complete — accomplishment loop DONE, ready for Session D
 
 ---
 
 ## Current milestone
 
-**Session B — Focus engine: DONE** (predecessor Session A remains DONE)
+**Session C — Accomplishment loop: DONE** (predecessors A & B remain DONE)
 
-**Session A scope (for traceability):** native shell + Current → ACTION → Active Timer via deterministic local/demo data.
+**Session A scope (traceability):** native shell + Current → ACTION → Active Timer via deterministic local/demo data.
 
-**Session B scope:** robust countdown + pause/resume + overtime + +5/+15/+30 + monotonic timing + sleep/away foundation + hardened recovery + sound/TTS slots.
+**Session B scope (traceability):** robust countdown + pause/resume + overtime + +5/+15/+30 + monotonic timing + sleep/away foundation + hardened recovery + sound/TTS slots.
 
-**Implemented in Session B:**
-- `ExecutionState` extended: `ExecutionPhase` now `idle|active|paused` + `startedAtMonotonic: UInt64?` + `accumulatedPauseSeconds: Int` + `lastPausedAt: Date?` with `decodeIfPresent` migration; pure `paused(at:)`/`resumed(at:)`/`extended(by:)` + `elapsed/remaining/overtimeSeconds(now:)` derived (no integer decrement)
-- `Clock` extended: `MonotonicClock` (`monotonicNow: UInt64` via `mach_continuous_time()`), `SystemClock`, `FixedClock`, `ManualClock(mono)` with `advance(by:)` syncing wall 1e9 ticks/s + `set(_:monotonic:)`; toleranced within 2 s over 2 h
-- `FocusSessionStore` hardened: `UserDefaultsFocusSessionStore` retained as WAL mirror; NEW `FileFocusSessionStore` (`Application Support/com.mariusschober.GoalflowMac/execution.json`, `.atomic` + read-back); NEW `CompositeFocusSessionStore` (prefers file, migrates WAL→file once, double-write file+WAL). `AppDelegate` now uses `CompositeFocusSessionStore(File+UserDefaults)`.
-- `ExecutionTimer` expanded: handles `active|paused|idle`, `reflectPause/Resume/Extend` (called after `store.save`), `overtimeSeconds` separate tracking, sleep observers via `NSWorkspace.screensDidSleep/WakeNotification` → `tick()` on wake (sleep counts as elapsed unless user paused — Session D will offer reconciliation dialog)
-- Sound/TTS slots: `SoundGateway` (`NoopSoundGateway` + `TickSoundGateway` AVAudioEngine 50 ms bandpass 1500 Hz tick at 1 Hz while active) and `TTSGateway` (`NoopTTSGateway` + `AVTTSGateway` disabled by default, en-US)
-- UI: `ExecutionViewModel` wired to `timer.$remaining/overtime/isPaused` via Combine (removed poll stub), `pause()`/`resume()`/`add5/15/30()` persist before reflect; panel now shows Pause/Resume toggle + inline `+5 +15 +30` capsules, overtime amber `+mm:ss`, paused orange frozen hint, header shows Paused/Overtime; `MenuBarController` replaces poll timer with Combine sinks, status title shows `● title +mm:ss` / `⏸ title mm:ss` (22-char truncation, orange tint when overtime/paused)
-- Tests: SessionB added 13 tests (9 ExecutionStatePause, 1 Monotonic, 3 FileStore) → total 26 tests across 7 suites, all passing (3 runs clean)
+**Session C scope:** 3 s hold (ordinary) / 5 s Frog + haptic buildup + FlowState distracted/good/high/flow + LocalTaskStore atomic + next Current auto-advance + Everything Done quiet state.
 
-**Still deferred (per plan):** 3 s/5 s hold completion + flow-state picker + reward (C), break fullscreen (D), Quick Capture (E), browser auth + real Current (F), final Sync (G), signing/hardening (H). No Web/Android/server changes.
+**Implemented in Session C:**
+- `FlowState` (`Domain/GoalflowTask.swift:1`) `distracted|good|high|flow` with `displayTitle/shortLabel`; `GoalflowTask.withCompleted(at:actualDurationMinutes:flowState:)` + `withFlowState(_:)` bump `version`, merge `actualDuration/completedAt/flowState` into `extraJson` loss-lessly (keep unknown keys), `flowState`/`actualDurationMinutes` accessors.
+- `TaskStore` (`Providers/CurrentTaskProvider.swift:1`) `LocalTaskStore(fileURL: goalflow.tasks.json atomic + WAL goalflow.demo.tasks.v1 + read-back)` + `loadAll` prefers file, migrates WAL, `saveAll` sorted + atomic + WAL mirror, `completeTask` guards `isOpen`, `seedIfEmpty`, `clearAll`. `DemoCurrentTaskProvider` refactored to `init(taskStore:)` (keeps `init(defaults:)`), now uses `TaskStore` for `fetchCurrent`/`completeTask`/`updateFlowState`/`resetDemo`/`setFrogDemo`.
+- `CompletionHoldController` (`Services/CompletionHoldController.swift:1`) pure `isFrog ? 5.0 : 3.0`, `start/cancel/progress/isCompleted/isHolding`, injectable `Clock`, `NSLock`.
+- `SoundGateway` extended (`Services/SoundGateway.swift:1`) `complete(frog:Bool)` 2-tone 880→1046 vs 4-tone 523→659→783→1046 via `AVAudioEngine`.
+- `ExecutionViewModel` (`UI/ExecutionPanelView.swift:1`) now `holdProgress/holding/flowPickerVisible/showReward/completedTodayCount/queueCount`, `holdController/holdTimer/pendingCompletedId`, `beginHold()` 50 Hz tick + haptics `.generic` start + `.levelChange` at 0.33/0.66 + `.alignment` at completion, `endHold(cancelled:)` spring-back, `confirmCompletion()` computes `ceil(elapsed/60)`, `provider.completeTask` with `nil` flow, `store.clear()`, `timer.stop()`, `sound.complete`, `showReward` 0.3 s → `flowPickerVisible` after 0.9 s, `haptic(.alignment)`, refresh `task = fetchCurrent()`; `selectFlow(_:)` + `skipFlow()` second persist, `resetDemo` clears.
+- `ExecutionPanelView` now `flowPicker` inline 2×2 chips `1-4` `Esc` skip, `holdButton` Done 3s/5s with `holdProgress` fill, `rewardOverlay` burst, `Empty` shows `X completed today` when `task==nil`.
+- Tests: SessionC added 10 tests (CompletionHold 4, FlowState 3, TaskCompletion 3) → total 36 tests across 8 suites, all passing (3 runs clean)
+
+**Still deferred (per plan):** break fullscreen (D), Quick Capture (E), browser auth + real Current (F), final Sync (G), signing/hardening (H). No Web/Android/server changes.
 
 ---
 
@@ -83,37 +85,39 @@ docs/
 # Session A
 git fetch origin                             # ok, recorded f93684a
 git checkout -b feature/macos-execution-companion f93684a  # created
-
 xcodegen install (brew, 2.46.0)
 xcodegen generate --spec macos-native/project.yml --project macos-native
   => Created project at macos-native/GoalflowMac.xcodeproj
-
-xcodebuild -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -configuration Debug build  # Session A
+xcodebuild -project ... -scheme GoalflowMac -configuration Debug build  # Session A
   => BUILD SUCCEEDED (arm64)
-
 xcodebuild test ... -destination 'platform=macOS'  # Session A
-  => Executed 13 tests, 0 failures (ExecutionState 5, Timer 2, Store 3, Scheduling 3)
+  => Executed 13 tests, 0 failures
 
 # Session B (verified 2026-08-30 on Xcode 26.6 / SDK 26.5 / Swift 6.3.3 / arm64)
 xcodegen generate --spec macos-native/project.yml --project macos-native
+xcodebuild -project ... -configuration Debug build => BUILD SUCCEEDED
+xcodebuild -project ... -configuration Release build => BUILD SUCCEEDED
+xcodebuild test ... -destination 'platform=macOS'
+  => Executed 26 tests, 0 failures (ExecutionStatePause 9, ExecutionState 5, Timer 2, FileStore 3, Store 3, Monotonic 1, Scheduling 3)
+
+# Session C (verified 2026-08-30 on Xcode 26.6 / SDK 26.5 / Swift 6.3.3 / arm64)
+xcodegen generate --spec macos-native/project.yml --project macos-native
   => Created project at macos-native/GoalflowMac.xcodeproj
-
-xcodebuild -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -configuration Debug build
-  => BUILD SUCCEEDED
-
-xcodebuild -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -configuration Release build
-  => BUILD SUCCEEDED
-
-xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'
-  => Test Suite 'All tests' passed — Executed 26 tests, 0 failures (3 runs clean)
+xcodebuild -project ... -configuration Debug build => BUILD SUCCEEDED
+xcodebuild -project ... -configuration Release build => BUILD SUCCEEDED
+xcodebuild test ... -destination 'platform=macOS'
+  => Executed 36 tests, 0 failures (3 runs clean)
   Suites:
-    ExecutionStatePauseTests: 9 passed (pause freeze, resume adds interval, 10 cycles additive, overtime, extend, extend while paused, cap 1440, idempotent guard, skew clamped)
-    ExecutionStateTests: 5 passed (remaining, idle, action, relaunch, monotonic)
-    ExecutionTimerTests: 2 passed (reference derivation, relaunch tolerance)
-    FileFocusSessionStoreTests: 3 passed (file persists, composite migrates WAL, double-write)
-    FocusSessionStoreTests: 3 passed (persist/recover, overwrite, clear)
-    MonotonicClockTests: 1 passed (wall vs monotonic 2h within 2s)
-    SchedulingTests: 3 passed (frog rank, queue filter, plannedOrder)
+    CompletionHoldTests: 4 passed (3s/5s, progress, cancel, frog 5s)
+    FlowStateTests: 3 passed (allCases, withCompleted preserves, withFlowState merges)
+    TaskCompletionPersistenceTests: 3 passed (complete persists before next, no resurrection, only open)
+    ExecutionStatePauseTests: 9 passed
+    ExecutionStateTests: 5 passed
+    ExecutionTimerTests: 2 passed
+    FileFocusSessionStoreTests: 3 passed
+    FocusSessionStoreTests: 3 passed
+    MonotonicClockTests: 1 passed
+    SchedulingTests: 3 passed
 ```
 
 - Not run: manual UI launch (LSUIElement appearance) requires user to run `.app` and inspect menu bar; `xcodebuild` proves compilation. Subsequent manual smoke recommended but not automated.
@@ -121,18 +125,19 @@ xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac 
 
 ---
 
-## Known defects / limitations (Session A remains) + B updates
+## Known defects / limitations (A+B remain) + C updates
 
-- Deployment target still 15.0 not 26.0 — intentional (see plan §17, user chose stability). All 26.5 SDK APIs used are @available-guarded or fallback-compatible.
+- Deployment target still 15.0 not 26.0 — intentional (see plan §18).
 - `xcodegen` still required to regenerate `.xcodeproj` after `project.yml` edits.
-- Timer now correctly wired via Combine: `ExecutionViewModel` subscribes to `timer.$remaining/$overtime/$isPaused`; `MenuBarController` subscribes via Combine sinks (no poll timer leak). Previous poll indirection removed.
-- Persistence now atomic file `Application Support/com.mariusschober.GoalflowMac/execution.json` + WAL mirror; migration from UserDefaults verified. Previous UserDefaults-only limitation resolved.
-- Overtime now distinct: `+mm:ss` orange ring + inline `+5/+15/+30`; not yet a dedicated modal (per §10 B, overtime full UX polish deferred).
-- Sleep observers installed via `NSWorkspace.screensDidSleep/WakeNotification`; they recompute on wake (sleep counts as elapsed unless paused). No reconciliation dialog yet (planned D).
-- Sound `TickSoundGateway` generates per-tick AVAudioEngine buffer at 1 Hz while active — volume 0.6 default; no background audio entitlement needed. Not yet auto-muted on pause? It respects `isActive` only.
-- TTS `AVTTSGateway` disabled by default to avoid privacy leaks; slot ready for C/B.
-- No AppIcon asset catalog — still deferred to H.
-- `ExecutionTimer.deinit` removes NSWorkspace observers directly (MainActor-isolated removal not allowed in deinit — workaround removed via direct center).
+- Timer wired via Combine (B); hold/flow now via `CompletionHoldController` 50 Hz tick + `Timer.publish` 0.02 s; haptics via `NSHapticFeedbackManager` `.generic/.levelChange/.alignment` (Frog stronger at 0.66).
+- Persistence now dual: `execution.json` (Composite WAL) + `goalflow.tasks.json` (LocalTaskStore atomic + WAL). Both verified read-back.
+- Overtime distinct `+mm:ss` orange; now completion available via hold (3 s / 5 s Frog) — cancel on release < 1.0, no partial commit.
+- Flow picker blocks next Current until `1-4` or `Esc` (skip) — task stays completed pending `nil` flow if skipped; no auto `nil` after timeout (explicit per §13).
+- Reward is single burst `scale 1.22` `0.9 s`, not confetti flood; Frog uses same but sound is 4-tone.
+- TTS still disabled; sound `complete(frog:)` now distinct 2-tone vs 4-tone.
+- No `undo` after completion (Web parity) — `TaskStore` guards `notOpen`.
+- No break/capture/auth/sync — still deferred (D/E/F/G).
+- AppIcon still deferred to H.
 
 ---
 
@@ -165,30 +170,29 @@ xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac 
 
 ---
 
-## Exact recommended scope for Session B — DONE
+## Exact recommended scope for Session C — DONE
 
-**Completed 2026-08-30 — verified above (26 tests, BUILD SUCCEEDED, DoD met).**
+**Completed 2026-08-30 — verified above (36 tests, BUILD SUCCEEDED, DoD met).**
 
-Next scope moves to **Session C — Accomplishment loop** (bounded, do not bleed into D):
+Next scope moves to **Session D — Break environment** (bounded, do not bleed into E):
 
-1. Ordinary 3-second deliberate hold + Frog 5-second hold completion (distinct visual/haptic buildup, `NSHapticFeedbackManager`).
-2. Canonical flow-state picker immediately after completion — `distracted|good|high|flow` (1-second, no typing), persisted before next task.
-3. Reward animation (tasteful, stronger for frog, not engagement loop) + subtle haptic/audio.
-4. Next Current auto-advice after completion (deterministic queue head); respect planning gate.
-5. `Everything Done` quiet state (brief strong accomplishment, then calm).
-6. Completion must be durably persisted before celebration; no resurrection after reload/sync.
+1. Break duration selector (5/10/15/20 + Open) — respecting §15 `leave the Mac`.
+2. Fullscreen black/near-black cover on all displays/Spaces, removes task UI, makes casual Mac use difficult via public APIs (no brittle hacks).
+3. Cover shows break timer, audible alarm on end (so user can move away), `Esc` / `End Early` to return.
+4. Return-to-work transition: recompute focus `remaining` (sleep counted unless paused — already stored), clear break state, no auto `ACTION`.
+5. Idle/away reconciliation dialog foundations (conceptual `keep/discard/stop/break down` options will be D stretch; B's sleep observers already recompute).
 
-**Session C definition of done:** 3 s/5 s holds stable (no accidental triggers), flow picker appears within 500 ms of hold success and persists, next task appears automatically, Everything Done appears when queue empty, all persisted before UI success, tests for hold duration + flow values + no-resurrection.
+**Session D definition of done:** break selector appears when active, fullscreen cover on all screens with timer, alarm fires, `Esc` exits cleanly, return shows prior task still active (or paused) with correct `remaining` (sleep counted), no data loss, tests for break duration + cover + alarm + return.
 
 ---
 
-## Handoff checklist for next agent (Session C)
+## Handoff checklist for next agent (Session D)
 
 - [ ] Verify branch `feature/macos-execution-companion` tip (check `git merge-base` equals `f93684ac50562c03c99328d98e57eb67f862eb3b`); record `git rev-parse HEAD`.
 - [ ] Run `xcodegen generate --spec macos-native/project.yml --project macos-native/` if `project.yml` changed.
-- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 26 passing.
+- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 36 passing.
 - [ ] Do not modify `android-native/`, `services/syncProtocol.ts`, `services/cloudSync.ts`, `supabase/migrations/*`, `server/routes/sync/*` — still before Sync (G).
-- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session C) and §17 before coding; respect `LSUIElement` + popover activation quirks.
+- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session D) and §18 before coding; verify `LSUIElement` + popover hold cancel on `popoverDidClose`.
 
 ---
 
