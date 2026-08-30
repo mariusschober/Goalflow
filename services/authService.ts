@@ -51,8 +51,30 @@ export const getSession = async (): Promise<Session | null> => {
 
 export const onSessionChange = (callback: (session: Session | null) => void) => {
   if (!supabase) return () => undefined;
-  const { data } = supabase.auth.onAuthStateChange((_event, session) => callback(session));
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') {
+      // Quarantine sync state on sign-out to prevent cross-account leakage
+      try {
+        localStorage.removeItem('goalflow:sync-state');
+        sessionStorage.removeItem('goalflow_telegram_attempt');
+        sessionStorage.removeItem('goalflow_telegram_state');
+        sessionStorage.removeItem('goalflow_telegram_verifier');
+        sessionStorage.removeItem('goalflow_owner_telegram_link');
+      } catch {}
+    }
+    if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
+      // Proactive refresh succeeded, clear any quarantine
+    }
+    callback(session);
+  });
   return () => data.subscription.unsubscribe();
+};
+
+export const refreshSession = async (): Promise<Session | null> => {
+  if (!supabase) return null;
+  const { data, error } = await supabase.auth.refreshSession();
+  if (error) throw error;
+  return data.session;
 };
 
 export const requestOwnerMagicLink = async (email: string): Promise<void> => {
@@ -64,21 +86,54 @@ export const requestOwnerMagicLink = async (email: string): Promise<void> => {
   if (error) throw error;
 };
 
+const generateState = (): string => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
+};
+
+const generateCodeVerifier = (): string => {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  let binary = '';
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
+const pkceChallenge = async (verifier: string): Promise<string> => {
+  const data = new TextEncoder().encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  const bytes = new Uint8Array(digest);
+  let binary = '';
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+};
+
 export const beginTelegramSignup = async (inviteCode: string, captchaToken = ''): Promise<void> => {
   if (!supabase) throw new Error('Authentication is not configured.');
+  const state = generateState();
+  const codeVerifier = generateCodeVerifier();
+  const codeChallenge = await pkceChallenge(codeVerifier);
   const response = await fetch(apiUrl('/api/v1/auth/telegram/preflight'), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code: inviteCode, captchaToken })
+    body: JSON.stringify({ code: inviteCode, captchaToken, state, codeChallenge, codeChallengeMethod: 'S256' })
   });
   const result = await response.json() as { attemptToken?: string; provider?: string; error?: { message?: string } };
   if (!response.ok || !result.attemptToken) throw new Error(result.error?.message || 'Telegram signup could not be started.');
   sessionStorage.setItem('goalflow_telegram_attempt', result.attemptToken);
+  sessionStorage.setItem('goalflow_telegram_state', state);
+  sessionStorage.setItem('goalflow_telegram_verifier', codeVerifier);
   const { error } = await supabase.auth.signInWithOAuth({
     provider: (result.provider || telegramProvider) as never,
     options: {
       redirectTo: `${window.location.origin}/?auth=telegram`,
-      scopes: 'openid profile telegram:bot_access'
+      scopes: 'openid profile telegram:bot_access',
+      queryParams: {
+        state,
+        code_challenge: codeChallenge,
+        code_challenge_method: 'S256'
+      }
     }
   });
   if (error) throw error;
@@ -116,15 +171,18 @@ export const activateOwnerTelegramLink = async (session: Session): Promise<void>
 
 export const activateTelegramSignup = async (session: Session): Promise<boolean> => {
   const attemptToken = sessionStorage.getItem('goalflow_telegram_attempt');
+  const oauthState = sessionStorage.getItem('goalflow_telegram_state');
   if (!attemptToken) return !session.user.email;
   const response = await fetch(apiUrl('/api/v1/auth/telegram/activate'), {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ attemptToken })
+    body: JSON.stringify({ attemptToken, oauthState: oauthState ?? undefined })
   });
   const result = await response.json() as { recoveryEmailRequired?: boolean; error?: { message?: string } };
   if (!response.ok) throw new Error(result.error?.message || 'Telegram signup could not be activated.');
   sessionStorage.removeItem('goalflow_telegram_attempt');
+  sessionStorage.removeItem('goalflow_telegram_state');
+  sessionStorage.removeItem('goalflow_telegram_verifier');
   const url = new URL(window.location.href);
   url.searchParams.delete('auth');
   window.history.replaceState({}, document.title, `${url.pathname}${url.search}`);

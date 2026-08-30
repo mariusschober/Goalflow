@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { Router } from "express";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppConfig } from "../config";
@@ -25,7 +26,12 @@ export const createTelegramRouter = (
     if (!config.TELEGRAM_WEBHOOK_SECRET || !config.TELEGRAM_BOT_TOKEN || !processor || !database) {
       response.status(503).json({ error: { code: "telegram_not_configured", message: "Telegram is not configured." } }); return;
     }
-    if (request.header("x-telegram-bot-api-secret-token") !== config.TELEGRAM_WEBHOOK_SECRET) {
+    const providedSecret = request.header("x-telegram-bot-api-secret-token") ?? "";
+    const expectedSecret = config.TELEGRAM_WEBHOOK_SECRET;
+    const providedBuffer = Buffer.from(providedSecret);
+    const expectedBuffer = Buffer.from(expectedSecret);
+    const secretsMatch = providedBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(providedBuffer, expectedBuffer);
+    if (!secretsMatch) {
       response.status(401).json({ error: { code: "invalid_webhook_secret", message: "Webhook authentication failed." } }); return;
     }
     const update = request.body as TelegramUpdate;
