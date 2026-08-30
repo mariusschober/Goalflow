@@ -43,6 +43,8 @@ struct BreakOverlayView: View {
                     }
                     .buttonStyle(.plain)
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityLabel("End break early")
+                    .accessibilityIdentifier("end-break-button")
                 }
                 .padding(.top, 8)
             }

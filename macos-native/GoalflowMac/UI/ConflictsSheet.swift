@@ -28,8 +28,8 @@ struct ConflictsSheet: View {
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }
                         HStack(spacing: 8) {
-                            Button("Keep local") { vm.resolveConflict(id: c.id, useLocal: true) }.buttonStyle(.borderedProminent).controlSize(.small)
-                            Button("Use cloud") { vm.resolveConflict(id: c.id, useLocal: false) }.buttonStyle(.bordered).controlSize(.small)
+                            Button("Keep local") { vm.resolveConflict(id: c.id, useLocal: true) }.buttonStyle(.borderedProminent).controlSize(.small).accessibilityLabel("Keep local").accessibilityIdentifier("keep-local-button")
+                            Button("Use cloud") { vm.resolveConflict(id: c.id, useLocal: false) }.buttonStyle(.bordered).controlSize(.small).accessibilityLabel("Use cloud").accessibilityIdentifier("use-cloud-button")
                             Spacer()
                             Text("v\(c.serverVersion)").font(.system(size: 10)).foregroundStyle(.tertiary)
                         }
