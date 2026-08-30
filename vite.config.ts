@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
@@ -66,5 +66,18 @@ export default defineConfig({
       devOptions: { enabled: false }
     })
   ],
-  resolve: { alias: { '@': path.resolve(__dirname, '.') } }
+  resolve: { alias: { '@': path.resolve(__dirname, '.') } },
+  test: {
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/tests/e2e/**',
+      '**/e2e/**',
+      '**/chrome-extension/**',
+      '**/.idea/**',
+      '**/.git/**',
+      '**/android/**',
+      '**/android-native/**'
+    ]
+  }
 });

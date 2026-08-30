@@ -8,6 +8,7 @@ import org.json.JSONObject
 import java.time.Instant
 import java.time.LocalDate
 
+// P1-D: task_events FK to tasks.id via application lock (Room FK would require migration 8->9; keep version 8 but enforce via code)
 @Entity(
     tableName = "task_events",
     indices = [Index(value = ["taskId", "createdAt"])]

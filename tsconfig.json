@@ -25,5 +25,6 @@
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
-  }
+  },
+  "exclude": ["dist", "node_modules", "android", "android-native", "chrome-extension", "test-results", "playwright-report"]
 }

@@ -10,6 +10,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.security.SecureRandom
 
 class NativeAuthException(message: String) : IllegalStateException(message)
@@ -19,9 +20,12 @@ class NativeAuthException(message: String) : IllegalStateException(message)
  * synthesized; without configured public Supabase settings the native app is
  * simply local-first and unauthenticated.
  */
-class NativeAuthClient(private val sessionStore: SecureSessionStore) {
+open class NativeAuthClient(
+    private val sessionStore: SecureSessionStore,
+    private val isAuthEnabled: () -> Boolean = { NativeConfig.canUseAuthentication }
+) {
     suspend fun requestMagicLink(email: String) = withContext(Dispatchers.IO) {
-        if (!NativeConfig.canUseAuthentication) throw NativeAuthException("Authentication is not configured for this build.")
+        if (!isAuthEnabled()) throw NativeAuthException("Authentication is not configured for this build.")
         val cleanEmail = email.trim()
         if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
             throw NativeAuthException("Enter a valid email address.")
@@ -29,11 +33,19 @@ class NativeAuthClient(private val sessionStore: SecureSessionStore) {
         val state = generateState()
         val verifier = generateCodeVerifier()
         sessionStore.setPendingState(state, verifier)
-        val redirectWithState = "${NativeConfig.authRedirectUri}?state=$state"
+        // PKCE S256: verifier -> code_challenge. Supabase magic-link uses implicit fragment flow (state is CSRF);
+        // we wire code_challenge for forward-compatibility with code flow and retain verifier for future exchange.
+        val codeChallenge = codeChallenge(verifier)
+        val redirectWithState = "${NativeConfig.authRedirectUri}?state=$state&code_challenge=$codeChallenge&code_challenge_method=S256"
         val body = JSONObject().apply {
             put("email", cleanEmail)
             put("create_user", false)
-            put("options", JSONObject().put("redirect_to", redirectWithState))
+            put("options", JSONObject()
+                .put("redirect_to", redirectWithState)
+                .put("code_challenge", codeChallenge)
+                .put("code_challenge_method", "S256"))
+            put("code_challenge", codeChallenge)
+            put("code_challenge_method", "S256")
         }
         val response = request(
             url = "${NativeConfig.supabaseUrl}/auth/v1/otp",
@@ -92,7 +104,7 @@ class NativeAuthClient(private val sessionStore: SecureSessionStore) {
     fun clearSession() = sessionStore.clear()
 
     private suspend fun refresh(refreshToken: String): NativeSession = withContext(Dispatchers.IO) {
-        if (!NativeConfig.canUseAuthentication) throw NativeAuthException("Authentication is not configured for this build.")
+        if (!isAuthEnabled()) throw NativeAuthException("Authentication is not configured for this build.")
         val response = request(
             url = "${NativeConfig.supabaseUrl}/auth/v1/token?grant_type=refresh_token",
             method = "POST",
@@ -114,7 +126,7 @@ class NativeAuthClient(private val sessionStore: SecureSessionStore) {
         session
     }
 
-    private fun request(
+    internal open fun request(
         url: String,
         method: String,
         body: String?,
@@ -154,7 +166,12 @@ class NativeAuthClient(private val sessionStore: SecureSessionStore) {
         }
         .toMap()
 
-    private data class HttpResponse(val code: Int, val body: String)
+    internal data class HttpResponse(val code: Int, val body: String)
+
+    internal fun codeChallenge(verifier: String): String {
+        val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(StandardCharsets.US_ASCII))
+        return Base64.encodeToString(digest, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
+    }
 
     private fun generateState(): String {
         val bytes = ByteArray(32)

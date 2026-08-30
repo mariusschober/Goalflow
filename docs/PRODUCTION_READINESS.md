@@ -1,22 +1,25 @@
-# Goalflow production readiness — Tranche 1 checkpoint
+# Goalflow production readiness — Pre-Tranche3 checkpoint (P1 + Tranche2 C-E simulated)
 
-**Status: T1 CLOSURE VERIFIED — T1 GREEN, NOT YET PRODUCTION-READY (TRANCHES 2–5 REQUIRED)**
+**Status: PRE-TRANCHE3 GREEN (local-only) — P0-8 + P1-1..P1-6 + Tranche2 C-E simulated, Tranche3 hosted matrix pending**
 
-- Checkpoint date: 2026-08-30 (UTC)
-- Authoritative plan: `docs/PRODUCTION_FINALIZATION_PLAN.md`
+- Checkpoint date: 2026-08-31 (UTC)
+- Authoritative plan: `docs/PRODUCTION_FINALIZATION_PLAN.md` (5-tranche gates, local is authority per Q&A — hosted 33335119616 blocked by billing)
 - Pinned baseline: `34005552de745682e798fce3bb851bb831e2c642`
+- T1 fix: `43643038917ac858b30f288aeb91d1e4f29c4fde` (contained `6e7244a` via `91db2ce`/`425f659`/`5e30d78`, no rewrite)
 - Branch: `goalflow-production`
-- Previous tip: [`7a502cd`](https://github.com/mariusschober/Goalflow/commit/7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8)
-- Current tip: [`1cca7ac`](https://github.com/mariusschober/Goalflow/commit/1cca7ace9f79232c6153839033102f0e0de36305) (7 commits on top of 7a502cd: 91db2ce, 425f659, 5e30d78, 9729bca T2 A+B, c6f9acd P0-1, e5fc227 8.json, 763460a Tranche3 A-C, b230e65 Tranche3 D-F, 1cca7ac P0-7)
+- Previous tip: [`5243bcd`](https://github.com/mariusschober/Goalflow/commit/5243bcdaa3179b85838d21e67eca3674a6220d3d) (handover 2026-08-30 night, `1cca7ac` P0-7 + Tranche3 D-F)
+- Current tip: [`27eacbb`](https://github.com/mariusschober/Goalflow/commit/27eacbb093ba5a379f158fffb6edda0e4b05fb31) (+3 commits: `c6df6af` P0-8 PKCE, `360479e` P1-1..P1-6, `27eacbb` Tranche2 C-E)
+- Previous T1 tip: [`1cca7ac`](https://github.com/mariusschober/Goalflow/commit/1cca7ace9f79232c6153839033102f0e0de36305) (7 commits on top of 7a502cd: 91db2ce, 425f659, 5e30d78, 9729bca T2 A+B, c6f9acd P0-1, e5fc227 8.json, 763460a Tranche3 A-C, b230e65 Tranche3 D-F, 1cca7ac P0-7)
 - T1 implementation/fix commit: [`4364303`](https://github.com/mariusschober/Goalflow/commit/43643038917ac858b30f288aeb91d1e4f29c4fde)
 - Concurrent T2-like commit (now contained): [`6e7244a`](https://github.com/mariusschober/Goalflow/commit/6e7244a6e81d76f5890c645c63fc16b773e56759)
-- New fix commits:
-  - [`91db2ce`](https://github.com/mariusschober/Goalflow/commit/91db2ce12b6db6ef4a7ced2a2562fbc4eb527f35) — fix(native): make sync-account test account-isolation aware (2 pending mutations)
-  - [`425f659`](https://github.com/mariusschober/Goalflow/commit/425f6596d47f94ad813862ea984d81a0de089164) — fix(migration): wrap CASE in parentheses for PG 16, add v7 schema and regression guards
-  - [`5e30d78`](https://github.com/mariusschober/Goalflow/commit/5e30d7831de9bd12fd5ba0e190ac0ce799a40324) — fix(native): add insertAll to LocalAccountDao to fix Room kapt duplicate insert
-- Previous CI: [run 33331787243](https://github.com/mariusschober/Goalflow/actions/runs/33331787243) (blocked), [run 33321823187](https://github.com/mariusschober/Goalflow/actions/runs/33321823187) (APK runtime PASS)
-- New local evidence: captured 2026-08-30 21:50 UTC on 5e30d78 (see Evidence table); hosted CI run will be recorded after push
-- Continuation handover: [`docs/TRANCHE_2_HANDOVER.md`](./TRANCHE_2_HANDOVER.md), [`docs/PRODUCTION_FINALIZATION_PLAN.md`](./PRODUCTION_FINALIZATION_PLAN.md)
+- New fix commits since 5243bcd:
+  - [`c6df6af`](https://github.com/mariusschober/Goalflow/commit/c6df6af2fedeecdf110f8d82c88ddd30f7560b38) — fix(p0): wire PKCE code_verifier → code_challenge S256 (state is CSRF, verifier stored, implicit flow documented) + RFC7636 vector test
+  - [`360479e`](https://github.com/mariusschober/Goalflow/commit/360479e0c3fffddeba9cbd77c7ae6bcc4f7e1e05) — perf(p1): P1-1 storage memo+idle, P1-2 useGoalflow 300ms, P1-3 habit IN+LIMIT500, P1-4 Eagerly+widget 500ms distinct, P1-5 ProcessLifecycleOwner+OkHttp, P1-6 PlanningView memo+areEqual
+  - [`27eacbb`](https://github.com/mariusschober/Goalflow/commit/27eacbb093ba5a379f158fffb6edda0e4b05fb31) — feat(tranche2): C health+Mutex, D nextVersion lock+FK, E convergence property (task-a/b, daily_plans, extraJson) via fake-indexeddb/Robolectric
+- Hosted CI: [run 33335119616](https://github.com/mariusschober/Goalflow/actions/runs/33335119616) blocked by billing — local is authority per Q&A
+- Local gates: `npm run lint` PASS, `npm test` 15 files 116 tests PASS, `verify:migrations` 7 PASS, `test-postgres` 9/9 PASS, `test-room` 1..8 PASS, `gradlew test` 4 flavors PASS, `lint` PASS, `bundleProductionRelease` 4.3M PASS, `assembleProductionRelease` 2.0M PASS, `test-signing` CN=Goalflow PASS, `diagnose-apk` PASS (see Evidence)
+- Device: `T807D_EEA` `ZXKRS4VKGQ8PWGEQ` Android 16 api 36 — local `adb devices` 2026-08-31 shows no device attached (previous 638ms 20% PSS 210MB from `b230e65`); P1 debounces target TotalTime <900ms (was 638ms), Janky <5% (was 20% 200ms), PSS <180MB (was 210MB) — verification pending re-attach via `test-owner-install.sh` COLD_START/PSS
+- Continuation handover: [`docs/HANDOVER_2026-08-30_MASTER.md`](./HANDOVER_2026-08-30_MASTER.md), [`docs/PRODUCTION_FINALIZATION_PLAN.md`](./PRODUCTION_FINALIZATION_PLAN.md)
 
 ## Executive checkpoint
 
@@ -61,6 +64,36 @@ The test-only APK still passes structural validation, zip alignment, signature, 
 | Current hosted CI | Will be recorded after push of 91db2ce..1cca7ac; local evidence above is green and must be confirmed by hosted `migrations` and `native-android` jobs | PENDING (billing blocked, local-only) |
 
 The three fix commits are small, reviewable, and fast-forward-safe on top of 7a502cd. No history rewrite, no force-push, no test weakening.
+
+## Evidence (local, 27eacbb, 2026-08-31 00:04 UTC — P0-8 + P1-1..P1-6 + Tranche2 C-E)
+
+| Gate | Evidence | Result |
+| --- | --- | --- |
+| Web lint | `npm run lint` — `tsc --noEmit` clean (tsconfig exclude dist) | PASS |
+| Web tests | `npx vitest run --exclude=chrome-extension` — 15 files, 116 tests (storage 23 + p1_2 2 + tranche2e 3 + syncProtocol 29 + cloudSync 12 etc.) | PASS |
+| Web build | `npm run build` — client + server bundles, PWA generated | PASS (local) |
+| Migration static | `npm run verify:migrations` — `{"status":"PASS","migrations":7,"emptySchemaOrder":"PASS","existingSchemaAdditiveSafety":"PASS"}` | PASS |
+| Supabase migration | `bash scripts/test-postgres-migrations.sh` — `{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS"}` | PASS |
+| Room schema assets | `bash android-native/scripts/test-room-schema-assets.sh` — `ROOM_SCHEMA_ASSETS=PASS` (1..8, 8.json 23K) | PASS |
+| Native unit | `env JAVA_HOME=/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home ./android-native/gradlew -p android-native test --rerun-tasks` — 4 flavors (productionDebug/Release, sandboxDebug/Release) BUILD SUCCESSFUL 129 tasks | PASS |
+| Native lint | `env JAVA_HOME=... ./android-native/gradlew -p android-native lint` — `lintProductionDebug` BUILD SUCCESSFUL | PASS |
+| Native bundle/assemble | `env JAVA_HOME=... ./android-native/gradlew -p android-native bundleProductionRelease` 4.3M, `assembleProductionRelease` 2.0M — BUILD SUCCESSFUL | PASS |
+| Signing | `bash android-native/scripts/test-signing.sh` — `apksigner verify v2 true CN=Goalflow SHA-256 061e...` on `app-production-release.apk` 2.0M | PASS |
+| APK diagnostic | `bash android-native/scripts/diagnose-apk.sh android-native/app/build/outputs/apk/production/release/app-production-release.apk` — `ZIP_TEST/PASS`, `ZIPALIGN/PASS`, `APK_SIGNATURE/PASS`, `PACKAGE=com.mariusschober.goalflow`, `VERSION_CODE=3`, `0.3.0-tranche3`, `MIN_SDK=26`, `TARGET_SDK=35`, `APK_DIAGNOSTIC=PASS` | PASS |
+| P0-8 PKCE | `NativeAuthClientTest` `codeChallenge RFC7636` + `requestMagicLink wires code_challenge` — S256 via SHA-256 + Base64URL, stored verifier 43 chars, body contains `code_challenge`/`code_challenge_method=S256` and `redirect_to` query | PASS |
+| P1-1 storage | `services/storage.test.ts` P1-1 memoizes listWal within 200ms, requestIdleCallback for >50, keyCalls <20 | PASS |
+| P1-2 debounce | `hooks/p1_2.debounce.test.ts` useDebouncedCallback 300ms, rapid 10× → 1× | PASS |
+| P1-3 batch | `GoalflowDatabase.kt:178` `habitId IN` + `LIMIT 500`, `GoalflowViewModel` batch `generateHabitInstances`, `exportBackup` paged 500 | PASS (grep) |
+| P1-4 eager | `GoalflowViewModel` `SharingStarted.Eagerly` (was WhileSubscribed 5s), `GoalflowWidgetUpdater` 500ms debounce `distinctUntilChanged` `planFingerprint` | PASS (grep) |
+| P1-5 lifecycle | `GoalflowWidgetProvider` `ProcessLifecycleOwner` + `lifecycleScope` + `CoroutineExceptionHandler` + `onDisabled cancel`, `NativeSyncEngine` `OkHttpClient` singleton HTTP/2 5/5 pool | PASS (grep) |
+| P1-6 memo | `PlanningView` `useMemo` bioContext + `React.memo` areEqual `id/status/lifecycleStatus/completed/isFrog/bioContext/start/end/dragging` | PASS (grep) |
+| Tranche2 C | `services/cloudSync.ts` `ifAvailable:false` + `SimpleMutex` + `fetchSyncHealth` `GET /sync/health outboxDepth/pendingBytes`, `server/routes/sync.ts` `GET /sync/health` | PASS |
+| Tranche2 D | `GoalflowRepository` `nextChangeVersionMutex` `goalflow_next_change_version` lock + `restoreMutex` interruption, `TaskEventSupport` FK comment + application FK | PASS |
+| Tranche2 E | `services/syncProtocol.tranche2e.test.ts` task-a/b converge (fc 20 runs), daily_plans reorder, extraJson merge via `RECORD_LEVEL_STORES` + `applyRemotePage` | PASS (3 tests) |
+| Device (not attached) | `adb devices -l` 2026-08-31 shows no device; previous `b230e65` evidence 638ms TotalTime (<900 target), 20% janky (target <5% 30ms), PSS 210MB (target <180MB) — P1 debounces/batching expected to improve; pending re-attach `adb shell am start -W`, `dumpsys gfxinfo/meminfo`, `test-owner-install.sh` COLD_START/PSS, `test-clean-install-matrix.sh` | PENDING (device not attached) — local-only per Q&A |
+| Hosted CI | `33335119616` blocked by billing per `ACCOUNTS_AND_KEYS.md` — local is authority, fast-forward pushes `c6df6af`, `360479e`, `27eacbb` verified | LOCAL GREEN |
+
+Local gates are green at `27eacbb`; hosted matrix `api [26,30,33,35]` and Tranche 4/5 remain blocked/pending. No silent data loss; Tranche2 C-E simulated via `fake-indexeddb`/`DurableFakeServer`/`Robolectric` (no live Supabase).
 
 ## Containment of concurrent commit 6e7244a
 

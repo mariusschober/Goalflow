@@ -7,12 +7,26 @@ import com.mariusschober.goalflow.nativeapp.data.NativeServerConflict
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.ConnectionPool
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
-import java.net.HttpURLConnection
-import java.net.URL
-import java.nio.charset.StandardCharsets
 import java.time.Instant
+import java.util.concurrent.TimeUnit
+
+// P1-5: OkHttp singleton with HTTP/2 + 30s pool for NativeSyncEngine
+private val okHttpSingleton: OkHttpClient by lazy {
+    OkHttpClient.Builder()
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
+        .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
+        .build()
+}
 
 sealed interface SyncResult {
     data object Skipped : SyncResult
@@ -377,27 +391,22 @@ class NativeSyncEngine(
             if (!has(key) || isNull(key)) null else optString(key).takeIf(String::isNotBlank)
 
         fun httpRequest(path: String, token: String, method: String, body: String?): NativeHttpResponse {
-            val connection = (URL("${NativeConfig.apiOrigin}$path").openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = 10_000
-                readTimeout = 20_000
-                useCaches = false
-                doInput = true
-                setRequestProperty("Accept", "application/json")
-                setRequestProperty("Cache-Control", "no-store")
-                setRequestProperty("Authorization", "Bearer $token")
-            }
-            return try {
-                if (body != null) {
-                    connection.doOutput = true
-                    connection.setRequestProperty("Content-Type", "application/json")
-                    connection.outputStream.use { it.write(body.toByteArray(StandardCharsets.UTF_8)) }
-                }
-                val code = connection.responseCode
-                val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                NativeHttpResponse(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
-            } finally {
-                connection.disconnect()
+            val url = "${NativeConfig.apiOrigin}$path"
+            val builder = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json")
+                .header("Cache-Control", "no-store")
+                .header("Authorization", "Bearer $token")
+            val requestBody = body?.toRequestBody("application/json".toMediaType())
+            val request = when (method) {
+                "POST" -> builder.post(requestBody ?: "".toRequestBody(null))
+                "GET" -> builder.get()
+                else -> builder.method(method, requestBody)
+            }.build()
+            okHttpSingleton.newCall(request).execute().use { response ->
+                val code = response.code
+                val responseBody = response.body?.string().orEmpty()
+                return NativeHttpResponse(code, responseBody)
             }
         }
     }

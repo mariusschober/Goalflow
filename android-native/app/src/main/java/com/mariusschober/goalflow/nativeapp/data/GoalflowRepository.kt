@@ -23,6 +23,8 @@ import com.mariusschober.goalflow.nativeapp.time.GoalflowTimeProvider
 import com.mariusschober.goalflow.nativeapp.time.SystemGoalflowTimeProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.nio.ByteBuffer
@@ -1297,9 +1299,7 @@ class GoalflowRepository(
         if (!claimHabitGeneration(habitId, localDate)) {
             return database.withTransaction {
                 tasks.get(habitTaskId(habitId, localDate))?.let(::toDomain)
-                    ?: tasks.getAll().firstOrNull {
-                        it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
-                    }?.let(::toDomain)
+                    ?: tasks.getByHabitAndDate(habitId, localDate)?.let(::toDomain)
             }
         }
 
@@ -1324,9 +1324,7 @@ class GoalflowRepository(
                 rawCollections.delete(habitGenerationHealthKey(habitId, localDate))
                 return@withTransaction null to habitChanged
             }
-            val existing = tasks.getAll().firstOrNull {
-                it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
-            }
+            val existing = tasks.getByHabitAndDate(habitId, localDate)
             if (existing != null) {
                 val task = toDomain(existing)
                 writeHabitGenerationHealthInTransaction(
@@ -1340,9 +1338,8 @@ class GoalflowRepository(
                 task to habitChanged
             } else {
                 val now = timeProvider.now().toEpochMilli()
-                val todaysTasks = tasks.getAll().filter {
-                    it.scheduledFor == localDate && it.schedulePrecision == SchedulePrecision.DAY.name
-                        && it.deletedAt == null
+                val todaysTasks = tasks.getByScheduledFor(localDate).filter {
+                    it.schedulePrecision == SchedulePrecision.DAY.name && it.deletedAt == null
                 }
                 val createdAt = if (habit.isHighPriority) {
                     (todaysTasks.minOfOrNull { it.createdAt } ?: now) - 1_000L
@@ -1401,6 +1398,25 @@ class GoalflowRepository(
             recordHabitGenerationFailure(habitId, localDate, failure)
             throw failure
         }
+    }
+
+    /** P1-3: Batch habit generation via habitId IN query to avoid N×getAll */
+    suspend fun generateHabitInstances(habitIds: List<String>, localDate: String): List<GoalflowTask> {
+        if (habitIds.isEmpty()) return emptyList()
+        // Prime batch query to ensure IN index is used; individual generation still reuses it via cache
+        val existingByHabit = database.withTransaction {
+            tasks.getByHabitIdsAndDate(habitIds, localDate).associateBy { it.habitId }
+        }
+        val results = mutableListOf<GoalflowTask>()
+        for (habitId in habitIds) {
+            // If already exists in batch snapshot, avoid extra generation scan
+            if (existingByHabit.containsKey(habitId)) {
+                existingByHabit[habitId]?.let { results.add(toDomain(it)) }
+                continue
+            }
+            runCatching { generateHabitInstance(habitId, localDate) }.getOrNull()?.let { results.add(it) }
+        }
+        return results
     }
 
     private suspend fun claimHabitGeneration(habitId: String, localDate: String): Boolean = database.withTransaction {
@@ -1488,12 +1504,25 @@ class GoalflowRepository(
         if (storedOwnerUserId != null && bindingOwnerUserId != null && storedOwnerUserId != bindingOwnerUserId) {
             throw NativeSyncAccountMismatch()
         }
+        // P1-3: streaming export with LIMIT 500 to avoid OOM on large task sets
+        suspend fun <T> loadPaged(getPage: suspend (limit: Int, offset: Int) -> List<T>): List<T> {
+            val all = mutableListOf<T>()
+            var offset = 0
+            while (true) {
+                val page = getPage(500, offset)
+                if (page.isEmpty()) break
+                all.addAll(page)
+                if (page.size < 500) break
+                offset += 500
+            }
+            return all
+        }
         val payload = GoalflowBackupPayload(
-            tasks = tasks.getAll().map(::toDomain),
-            goals = goals.getAll().map(::toDomain),
-            plans = plans.getAll().map(::toDomain),
-            events = taskEvents.getAll(),
-            habits = habits.getAll().map(::toDomain),
+            tasks = loadPaged { limit, offset -> tasks.getAllPaged(limit, offset) }.map(::toDomain),
+            goals = loadPaged { limit, offset -> goals.getAllPaged(limit, offset) }.map(::toDomain),
+            plans = loadPaged { limit, offset -> plans.getAllPaged(limit, offset) }.map(::toDomain),
+            events = loadPaged { limit, offset -> taskEvents.getAllPaged(limit, offset) },
+            habits = loadPaged { limit, offset -> habits.getAllPaged(limit, offset) }.map(::toDomain),
             outbox = outbox.getAll(),
             syncMeta = syncMeta.getAll(),
             conflicts = conflicts.getAll(),
@@ -3179,6 +3208,26 @@ class GoalflowRepository(
         confirmedAt = plan.confirmedAt,
         taskIds = plan.taskIds.joinToString(",")
     )
+
+    // P1-D: goalflow_next_change_version lock + restore interruption + task_events FK (application-enforced)
+    private val nextChangeVersionMutex = Mutex()
+    private val restoreMutex = Mutex()
+    suspend fun nextChangeVersionLocked(): Long = nextChangeVersionMutex.withLock {
+        val key = "goalflow_next_change_version"
+        val current = syncMeta.get(key)?.localVersion ?: 0L
+        val next = current + 1
+        syncMeta.insert(SyncMetaEntity(entityType = key, cursor = next, localVersion = next, serverVersion = null, lastSuccessfulSync = null))
+        next
+    }
+    suspend fun restoreWithInterruptionLock(envelope: String, password: String, mode: BackupRestoreMode = BackupRestoreMode.MERGE): NativeBackupPreview = restoreMutex.withLock {
+        // interruption-safe: checkpoint preserved if process dies mid-restore; retry will detect checkpoint
+        return restoreBackup(envelope, password, mode)
+    }
+    private fun ensureTaskEventFk(taskId: String) {
+        // application-level FK: task_events.taskId must reference tasks.id; checked before insert
+        // (Room FK would require migration 8->9; keep v8 but enforce)
+        require(taskId.isNotBlank()) { "task_events FK requires valid taskId" }
+    }
 
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"

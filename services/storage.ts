@@ -113,7 +113,14 @@ export const validateBackupCollections = (backup: unknown): Record<string, any> 
 };
 
 const checksumCollections = async (collections: Record<string, unknown>): Promise<string> => {
-  const bytes = new TextEncoder().encode(JSON.stringify(collections));
+  const stable = JSON.stringify(collections, (_key, value) => {
+    if (!isRecord(value)) return value;
+    return Object.keys(value).sort().reduce<Record<string, unknown>>((acc, k) => {
+      acc[k] = (value as Record<string, unknown>)[k];
+      return acc;
+    }, {});
+  });
+  const bytes = new TextEncoder().encode(stable);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
   return Array.from(new Uint8Array(digest)).map(value => value.toString(16).padStart(2, '0')).join('');
 };
@@ -295,8 +302,37 @@ const validStagedTransaction = (value: unknown, userKey: string): value is Stage
   && Number.isSafeInteger(value.order)
   && Array.isArray(value.changes);
 
+const WAL_DEBOUNCE_MS = 200;
+const listWalCache = new Map<string, { entries: WalEntry[]; at: number; len: number }>();
+const latestWalCache = new Map<string, { found: boolean; value?: unknown; at: number; walKeyCount: number }>();
+
+const scheduleIdle = (cb: () => void): void => {
+  if (typeof window !== 'undefined' && typeof (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback === 'function') {
+    (window as unknown as { requestIdleCallback: (cb: () => void, opts?: { timeout: number }) => void }).requestIdleCallback(cb, { timeout: 200 });
+  } else if (typeof window !== 'undefined') {
+    setTimeout(cb, 0);
+  } else {
+    cb();
+  }
+};
+
+const invalidateWalCache = (userKey: string): void => {
+  for (const key of Array.from(listWalCache.keys())) {
+    if (key === userKey || key.startsWith(`${userKey}:`)) listWalCache.delete(key);
+  }
+  for (const key of Array.from(latestWalCache.keys())) {
+    if (key.startsWith(`${userKey}:`)) latestWalCache.delete(key);
+  }
+};
+
 const listWal = (userKey: string, storeName?: string): WalEntry[] => {
   if (!hasWindow()) return [];
+  const cacheKey = `${userKey}:${storeName ?? '*'}`;
+  const now = Date.now();
+  const cached = listWalCache.get(cacheKey);
+  if (cached && now - cached.at < WAL_DEBOUNCE_MS && cached.len === window.localStorage.length) {
+    return cached.entries;
+  }
   const prefix = walPrefixForUser(userKey);
   const entries: WalEntry[] = [];
   for (let index = 0; index < window.localStorage.length; index++) {
@@ -322,7 +358,14 @@ const listWal = (userKey: string, storeName?: string): WalEntry[] => {
       throw new DurableStorageError('A pending local change is damaged. Synchronization stopped without discarding it.');
     }
   }
-  return entries.sort((a, b) => a.transaction.order - b.transaction.order || a.key.localeCompare(b.key));
+  const sorted = entries.sort((a, b) => a.transaction.order - b.transaction.order || a.key.localeCompare(b.key));
+  listWalCache.set(cacheKey, { entries: sorted, at: now, len: window.localStorage.length });
+  if (sorted.length > 50) {
+    scheduleIdle(() => {
+      listWalCache.set(cacheKey, { entries: sorted, at: Date.now(), len: window.localStorage.length });
+    });
+  }
+  return sorted;
 };
 
 let walOrderCounter = 0;
@@ -344,9 +387,27 @@ const readDeviceId = (): string => {
 };
 
 const latestWalValue = <T>(storeName: string, userKey: string): { found: boolean; value?: T } => {
+  const cacheKey = `${userKey}:${storeName}`;
+  const now = Date.now();
+  const cached = latestWalCache.get(cacheKey) as { found: boolean; value?: T; at: number; walKeyCount: number } | undefined;
+  if (cached && now - cached.at < WAL_DEBOUNCE_MS && hasWindow() && cached.walKeyCount === window.localStorage.length) {
+    return { found: cached.found, value: cached.value as T | undefined };
+  }
   const entries = listWal(userKey, storeName);
-  if (!entries.length) return { found: false };
-  return { found: true, value: entries[entries.length - 1].transaction.value as T };
+  if (!entries.length) {
+    const result = { found: false as const, walKeyCount: hasWindow() ? window.localStorage.length : 0, at: now };
+    latestWalCache.set(cacheKey, result as unknown as { found: boolean; value?: unknown; at: number; walKeyCount: number });
+    return { found: false };
+  }
+  const result = { found: true as const, value: entries[entries.length - 1].transaction.value as T, walKeyCount: hasWindow() ? window.localStorage.length : 0, at: now };
+  latestWalCache.set(cacheKey, result as unknown as { found: boolean; value?: unknown; at: number; walKeyCount: number });
+  if (entries.length > 50) {
+    scheduleIdle(() => {
+      // keep memo warm via idle
+      latestWalCache.set(cacheKey, { ...result, at: Date.now() } as unknown as { found: boolean; value?: unknown; at: number; walKeyCount: number });
+    });
+  }
+  return { found: true, value: result.value };
 };
 
 const announceLocalChange = (storeName: string, key: string, value: unknown): void => {
@@ -577,6 +638,7 @@ export const storageService = {
     const serialized = JSON.stringify(transaction);
     if (serialized === undefined) throw new DurableStorageError();
     verifiedLocalStorageWrite(walKey(transaction), serialized);
+    invalidateWalCache(key);
     return transaction.id;
   },
 
@@ -616,6 +678,7 @@ export const storageService = {
     const serialized = JSON.stringify(group);
     if (serialized === undefined) throw new DurableStorageError();
     verifiedLocalStorageWrite(`${walPrefixForUser(key)}batch-${id}`, serialized);
+    invalidateWalCache(key);
     return id;
   },
 
@@ -664,6 +727,7 @@ export const storageService = {
             if (transaction) {
               const entryKey = walKey(transaction);
               verifiedLocalStorageWrite(entryKey, JSON.stringify(transaction));
+              invalidateWalCache(key);
               pending = [{ key: entryKey, transaction, grouped: false }];
               committedValue = transaction.value;
             }
@@ -696,6 +760,7 @@ export const storageService = {
           if (transaction) {
             const entryKey = walKey(transaction);
             verifiedLocalStorageWrite(entryKey, JSON.stringify(transaction));
+            invalidateWalCache(key);
             pending = [{ key: entryKey, transaction, grouped: false }];
             committedValue = transaction.value;
           }
@@ -712,6 +777,7 @@ export const storageService = {
         }
       }
       pending.forEach(item => safeLocalStorageRemove(item.key));
+      if (pending.length) invalidateWalCache(key);
       writeRecovery(storeName, key, committedValue);
       if (source === 'local') announceLocalChange(storeName, key, committedValue);
     });
@@ -772,6 +838,7 @@ export const storageService = {
         writeFallback(STORES.SYNC, userKey, nextMeta);
       }
       pending.forEach(item => safeLocalStorageRemove(item.key));
+      invalidateWalCache(userKey);
       for (const transaction of latestByStore.values()) writeRecovery(transaction.storeName, userKey, transaction.value);
       return nextMeta;
     });
@@ -1130,3 +1197,15 @@ export const storageService = {
     }
   }
 };
+
+// Test hook: expose storage for Playwright durability verification (only in test/dev builds)
+if (typeof window !== 'undefined') {
+  try {
+    const env = (import.meta as unknown as { env: Record<string, unknown> }).env;
+    const isTest = env?.VITE_TEST_MODE === 'true' || Boolean(env?.DEV);
+    if (isTest) {
+      (window as unknown as Record<string, unknown>).__storageService = storageService;
+      (window as unknown as Record<string, unknown>).__STORES = STORES;
+    }
+  } catch {}
+}

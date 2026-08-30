@@ -17,7 +17,20 @@ export interface UserSettings {
 
 const XP_PER_TASK = 10;
 const XP_PER_FROG_MULTIPLIER = 3; 
-const XP_GOAL_SYNERGY_BONUS = 15; 
+const XP_GOAL_SYNERGY_BONUS = 15;
+
+// P1-2: debounced persist to avoid IndexedDB flood on rapid keystrokes
+export function useDebouncedCallback<T extends (...args: Parameters<T>) => ReturnType<T>>(callback: T, delay: number): T {
+  const timerRef = useRef<number | undefined>(undefined);
+  const callbackRef = useRef(callback);
+  useEffect(() => { callbackRef.current = callback; }, [callback]);
+  const debounced = useCallback((...args: Parameters<T>) => {
+    if (timerRef.current !== undefined) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => callbackRef.current(...args), delay) as unknown as number;
+  }, [delay]) as T;
+  useEffect(() => () => { if (timerRef.current !== undefined) window.clearTimeout(timerRef.current); }, []);
+  return debounced;
+} 
 const XP_HABIT_SETUP_BONUS = 50;
 const BASE_XP_FOR_LEVEL = 100;
 
@@ -321,10 +334,14 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       }
   }, [USER_KEY]);
 
+  const debouncedPersist = useDebouncedCallback((store: string, data: any) => {
+      void persist(store, data);
+  }, 300);
+
   const persistLocalState = useCallback((store: string, data: any) => {
       if (cloudAppliedStores.current.delete(store)) return;
-      void persist(store, data);
-  }, [persist]);
+      debouncedPersist(store, data);
+  }, [debouncedPersist]);
 
   // Watchers
   useEffect(() => { if (!isLoading) persistLocalState(STORES.TASKS, tasks); }, [tasks, isLoading, persistLocalState]);

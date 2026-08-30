@@ -380,4 +380,27 @@ describe('durable storage failure boundaries', () => {
     expect((await storageService.get<any>(STORES.SYNC, key)).outbox[0].payload)
       .toEqual({ id: 'local', title: 'local' });
   });
+
+  it('P1-1 memoizes listWal + latestWalValue within 200ms and idles >50 entries', async () => {
+    const localStorage = installBrowserStorage();
+    const key = `storage-p1-1-${crypto.randomUUID()}`;
+    for (let i = 0; i < 60; i++) {
+      storageService.stageLocalValue(STORES.TASKS, key, [], [{ id: `t-${i}`, title: `Task ${i}` }]);
+    }
+    let keyCalls = 0;
+    const origKey = localStorage.key.bind(localStorage);
+    (localStorage as unknown as { key: (idx: number) => string | null }).key = (idx: number) => {
+      keyCalls++;
+      return origKey(idx);
+    };
+    const first = await storageService.get(STORES.TASKS, key);
+    expect(first).toBeDefined();
+    const callsAfterFirst = keyCalls;
+    keyCalls = 0;
+    const second = await storageService.get(STORES.TASKS, key);
+    expect(second).toEqual(first);
+    // second call within debounce window should be memoized (no localStorage.key scan)
+    expect(keyCalls).toBeLessThan(callsAfterFirst);
+    expect(keyCalls).toBeLessThan(20);
+  });
 });

@@ -46,59 +46,59 @@ class GoalflowViewModel(
 
     val tasks: StateFlow<List<GoalflowTask>> = repository.taskStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         emptyList()
     )
 
     val goals: StateFlow<List<GoalflowGoal>> = repository.goalStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         emptyList()
     )
 
     val habits: StateFlow<List<GoalflowHabit>> = repository.habitStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         emptyList()
     )
 
     val habitGenerationFailures: StateFlow<List<HabitGenerationHealth>> = repository.habitGenerationHealthStream
         .map { health -> health.filter { it.status != HabitGenerationStatus.GENERATED } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val stats: StateFlow<GoalflowStats> = repository.statsStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         GoalflowStats()
     )
 
     val progress: StateFlow<GoalflowProgress> = repository.progressStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         GoalflowProgress()
     )
 
     val circadian: StateFlow<GoalflowCircadianState> = repository.circadianStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         GoalflowCircadianState()
     )
 
     val trueNorth: StateFlow<List<GoalflowTrueNorth>> = repository.trueNorthStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         emptyList()
     )
 
     val amalgam: StateFlow<String> = repository.amalgamStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         "My world takes care of me"
     )
 
     val conflicts: StateFlow<List<SyncConflictEntity>> = repository.conflictStream.stateIn(
         viewModelScope,
-        SharingStarted.WhileSubscribed(5_000),
+        SharingStarted.Eagerly,
         emptyList()
     )
 
@@ -106,11 +106,11 @@ class GoalflowViewModel(
         combine(tasks, repository.planStream(date)) { allTasks, plan ->
             com.mariusschober.goalflow.nativeapp.domain.planningGate(allTasks, date, plan)
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), PlanningGate.Empty)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, PlanningGate.Empty)
 
     val currentTask: StateFlow<GoalflowTask?> = planningGate.map { gate ->
         (gate as? PlanningGate.Ready)?.queue?.firstOrNull()
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
     private val _notice = MutableStateFlow<String?>(null)
     val notice: StateFlow<String?> = _notice.asStateFlow()
@@ -133,12 +133,19 @@ class GoalflowViewModel(
         viewModelScope.launch {
             combine(habits, today) { currentHabits, date -> currentHabits to date }
                 .collectLatest { (currentHabits, date) ->
-                    currentHabits.forEach { habit ->
-                        runCatching { repository.generateHabitInstance(habit.id, date) }
-                            .onFailure { failure ->
-                                _error.value = failure.message ?: "A habit could not be generated safely."
+                    if (currentHabits.isEmpty()) return@collectLatest
+                    // P1-3: batch habitId IN query to avoid N×getAll
+                    runCatching { repository.generateHabitInstances(currentHabits.map { it.id }, date) }
+                        .onFailure { failure ->
+                            _error.value = failure.message ?: "A habit could not be generated safely."
+                            // fallback to per-habit to preserve single-habit error visibility
+                            currentHabits.forEach { habit ->
+                                runCatching { repository.generateHabitInstance(habit.id, date) }
+                                    .onFailure { perFailure ->
+                                        _error.value = perFailure.message ?: "A habit could not be generated safely."
+                                    }
                             }
-                    }
+                        }
                 }
             }
     }
