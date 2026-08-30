@@ -17,8 +17,13 @@ final class MenuBarController: NSObject {
         self.taskProvider = taskProvider; self.store = store; self.clock = clock; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock, dailyPlanStore: dailyPlanStore, goalStore: goalStore, trueNorthStore: trueNorthStore, amalgamStore: amalgamStore, gateEnabled: gateEnabled)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow"); button.imagePosition = .imageOnly
-            button.action = #selector(togglePopover); button.target = self; updateStatusTitle()
+            let img = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow")
+            img?.isTemplate = true
+            button.image = img; button.imagePosition = .imageOnly
+            button.action = #selector(togglePopover); button.target = self
+            button.appearsDisabled = false
+            button.appearance = nil // inherit vibrant menu bar appearance (Tahoe Liquid Glass)
+            updateStatusTitle()
         }
         popover = NSPopover(); popover.contentSize = NSSize(width: 400, height: 420); popover.behavior = .transient; popover.animates = true
         let hosting = NSHostingView(rootView: ExecutionPanelView(vm: viewModel))
@@ -77,6 +82,8 @@ final class MenuBarController: NSObject {
     }
     private func updateStatusTitle() {
         guard let button = statusItem.button else { return }
+        button.appearsDisabled = false
+        button.appearance = nil // force vibrant inheritance on Tahoe Liquid Glass
         // Break takes precedence — show break timer
         if viewModel.isOnBreak {
             let remaining = viewModel.breakRemaining
@@ -89,7 +96,9 @@ final class MenuBarController: NSObject {
             }
             button.title = "☕ \(timeStr)"
             button.imagePosition = .imageLeading
-            button.image = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)
+            let img = NSImage(systemSymbolName: "cup.and.saucer.fill", accessibilityDescription: nil)
+            img?.isTemplate = true
+            button.image = img
             button.font = NSFont.systemFont(ofSize: 12, weight: .medium)
             button.toolTip = "On Break — \(timeStr)"
             button.contentTintColor = .systemTeal
@@ -97,10 +106,14 @@ final class MenuBarController: NSObject {
         }
         // Respect planning gate when enabled
         if case .monthlyPlanningRequired = viewModel.gate {
-            button.title = "Plan monthly"; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); button.toolTip = "Monthly planning required"; button.contentTintColor = .systemOrange; return
+            button.title = "Plan monthly"; button.imagePosition = .imageLeading
+            let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
+            button.toolTip = "Monthly planning required"; button.contentTintColor = .systemOrange; return
         }
         if case .dailyPlanningRequired = viewModel.gate {
-            button.title = "Plan the day"; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
+            button.title = "Plan the day"; button.imagePosition = .imageLeading
+            let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
+            button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
         }
         let task = viewModel.task ?? taskProvider?.fetchCurrent()
         let isPaused = viewModel?.isPaused ?? false; let isOvertime = viewModel?.isOvertime ?? false; let isActive = viewModel?.isActive ?? false
@@ -113,8 +126,11 @@ final class MenuBarController: NSObject {
             else { display = trimmed }
         } else { display = "Plan the day" }
         let iconName = isPaused ? "pause.circle.fill" : isOvertime ? "exclamationmark.circle.fill" : isActive ? "scope" : "circle.dotted"
-        button.title = display; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
+        button.title = display; button.imagePosition = .imageLeading
+        let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
+        icon?.isTemplate = true
+        button.image = icon
         button.font = NSFont.systemFont(ofSize: 12, weight: .medium); button.toolTip = task?.title ?? "Goalflow — no tasks planned"
-        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = nil }
+        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = nil } // nil → vibrant labelColor (white on dark glass, black on light glass)
     }
 }
