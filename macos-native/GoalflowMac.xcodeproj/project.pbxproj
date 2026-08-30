@@ -12,13 +12,16 @@
 		1718155336168592F9FA0148 /* FocusSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */; };
 		1E01F12735B34083BC188EEE /* CircularProgress.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68F5A6ED2FD04BD29C94E7EF /* CircularProgress.swift */; };
 		41C26C25928103F38F273B10 /* ExecutionPanelView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */; };
+		4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */; };
 		5710A612E06235FF7D483818 /* ExecutionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C87EF4808BAD06681002F0 /* ExecutionState.swift */; };
+		5DD963E313BFF17381576342 /* SessionBTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */; };
 		5E8389CAEA35DDE445C7804B /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6684235E22D79D819CB18A13 /* AppDelegate.swift */; };
 		60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */; };
 		6E81AEC4FAB93E2DF00A4011 /* CurrentTaskProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = F21CF60C75DE1529F13E73B8 /* CurrentTaskProvider.swift */; };
 		71277A0BC301D62C9B673151 /* SchedulingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1BBBFC89A865C6633CBBE07A /* SchedulingTests.swift */; };
 		86B679D5B2466E6BD59435F8 /* MenuBarController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 709EFFFA262264B84A634724 /* MenuBarController.swift */; };
 		B1A52A598B41671F499F5869 /* GoalflowMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */; };
+		B8B37BAA6ED1ECAA1C97FA43 /* TTSGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA4039F314B59CFA20F0483 /* TTSGateway.swift */; };
 		BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */; };
 		BF355797A88E29C871B9C6D4 /* FrogBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4381C35D15C589E1D40DDEC /* FrogBadge.swift */; };
 		C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */; };
@@ -39,6 +42,7 @@
 		07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSessionStoreTests.swift; sourceTree = "<group>"; };
 		1BBBFC89A865C6633CBBE07A /* SchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchedulingTests.swift; sourceTree = "<group>"; };
 		1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimerTests.swift; sourceTree = "<group>"; };
+		22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGateway.swift; sourceTree = "<group>"; };
 		4DB08E5F433C83D224127157 /* GoalflowMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GoalflowMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		515E9C93B6B9719CF468116B /* ExecutionTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimer.swift; sourceTree = "<group>"; };
 		6684235E22D79D819CB18A13 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
@@ -47,6 +51,7 @@
 		709EFFFA262264B84A634724 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		880B660E82110CAAE59ADDFE /* GoalflowTask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalflowTask.swift; sourceTree = "<group>"; };
 		A4381C35D15C589E1D40DDEC /* FrogBadge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrogBadge.swift; sourceTree = "<group>"; };
+		A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionBTests.swift; sourceTree = "<group>"; };
 		ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSessionStore.swift; sourceTree = "<group>"; };
 		B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionPanelView.swift; sourceTree = "<group>"; };
 		D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalflowMacApp.swift; sourceTree = "<group>"; };
@@ -55,6 +60,7 @@
 		F21CF60C75DE1529F13E73B8 /* CurrentTaskProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentTaskProvider.swift; sourceTree = "<group>"; };
 		FAE072D1C4311EFEA0DC0B39 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		FE52DE69BD05AC4D252BB4DA /* Clock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clock.swift; sourceTree = "<group>"; };
+		FFA4039F314B59CFA20F0483 /* TTSGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSGateway.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -123,6 +129,7 @@
 				1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */,
 				07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */,
 				1BBBFC89A865C6633CBBE07A /* SchedulingTests.swift */,
+				A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */,
 			);
 			path = GoalflowMacTests;
 			sourceTree = "<group>";
@@ -133,6 +140,8 @@
 				FE52DE69BD05AC4D252BB4DA /* Clock.swift */,
 				515E9C93B6B9719CF468116B /* ExecutionTimer.swift */,
 				ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */,
+				22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */,
+				FFA4039F314B59CFA20F0483 /* TTSGateway.swift */,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -248,6 +257,7 @@
 				BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */,
 				C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */,
 				71277A0BC301D62C9B673151 /* SchedulingTests.swift in Sources */,
+				5DD963E313BFF17381576342 /* SessionBTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -267,6 +277,8 @@
 				B1A52A598B41671F499F5869 /* GoalflowMacApp.swift in Sources */,
 				007E36C66EAF2106D3514231 /* GoalflowTask.swift in Sources */,
 				86B679D5B2466E6BD59435F8 /* MenuBarController.swift in Sources */,
+				4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */,
+				B8B37BAA6ED1ECAA1C97FA43 /* TTSGateway.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

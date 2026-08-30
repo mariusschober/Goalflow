@@ -3,7 +3,7 @@
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
 **Spec snapshot:** `GOALFLOW_MACOS_MUSE_CONTEXT.md` (Tahoe target)  
-**Last updated:** 2026-08-30 — Session A (Foundation)
+**Last updated:** 2026-08-30 — Session B (Focus Engine)
 
 ---
 
@@ -252,8 +252,8 @@ Constraints: one bounded milestone per session, preserve sync-last.
 
 | Session | Milestone | Scope (must-complete) | Done |
 |---|---|---|---|
-| **A — Foundation (this)** | Native shell + Current→ACTION→Timer | Audit, plan+handoff, branch, Xcode project Tahoe/arm64, menu-bar-only lifecycle, popover panel, `GoalflowTask`+`ExecutionState`+`ExecutionTimer`, `DemoCurrentTaskProvider` with deterministic ordering & frog visual, ACTION hero, countdown from `duration`, inactive/active coherent Tahoe design, persistence surviving relaunch, unit tests, build | ⬜ |
-| **B — Focus engine** | Robust timing | Monotonic reference + pause/resume + overtime (+5/+15/+30 UI not yet), sleep/away foundation (detect + recompute, no dialog), persistent recovery hardening (atomic file), tick sound architecture placeholder, TTS slot | |
+| **A — Foundation** | Native shell + Current→ACTION→Timer | Audit, plan+handoff, branch, Xcode project Tahoe/arm64, menu-bar-only lifecycle, popover panel, `GoalflowTask`+`ExecutionState`+`ExecutionTimer`, `DemoCurrentTaskProvider` with deterministic ordering & frog visual, ACTION hero, countdown from `duration`, inactive/active coherent Tahoe design, persistence surviving relaunch, unit tests, build | ✅ |
+| **B — Focus engine** | Robust timing | Monotonic `ContinuousClock` + pause/resume + overtime (+5/+15/+30 inline), sleep/away observers recompute, file-backed `execution.json` atomic + WAL, Combine ticker wiring, `SoundGateway`/`TTSGateway` slots | ✅ |
 | **C — Accomplishment loop** | Completion ritual | 3s hold (ordinary), 5s hold (frog), haptic buildup (NSHapticFeedbackManager), audio slot, canonical FlowState capture `distracted/good/high/flow` rapid picker, reward animation (tasteful), next Current auto-advance, `Everything Done` quiet state | |
 | **D — Break environment** | Rest as contrast | Break duration selector, fullscreen black cover on all displays/Spaces, break alarm, return transition, idle/away reconciliation options (keep/discard/stop/breakdown) dialog | |
 | **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | |
@@ -344,3 +344,58 @@ Handoff tracks exact commands run.
 Session B scope: robust countdown + pause/resume + overtime (+5/+15/+30 controls deferred to visual slice but timer logic ready), monotonic clock, sleep/away recompute, file-backed persistence upgrade, sound architecture placeholder. Keep interfaces; no completion loop yet.
 
 Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-production`; reread `docs/MACOS_EXECUTION_COMPANION_HANDOFF.md` current branch SHA and defects. Do not start F/G early.
+
+
+---
+
+## 17. Session B — Focus Engine (2026-08-30, executed)
+
+**Goal:** Harden the focus timer from demo countdown to production-grade engine without adding completion/break surfaces.
+
+**Decisions taken (per user-approved plan, user delegated all 4 choices):**
+- Keep `MACOSX_DEPLOYMENT_TARGET 15.0` (SDK 26.5) for stability; no bump to 26.0 yet (deferred to H).
+- Surface `+5 / +15 / +30` inline inside active panel (low friction per §6) — not hidden behind debug menu only, but also in ellipsis menu for discoverability.
+- Menu bar shows live time: `● Draft Q4 roadmap +02:14` / `⏸ Draft… 12:34` — truncated 22 chars, overtime amber, paused orange fill, active green dot.
+- Ticking enabled by default per §11 (via `TickSoundGateway` at 1 Hz while active, volume 0.6, generated bandpass noise).
+
+**State machine extension (`Domain/ExecutionState.swift:1`):**
+- `ExecutionPhase` now `idle | active | paused` (overtime is `active` with `overtimeSeconds>0`, not a separate phase to keep persistence minimal; UI derives `isOvertime`).
+- New fields: `startedAtMonotonic: UInt64?` (optional for migration), `accumulatedPauseSeconds: Int`, `lastPausedAt: Date?`.
+- Custom `Codable` with `decodeIfPresent` defaults; clamps invariants.
+- Pure transitions: `paused(at:) -> ExecutionState?` (active->paused), `resumed(at:) -> ExecutionState?` (paused->active, `accumulated += floor(now - pausedAt)`), `extended(by:) -> ExecutionState?` (grow `plannedDurationSeconds` capped 1440*60, keeps `startedAt`).
+- Derived: `elapsedSeconds(now:)`, `remainingSeconds(now:)`, `overtimeSeconds(now:)`.
+
+**Clock (`Services/Clock.swift:1`):**
+- `MonotonicClock` protocol exposing `monotonicNow: UInt64` via `mach_continuous_time()`.
+- `SystemClock: MonotonicClock`, `FixedClock`, `ManualClock` with lock, `advance(by:)` syncs wall + ~1e9 ticks/sec, `set(_:monotonic:)` for drift tests.
+
+**Persistence (`Services/FocusSessionStore.swift:1`):**
+- `UserDefaultsFocusSessionStore` retained as WAL mirror (secondsSince1970, 0.001 s tolerant read-back).
+- NEW `FileFocusSessionStore(fileURL:)` → `Application Support/com.mariusschober.GoalflowMac/execution.json`, `Data.write(.atomic)` + read-back equality + decode field check.
+- NEW `CompositeFocusSessionStore(fileStore:walStore:)` → `load()` prefers file, migrates WAL→file once if file missing; `save()` writes file first then mirrors WAL (WAL failure logged not fatal); `clear()` both.
+- `AppDelegate` now uses `CompositeFocusSessionStore(File+UserDefaults)`.
+
+**Timer (`Services/ExecutionTimer.swift:1`):**
+- `@Published remainingSeconds, overtimeSeconds, isActive, isPaused`; `state: ExecutionState?`, `clock: any Clock`.
+- `configure(state:clock:)` handles active/paused/idle, starts/stops ticker + sleep observers.
+- `reflectPause/resume/extend` called after store.save (persist-before-UI preserved).
+- `tick()` recomputes `remaining/overtime` from reference time every 1 s.
+- Sleep observers: `NSWorkspace.screensDidSleepNotification` / `screensDidWakeNotification` via `NSWorkspace.shared.notificationCenter`; sleep no-ops (counts as elapsed unless user paused), wake calls `tick()`.
+
+**Sound/TTS (`Services/SoundGateway.swift:1`, `Services/TTSGateway.swift:1`):**
+- `SoundGateway` slot with `NoopSoundGateway` and `TickSoundGateway` (AVAudioEngine per-tick generation 50 ms white-noise bandpass 1500 Hz Q20, 0.18 gain, dispatched off main).
+- `TTSGateway` slot with `NoopTTSGateway` and `AVTTSGateway` (AVSpeechSynthesizer en-US, rate 0.5, disabled by default — respects privacy, never logs task text).
+
+**UI (`UI/ExecutionPanelView.swift:1`, `UI/MenuBarController.swift:1`):**
+- `ExecutionViewModel` now observes `timer.$remainingSeconds/$overtimeSeconds/$isPaused` via `AnyCancellable` (removed poll stub), drives `remainingSeconds/overtimeSeconds/isPaused` published.
+- `isOvertime` derived via `overtimeSeconds>0`; `progress` full ring orange when overtime; `displayTime` shows `+mm:ss` orange when overtime else `mm:ss`; `pause()`/`resume()`/`add5/15/30()` persist before `timer.reflect*`.
+- Panel header shows Paused/Overtime/Current with pause/orange icons; active row shows toggle Pause/Resume + inline `+5 +15 +30` capsule buttons; hints: "Paused — elapsed frozen." / "Overtime — planned time elapsed."; background amber glow when overtime.
+- `MenuBarController` replaces 1 s poll Timer with Combine sinks on `remainingSeconds/overtimeSeconds/isPaused`; fallback 5 s safety poll; `updateStatusTitle()` shows `● title +mm:ss`, `⏸ title mm:ss`, truncates 22 chars.
+
+**Tests (`GoalflowMacTests/SessionBTests.swift:1`):**
+- `ExecutionStatePauseTests` 9 tests: pause freeze, resume adds interval, 10 cycles additive, overtime separately, extend increases planned, extend while paused stays paused, cap 1440, idempotent guards, clock skew clamped.
+- `MonotonicClockTests` 1: wall vs monotonic 2h within 2s.
+- `FileFocusSessionStoreTests` 3: file persists, composite migrates from WAL, double-write.
+- Total now 26 tests (5+1+9+2+3+1+3+3) — earlier 13 + 13 new — all passing.
+
+**Deferred remains:** full hold completion (C), break fullscreen (D), capture (E), auth/sync (F/G), signing (H).

@@ -5,17 +5,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Menu-bar-only: hide dock? LSUIElement handles it, but also ensure no main window activation lingers
         NSApp.setActivationPolicy(.accessory)
 
-        let store = UserDefaultsFocusSessionStore()
+        let store = CompositeFocusSessionStore(
+            fileStore: FileFocusSessionStore(),
+            walStore: UserDefaultsFocusSessionStore()
+        )
         let provider = DemoCurrentTaskProvider()
+        let clock: any Clock = SystemClock()
 
         menuBar = MenuBarController()
-        menuBar.start(taskProvider: provider, store: store)
-
-        // Optional: show popover on first launch for review
-        // DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in self?.menuBar.togglePopover() }
+        menuBar.start(taskProvider: provider, store: store, clock: clock)
     }
 
     func applicationWillTerminate(_ notification: Notification) {

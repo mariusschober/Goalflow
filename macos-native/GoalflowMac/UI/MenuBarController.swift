@@ -1,91 +1,50 @@
 import AppKit
 import SwiftUI
-
+import Combine
 @MainActor
 final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
     private var popover: NSPopover!
     private var viewModel: ExecutionViewModel!
-    private var updateTimer: Timer?
     private var taskProvider: DemoCurrentTaskProvider!
-
-    override init() {
-        super.init()
-    }
-
+    private var cancellables: Set<AnyCancellable> = []
+    override init() { super.init() }
     func start(taskProvider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock()) {
-        self.taskProvider = taskProvider
-        self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock)
-
+        self.taskProvider = taskProvider; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow")
-            button.imagePosition = .imageOnly
-            button.action = #selector(togglePopover)
-            button.target = self
-            // Show truncated title alongside icon, bounded
-            updateStatusTitle()
+            button.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow"); button.imagePosition = .imageOnly
+            button.action = #selector(togglePopover); button.target = self; updateStatusTitle()
         }
-
-        popover = NSPopover()
-        popover.contentSize = NSSize(width: 400, height: 360)
-        popover.behavior = .transient
-        popover.animates = true
+        popover = NSPopover(); popover.contentSize = NSSize(width: 400, height: 420); popover.behavior = .transient; popover.animates = true
         let hosting = NSHostingView(rootView: ExecutionPanelView(vm: viewModel))
-        // Let SwiftUI determine intro size; wrap in VC
-        let vc = NSViewController()
-        vc.view = hosting
-        popover.contentViewController = vc
-
-        // Poll for title/current updates every 2s and when popover toggles
-        updateTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateStatusTitle(); self?.viewModel.objectWillChange.send() }
-        }
-
-        // Observe App activation to restore if needed
+        let vc = NSViewController(); vc.view = hosting; popover.contentViewController = vc
+        viewModel.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
+        viewModel.$overtimeSeconds.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
+        viewModel.$isPaused.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
+        Timer.publish(every: 5, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.updateStatusTitle() }.store(in: &cancellables)
         NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: NSApplication.didBecomeActiveNotification, object: nil)
     }
-
     @objc private func togglePopover() {
         guard let button = statusItem.button else { return }
-        if popover.isShown {
-            popover.performClose(nil)
-        } else {
-            // Ensure VM fresh
-            viewModel.restore()
-            updateStatusTitle()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            // Focus window
-            popover.contentViewController?.view.window?.makeKey()
-        }
+        if popover.isShown { popover.performClose(nil) } else { viewModel.restore(); updateStatusTitle(); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); popover.contentViewController?.view.window?.makeKey() }
     }
-
-    @objc private func appDidBecomeActive() {
-        viewModel.restore()
-        updateStatusTitle()
-    }
-
+    @objc private func appDidBecomeActive() { viewModel.restore(); updateStatusTitle() }
     private func updateStatusTitle() {
         guard let button = statusItem.button else { return }
         let task = taskProvider?.fetchCurrent()
-        let baseTitle: String
+        let isPaused = viewModel?.isPaused ?? false; let isOvertime = viewModel?.isOvertime ?? false; let isActive = viewModel?.isActive ?? false
+        let display: String
         if let t = task {
-            // Truncate to ~28 chars for menu bar width
-            let trimmed = t.title.count > 28 ? String(t.title.prefix(28)) + "…" : t.title
-            baseTitle = trimmed
-        } else {
-            baseTitle = "Plan the day"
-        }
-
-        // If active, optionally show mm:ss? For v1 keep task title only to avoid flicker.
-        // Concise width: limit to 190pt by truncation already
-        let isActive = viewModel?.isActive ?? false
-        let icon = isActive ? "● " : "" // subtle active dot
-        button.title = "\(icon)\(baseTitle)"
-        button.imagePosition = .imageLeading
-        button.image = NSImage(systemSymbolName: isActive ? "scope" : "circle.dotted", accessibilityDescription: nil)
-        // Make title attributes tighter
-        button.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        button.toolTip = task?.title ?? "Goalflow — no tasks planned"
+            let trimmed = t.title.count > 22 ? String(t.title.prefix(22)) + "…" : t.title
+            if isPaused { display = "⏸ \(trimmed) \(viewModel?.displayTime ?? "")" }
+            else if isOvertime { display = "● \(trimmed) \(viewModel?.displayTime ?? "")" }
+            else if isActive { display = "● \(trimmed) \(viewModel?.displayTime ?? "")" }
+            else { display = trimmed }
+        } else { display = "Plan the day" }
+        let iconName = isPaused ? "pause.circle.fill" : isOvertime ? "exclamationmark.circle.fill" : isActive ? "scope" : "circle.dotted"
+        button.title = display; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
+        button.font = NSFont.systemFont(ofSize: 12, weight: .medium); button.toolTip = task?.title ?? "Goalflow — no tasks planned"
+        if isOvertime { button.contentTintColor = .systemOrange } else if isPaused { button.contentTintColor = .systemOrange } else { button.contentTintColor = nil }
     }
 }
