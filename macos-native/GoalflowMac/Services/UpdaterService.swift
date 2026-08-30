@@ -22,7 +22,6 @@ final class UpdaterService: @unchecked Sendable {
         // Also check via simple URLSession for version
         Task {
             guard let feed = URL(string: "https://app.goalflow.com/appcast.xml") else { return }
-            _ = feed
             if let (_, resp) = try? await URLSession.shared.data(from: feed),
                let http = resp as? HTTPURLResponse, (200..<300).contains(http.statusCode) {
                 print("[Updater] Feed reachable")

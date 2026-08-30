@@ -65,13 +65,6 @@ final class TickSoundGateway: SoundGateway, @unchecked Sendable {
             if loop { Thread.sleep(forTimeInterval: 0.8) }
         }
     }
-    private func playAlarmAsync(loop: Bool) async {
-        let repeats = loop ? 2 : 1
-        for _ in 0..<repeats {
-            await playAlarmBurstAsync()
-            if loop { try? await Task.sleep(nanoseconds: 800_000_000) }
-        }
-    }
     private func playAlarmBurst() {
         let sampleRate: Double = 44_100
         guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1) else { return }

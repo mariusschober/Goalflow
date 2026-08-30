@@ -5,10 +5,10 @@ import os
 private let menuBarLogger = Logger(subsystem: "com.mariusschober.goalflow.mac", category: "MenuBar")
 @MainActor
 final class MenuBarController: NSObject {
-    private var statusItem: NSStatusItem?
-    private var popover: NSPopover?
-    private var viewModel: ExecutionViewModel?
-    private var taskProvider: DemoCurrentTaskProvider?
+    private var statusItem: NSStatusItem!
+    private var popover: NSPopover!
+    private var viewModel: ExecutionViewModel!
+    private var taskProvider: DemoCurrentTaskProvider!
     private var breakCover = BreakCoverWindowController()
     private var captureController: CaptureWindowController?
     private var store: (any FocusSessionStore)?
@@ -45,8 +45,8 @@ final class MenuBarController: NSObject {
     @objc private func togglePopover() {
         // Suppress popover during break — cover is fullscreen
         if viewModel.isOnBreak { return }
-        guard let statusItem, let button = statusItem.button else { return }
-        if let popover, popover.isShown { popover.performClose(nil) } else { viewModel?.restore(); updateStatusTitle(); popover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); popover?.contentViewController?.view.window?.makeKey() }
+        guard let button = statusItem.button else { return }
+        if popover.isShown { popover.performClose(nil) } else { viewModel.restore(); updateStatusTitle(); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); popover.contentViewController?.view.window?.makeKey() }
     }
 
     @objc private func appDidBecomeActive() { viewModel.restore(); updateStatusTitle(); if viewModel.isOnBreak { updateBreakCover() } }
@@ -68,7 +68,6 @@ final class MenuBarController: NSObject {
     @objc private func handleCaptureMenu() { showCapture() }
 
     private func handleBreakChange(onBreak: Bool) {
-        guard let popover, let viewModel else { return }
         if onBreak {
             if popover.isShown { popover.performClose(nil) }
             guard let bs = viewModel.breakState else { return }
@@ -82,11 +81,11 @@ final class MenuBarController: NSObject {
     }
 
     private func updateBreakCover() {
-        guard let viewModel, viewModel.isOnBreak else { return }
+        guard viewModel.isOnBreak else { return }
         breakCover.update(remainingSeconds: viewModel.breakRemaining, elapsedSeconds: viewModel.breakElapsed)
     }
     private func updateStatusTitle() {
-        guard let statusItem, let button = statusItem.button else { return }
+        guard let button = statusItem.button else { return }
         button.appearsDisabled = false
         // Tahoe: menu bar is transparent Liquid Glass — isDark must reflect system dark, not NSApp aqua fallback
         // Use AppleInterfaceStyle + button.window appearance + effectiveAppearance

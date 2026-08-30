@@ -22,7 +22,7 @@ final class ServerBreakdownGateway: BreakdownGateway, @unchecked Sendable {
             return []
         }
         let base = apiOrigin.hasSuffix("/") ? String(apiOrigin.dropLast()) : apiOrigin
-        guard let url = URL(string: "\(base)/api/v1/ai/breakdown") else { throw BreakdownError.requestFailed("Invalid URL") }
+        guard let url = URL(string: "\(base)/api/v1/ai/breakdown") else { throw BreakdownError.invalid }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
