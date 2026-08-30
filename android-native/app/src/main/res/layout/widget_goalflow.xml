@@ -70,6 +70,15 @@
         android:textSize="16sp"
         android:textStyle="bold" />
 
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="6dp"
+        android:textColor="@android:color/holo_red_dark"
+        android:textSize="11sp"
+        android:visibility="gone" />
+
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="42dp"
@@ -85,16 +94,6 @@
             android:minWidth="48dp"
             android:text="✓"
             android:textSize="20sp" />
-
-        <Button
-            android:id="@+id/widget_drop"
-            android:layout_width="0dp"
-            android:layout_height="match_parent"
-            android:layout_weight="1"
-            android:contentDescription="Drop current task"
-            android:minWidth="48dp"
-            android:text="🗑"
-            android:textSize="17sp" />
 
         <Button
             android:id="@+id/widget_skip"
@@ -116,5 +115,14 @@
             android:text="+"
             android:textSize="22sp" />
     </LinearLayout>
+
+    <Button
+        android:id="@+id/widget_undo"
+        android:layout_width="match_parent"
+        android:layout_height="42dp"
+        android:layout_marginTop="6dp"
+        android:contentDescription="Undo widget completion"
+        android:text="Undo completion"
+        android:visibility="gone" />
 </LinearLayout>
 

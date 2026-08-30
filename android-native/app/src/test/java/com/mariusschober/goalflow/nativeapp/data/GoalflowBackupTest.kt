@@ -102,6 +102,22 @@ class GoalflowBackupTest {
     }
 
     @Test
+    fun `backup document retains export metadata and sync binding`() {
+        val payload = GoalflowBackupPayload(
+            tasks = emptyList(),
+            goals = emptyList(),
+            plans = emptyList(),
+            syncBinding = GoalflowSyncBinding("https://api.example", 7, "account-1")
+        )
+        val envelope = GoalflowBackup.encrypt(payload, PASSWORD, "2024-02-29T23:59:59Z")
+        val document = GoalflowBackup.decryptDocument(envelope, PASSWORD)
+
+        assertEquals("2024-02-29T23:59:59Z", document.exportedAt)
+        assertEquals(7, document.payload.syncBinding?.protocolVersion)
+        assertEquals("account-1", document.payload.syncBinding?.accountSubject)
+    }
+
+    @Test
     fun `malformed optional collection and duplicate plan identity are rejected`() {
         val malformed = GoalflowBackupPayload(listOf(task), emptyList(), emptyList())
         val encrypted = GoalflowBackup.encrypt(malformed, PASSWORD)

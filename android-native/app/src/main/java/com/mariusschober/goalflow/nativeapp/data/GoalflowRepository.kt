@@ -19,6 +19,8 @@ import com.mariusschober.goalflow.nativeapp.domain.assertSchedule
 import com.mariusschober.goalflow.nativeapp.domain.buildTodayQueue
 import com.mariusschober.goalflow.nativeapp.domain.isRealLocalDay
 import com.mariusschober.goalflow.nativeapp.domain.planningGate
+import com.mariusschober.goalflow.nativeapp.time.GoalflowTimeProvider
+import com.mariusschober.goalflow.nativeapp.time.SystemGoalflowTimeProvider
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
@@ -71,7 +73,9 @@ data class NativeReorderResult(
 data class NativeWidgetSnapshot(
     val completedCount: Int,
     val plannedCount: Int,
-    val currentTask: GoalflowTask?
+    val currentTask: GoalflowTask?,
+    val localDate: String,
+    val planFingerprint: String
 )
 
 /** Web-owned collections retained losslessly until a native editor exists. */
@@ -83,7 +87,11 @@ val NATIVE_RAW_COLLECTION_TYPES = setOf(
 class GoalflowRepository(
     private val database: GoalflowDatabase,
     private val deviceId: String = UUID.randomUUID().toString(),
-    private val onMutation: () -> Unit = {}
+    private val onMutation: () -> Unit = {},
+    val timeProvider: GoalflowTimeProvider = SystemGoalflowTimeProvider(),
+    val syncBindingProvider: () -> GoalflowSyncBinding = {
+        GoalflowSyncBinding("unconfigured", 1, null)
+    }
 ) {
     private val tasks = database.taskDao()
     private val taskEvents = database.taskEventDao()
@@ -98,6 +106,9 @@ class GoalflowRepository(
     val taskStream: Flow<List<GoalflowTask>> = tasks.observeAll().map { rows -> rows.map(::toDomain) }
     val goalStream: Flow<List<GoalflowGoal>> = goals.observeAll().map { rows -> rows.map(::toDomain) }
     val habitStream: Flow<List<GoalflowHabit>> = habits.observeAll().map { rows -> rows.map(::toDomain) }
+    val habitGenerationHealthStream: Flow<List<HabitGenerationHealth>> =
+        rawCollections.observeByPrefix("$HABIT_GENERATION_HEALTH_PREFIX%")
+            .map { rows -> rows.mapNotNull { parseHabitGenerationHealth(it.entityType, it.payload) } }
     val conflictStream: Flow<List<SyncConflictEntity>> = conflicts.observeAll()
 
     val statsStream: Flow<GoalflowStats> = rawCollectionStream("stats").map(::parseTodayStats)
@@ -116,7 +127,7 @@ class GoalflowRepository(
 
     fun planStream(localDate: String): Flow<DailyPlan?> = plans.observe(localDate).map { row -> row?.let(::toDomain) }
 
-    suspend fun widgetSnapshot(localDate: String = LocalDate.now().toString()): NativeWidgetSnapshot {
+    suspend fun widgetSnapshot(localDate: String = timeProvider.today().toString()): NativeWidgetSnapshot {
         val allTasks = tasks.getAll().map(::toDomain)
         val planned = allTasks.filter { task ->
             task.deletedAt == null &&
@@ -125,12 +136,13 @@ class GoalflowRepository(
                 task.status in setOf(TaskStatus.OPEN, TaskStatus.COMPLETED)
         }
         val gate = planningGate(allTasks, localDate, plans.get(localDate)?.let(::toDomain))
+        val queue = (gate as? com.mariusschober.goalflow.nativeapp.domain.PlanningGate.Ready)?.queue.orEmpty()
         return NativeWidgetSnapshot(
             completedCount = planned.count { it.status == TaskStatus.COMPLETED },
             plannedCount = planned.size,
-            currentTask = (gate as? com.mariusschober.goalflow.nativeapp.domain.PlanningGate.Ready)
-                ?.queue
-                ?.firstOrNull()
+            currentTask = queue.firstOrNull(),
+            localDate = localDate,
+            planFingerprint = widgetPlanFingerprint(localDate, plans.get(localDate)?.let(::toDomain), queue)
         )
     }
 
@@ -140,6 +152,44 @@ class GoalflowRepository(
      */
     suspend fun taskSnapshot(id: String): GoalflowTask? =
         tasks.get(id)?.let(::toDomain)
+
+    /** Executes only the action whose exact queue proof was captured by the widget. */
+    suspend fun executeWidgetAction(action: NativeWidgetAction, target: NativeWidgetTarget) {
+        when (action) {
+            NativeWidgetAction.COMPLETE -> completeTask(
+                id = target.taskId,
+                expectedWidgetTarget = target
+            )
+            NativeWidgetAction.SKIP -> skipTask(
+                id = target.taskId,
+                expectedWidgetTarget = target
+            )
+            NativeWidgetAction.UNDO -> undoCompletion(
+                id = target.taskId,
+                expectedUpdatedAt = target.expectedUpdatedAt
+            )
+        }
+    }
+
+    /** Must be called inside the same Room transaction as the widget mutation. */
+    private suspend fun requireWidgetTargetInTransaction(target: NativeWidgetTarget) {
+        if (target.localDate != timeProvider.today().toString()) {
+            throw StaleWidgetActionException("This widget action is from a different local day. Refresh the widget.")
+        }
+        val current = tasks.get(target.taskId)?.let(::toDomain)
+            ?: throw StaleWidgetActionException("This task no longer exists. Refresh the widget.")
+        if (current.status != TaskStatus.OPEN || current.deletedAt != null || current.updatedAt != target.expectedUpdatedAt) {
+            throw StaleWidgetActionException("This task changed elsewhere. Refresh the widget and try again.")
+        }
+        val allTasks = tasks.getAll().map(::toDomain)
+        val plan = plans.get(target.localDate)?.let(::toDomain)
+        val queue = (planningGate(allTasks, target.localDate, plan) as? com.mariusschober.goalflow.nativeapp.domain.PlanningGate.Ready)
+            ?.queue
+            .orEmpty()
+        if (queue.firstOrNull()?.id != target.taskId || widgetPlanFingerprint(target.localDate, plan, queue) != target.planFingerprint) {
+            throw StaleWidgetActionException("The plan changed elsewhere. Refresh the widget and try again.")
+        }
+    }
 
     suspend fun createTask(
         title: String,
@@ -155,9 +205,9 @@ class GoalflowRepository(
         if (cleanTitle.isBlank()) throw SchedulingException("A task needs an actionable title.")
         val cleanDuration = duration ?: 25
         if (cleanDuration !in 1..1_440) throw SchedulingException("Duration must be between 1 and 1,440 minutes.")
-        val today = LocalDate.now().toString()
+        val today = timeProvider.today().toString()
         assertSchedule(schedulePrecision, scheduledFor, today, scheduledTime)
-        val now = System.currentTimeMillis()
+        val now = timeProvider.now().toEpochMilli()
         val id = UUID.randomUUID().toString()
         return database.withTransaction {
             require(tasks.get(id) == null) { "Generated task id already exists; no task was overwritten." }
@@ -192,14 +242,16 @@ class GoalflowRepository(
         id: String,
         actualDuration: Int? = null,
         flowState: String? = null,
-        finalDescription: String? = null
+        finalDescription: String? = null,
+        expectedWidgetTarget: NativeWidgetTarget? = null
     ) {
         val changed = database.withTransaction {
             val task = tasks.getAll().firstOrNull { it.id == id }
                 ?: throw SchedulingException("Task not found.")
+            expectedWidgetTarget?.let { requireWidgetTargetInTransaction(it) }
             if (task.status != TaskStatus.OPEN.name) return@withTransaction false
-            val now = System.currentTimeMillis()
-            val today = LocalDate.now().toString()
+            val now = timeProvider.now().toEpochMilli()
+            val today = timeProvider.today().toString()
             val taskExtras = runCatching { JSONObject(task.extraJson) }.getOrElse { JSONObject() }
             val previousGoal = task.goalId?.let { goals.get(it) }
             val previousHabit = task.habitId?.let { habits.get(it) }
@@ -320,9 +372,12 @@ class GoalflowRepository(
     }
 
     /** Reverses the most recent local completion while restoring its projections. */
-    suspend fun undoCompletion(id: String) {
+    suspend fun undoCompletion(id: String, expectedUpdatedAt: Long? = null) {
         val changed = database.withTransaction {
             val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
+            if (expectedUpdatedAt != null && current.updatedAt != expectedUpdatedAt) {
+                throw StaleWidgetActionException("This widget action is stale. Refresh the widget and try again.")
+            }
             if (current.status != TaskStatus.COMPLETED.name) return@withTransaction false
             val extras = runCatching { JSONObject(current.extraJson) }.getOrElse {
                 throw SchedulingException("This completion cannot be undone safely.")
@@ -340,12 +395,12 @@ class GoalflowRepository(
                 status = TaskStatus.OPEN.name,
                 notes = undo.optString("priorNotes", current.notes),
                 completedAt = null,
-                updatedAt = System.currentTimeMillis(),
+                updatedAt = timeProvider.now().toEpochMilli(),
                 extraJson = priorExtraJson
             )
             tasks.update(restored)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(restored)).toString())
-            recordTaskEventInTransaction(id, "restored", LocalDate.now().toString())
+            recordTaskEventInTransaction(id, "restored", timeProvider.today().toString())
 
             val goalId = undo.nullableStringValue("goalId")
             val goalBefore = undo.nullableInt("goalCompletedTasksBefore")
@@ -388,10 +443,11 @@ class GoalflowRepository(
     }
 
     /** Moves a normal open commitment to the end of today's queue without losing its history. */
-    suspend fun skipTask(id: String) {
-        val today = LocalDate.now().toString()
+    suspend fun skipTask(id: String, expectedWidgetTarget: NativeWidgetTarget? = null) {
+        val today = timeProvider.today().toString()
         database.withTransaction {
             val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
+            expectedWidgetTarget?.let { requireWidgetTargetInTransaction(it) }
             if (current.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be skipped.")
             if (current.deletedAt != null) throw SchedulingException("An archived task cannot be skipped.")
             if (current.schedulePrecision != SchedulePrecision.DAY.name || current.scheduledFor != today) {
@@ -404,7 +460,7 @@ class GoalflowRepository(
                 .maxOfOrNull { it.plannedOrder } ?: current.plannedOrder
             val updated = current.copy(
                 plannedOrder = maxOrder + 1,
-                updatedAt = System.currentTimeMillis()
+                updatedAt = timeProvider.now().toEpochMilli()
             )
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
@@ -419,10 +475,10 @@ class GoalflowRepository(
             val task = tasks.getAll().firstOrNull { it.id == id }
                 ?: throw SchedulingException("Task not found.")
             if (task.status != TaskStatus.OPEN.name) return@withTransaction false
-            val updated = task.copy(status = TaskStatus.DROPPED.name, updatedAt = System.currentTimeMillis())
+            val updated = task.copy(status = TaskStatus.DROPPED.name, updatedAt = timeProvider.now().toEpochMilli())
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
-            recordTaskEventInTransaction(id, "dropped", LocalDate.now().toString())
+            recordTaskEventInTransaction(id, "dropped", timeProvider.today().toString())
             true
         }
         if (changed) onMutation()
@@ -434,8 +490,8 @@ class GoalflowRepository(
             val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
             if (current.status != TaskStatus.OPEN.name) return@withTransaction false
             if (current.isFrog) return@withTransaction false
-            val today = LocalDate.now().toString()
-            val updated = current.copy(isFrog = true, updatedAt = System.currentTimeMillis())
+            val today = timeProvider.today().toString()
+            val updated = current.copy(isFrog = true, updatedAt = timeProvider.now().toEpochMilli())
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
             recordTaskEventInTransaction(id, "promoted_to_frog", current.scheduledFor)
@@ -447,7 +503,7 @@ class GoalflowRepository(
                         "daily_plans",
                         today,
                         GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
-                        Instant.now().toString()
+                        timeProvider.now().toString()
                     )
                 }
             }
@@ -473,7 +529,7 @@ class GoalflowRepository(
         if (duration != null && duration !in 1..1_440) {
             throw SchedulingException("Duration must be between 1 and 1,440 minutes.")
         }
-        assertSchedule(schedulePrecision, scheduledFor, LocalDate.now().toString(), scheduledTime)
+        assertSchedule(schedulePrecision, scheduledFor, timeProvider.today().toString(), scheduledTime)
         database.withTransaction {
             val current = tasks.get(id) ?: throw SchedulingException("Task not found.")
             if (current.deletedAt != null) throw SchedulingException("An archived task cannot be edited.")
@@ -505,7 +561,7 @@ class GoalflowRepository(
                 isFrog = current.isFrog || isFrog == true,
                 goalId = goalId,
                 extraJson = updatedExtras.toString(),
-                updatedAt = System.currentTimeMillis()
+                updatedAt = timeProvider.now().toEpochMilli()
             )
             tasks.update(updated)
             enqueueRecordInTransaction("tasks", id, GoalflowJson.taskPayload(toDomain(updated)).toString())
@@ -528,7 +584,7 @@ class GoalflowRepository(
     suspend fun breakDownTask(id: String, children: List<BreakdownChild>) {
         if (children.isEmpty()) throw SchedulingException("Add at least one scheduled next action.")
         if (children.size > 50) throw SchedulingException("A breakdown can contain at most 50 actions.")
-        val today = LocalDate.now().toString()
+        val today = timeProvider.today().toString()
         database.withTransaction {
             val parent = tasks.getAll().firstOrNull { it.id == id }
                 ?: throw SchedulingException("Task not found.")
@@ -539,7 +595,7 @@ class GoalflowRepository(
             // plan the same decision again.
             val previousQueue = buildTodayQueue(tasks.getAll().map(::toDomain), today)
             val previousPlan = plans.get(today)?.let(::toDomain)
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val nextOrderBySchedule = mutableMapOf<Pair<String, String>, Int>()
             val created = buildList {
                 children.forEach { child ->
@@ -662,7 +718,7 @@ class GoalflowRepository(
                     "daily_plans",
                     today,
                     GoalflowJson.planPayload(previousPlan).toString(),
-                    Instant.now().toString()
+                    timeProvider.now().toString()
                 )
             }
         }
@@ -670,7 +726,7 @@ class GoalflowRepository(
     }
 
     suspend fun rescheduleTask(id: String, scheduledFor: String) {
-        val today = LocalDate.now().toString()
+        val today = timeProvider.today().toString()
         assertSchedule(SchedulePrecision.DAY, scheduledFor, today, null)
         database.withTransaction {
             val current = tasks.getAll().firstOrNull { it.id == id }
@@ -690,7 +746,7 @@ class GoalflowRepository(
                 "${current.scheduledFor}-01"
             } else current.scheduledFor
             if (current.isFrog && scheduledFor > currentDay) throw SchedulingException("A frog cannot be moved forward.")
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val failures = current.frogFailures + if (scheduledFor > currentDay) 1 else 0
             val updated = current.copy(
                     schedulePrecision = SchedulePrecision.DAY.name,
@@ -724,7 +780,7 @@ class GoalflowRepository(
                 throw SchedulingException("The queue changed. Review the current order again.")
             }
             val byId = tasks.getAll().associateBy { it.id }
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val updated = orderedIds.mapIndexed { index, id ->
                 byId.getValue(id).copy(plannedOrder = index, updatedAt = now)
             }
@@ -739,7 +795,7 @@ class GoalflowRepository(
                     "daily_plans",
                     localDate,
                     GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
-                    Instant.now().toString()
+                    timeProvider.now().toString()
                 )
             }
         }
@@ -760,7 +816,7 @@ class GoalflowRepository(
                 add(targetIndex, moved)
             }
             val byId = tasks.getAll().associateBy { it.id }
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val updated = orderedIds.mapIndexed { index, id ->
                 byId.getValue(id).copy(plannedOrder = index, updatedAt = now)
             }
@@ -775,7 +831,7 @@ class GoalflowRepository(
                     "daily_plans",
                     localDate,
                     GoalflowJson.planPayload(toDomain(previousPlan)).toString(),
-                    Instant.now().toString()
+                    timeProvider.now().toString()
                 )
             }
             NativeReorderResult(localDate, previousIds, orderedIds, previousPlan != null)
@@ -790,7 +846,7 @@ class GoalflowRepository(
             if (queue.map { it.id } != orderedIds) {
                 throw SchedulingException("The queue changed. Review the current order again.")
             }
-            val plan = DailyPlan(localDate, System.currentTimeMillis(), orderedIds)
+            val plan = DailyPlan(localDate, timeProvider.now().toEpochMilli(), orderedIds)
             plans.insert(toEntity(plan))
             enqueueRecordInTransaction("daily_plans", localDate, GoalflowJson.planPayload(plan).toString())
         }
@@ -817,7 +873,7 @@ class GoalflowRepository(
             deadline = cleanDeadline,
             excitement = excitement,
             roi = roi,
-            createdAt = System.currentTimeMillis()
+            createdAt = timeProvider.now().toEpochMilli()
         )
         database.withTransaction {
             require(goals.get(goal.id) == null) { "Generated goal id already exists; no goal was overwritten." }
@@ -846,7 +902,7 @@ class GoalflowRepository(
             val goal = goals.get(id) ?: return@withTransaction
             val linkedTasks = tasks.getAll().filter { it.goalId == id }
             val linkedHabits = habits.getAll().filter { it.goalId == id }
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             tasks.updateAll(linkedTasks.map { it.copy(goalId = null, updatedAt = now) })
             habits.insertAll(linkedHabits.map { it.copy(goalId = null) })
             linkedTasks.forEach { task ->
@@ -856,7 +912,7 @@ class GoalflowRepository(
                 enqueueRecordInTransaction("habits", habit.id, GoalflowJson.habitPayload(toDomain(habit.copy(goalId = null))).toString())
             }
             goals.delete(id)
-            enqueueRecordInTransaction("goals", id, GoalflowJson.goalPayload(toDomain(goal)).toString(), Instant.now().toString())
+            enqueueRecordInTransaction("goals", id, GoalflowJson.goalPayload(toDomain(goal)).toString(), timeProvider.now().toString())
         }
         onMutation()
     }
@@ -882,7 +938,7 @@ class GoalflowRepository(
             beforeFrog = beforeFrog,
             duration = duration?.coerceIn(1, 1_440),
             goalId = goalId,
-            createdAt = System.currentTimeMillis()
+            createdAt = timeProvider.now().toEpochMilli()
         )
         database.withTransaction {
             require(habits.get(habit.id) == null) { "Generated habit id already exists; no habit was overwritten." }
@@ -915,14 +971,14 @@ class GoalflowRepository(
         database.withTransaction {
             val habit = habits.get(id) ?: return@withTransaction
             val linkedTasks = tasks.getAll().filter { it.habitId == id }
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val unlinked = linkedTasks.map { it.copy(habitId = null, updatedAt = now) }
             if (unlinked.isNotEmpty()) tasks.updateAll(unlinked)
             unlinked.forEach { task ->
                 enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(toDomain(task)).toString())
             }
             habits.delete(id)
-            enqueueRecordInTransaction("habits", id, GoalflowJson.habitPayload(toDomain(habit)).toString(), Instant.now().toString())
+            enqueueRecordInTransaction("habits", id, GoalflowJson.habitPayload(toDomain(habit)).toString(), timeProvider.now().toString())
         }
         onMutation()
     }
@@ -949,7 +1005,8 @@ class GoalflowRepository(
             anchorHabit = goal.anchorHabit?.trim()?.takeIf(String::isNotBlank),
             anchorTask = goal.anchorTask?.trim()?.takeIf(String::isNotBlank),
             importance = goal.importance.coerceIn(1, 10),
-            anchorHabitDuration = goal.anchorHabitDuration?.coerceIn(1, 1_440)
+            anchorHabitDuration = goal.anchorHabitDuration?.coerceIn(1, 1_440),
+            createdAt = timeProvider.now().toEpochMilli()
         )
         if (clean.vision.isBlank()) throw SchedulingException("A vision needs a clear outcome.")
         database.withTransaction {
@@ -967,15 +1024,15 @@ class GoalflowRepository(
                     isHighPriority = true,
                     duration = clean.anchorHabitDuration ?: 15,
                     goalId = clean.id,
-                    createdAt = System.currentTimeMillis()
+                    createdAt = timeProvider.now().toEpochMilli()
                 )
                 habits.insert(toEntity(habit))
                 enqueueRecordInTransaction("habits", habit.id, GoalflowJson.habitPayload(habit).toString())
                 updateProgressInTransaction(50)
             }
             clean.anchorTask?.let { title ->
-                val now = System.currentTimeMillis()
-                val today = LocalDate.now().toString()
+                val now = timeProvider.now().toEpochMilli()
+                val today = timeProvider.today().toString()
                 val task = GoalflowTask(
                     id = UUID.randomUUID().toString(),
                     title = title,
@@ -1028,7 +1085,7 @@ class GoalflowRepository(
             if (current.none { it.id == id }) return@withTransaction
             val linkedTasks = tasks.getAll().filter { it.goalId == id }
             val linkedHabits = habits.getAll().filter { it.goalId == id }
-            val now = System.currentTimeMillis()
+            val now = timeProvider.now().toEpochMilli()
             val unlinkedTasks = linkedTasks.map { it.copy(goalId = null, updatedAt = now) }
             if (unlinkedTasks.isNotEmpty()) tasks.updateAll(unlinkedTasks)
             unlinkedTasks.forEach { task ->
@@ -1134,7 +1191,7 @@ class GoalflowRepository(
                 else -> runCatching { parseJsonValue(storedStats.payload) as? JSONObject }.getOrNull()
             }
             statsRoot?.let { stats ->
-                val today = LocalDate.now().toString()
+                val today = timeProvider.today().toString()
                 val statsForDay = if (stats.has("tasksCompleted") || stats.has("frogsEaten")) {
                     stats
                 } else {
@@ -1167,9 +1224,25 @@ class GoalflowRepository(
 
     /** Creates at most one instance for a habit/day, including after reload. */
     suspend fun generateHabitInstance(habitId: String, localDate: String): GoalflowTask? {
-        assertSchedule(SchedulePrecision.DAY, localDate, LocalDate.now().toString(), null)
+        assertSchedule(SchedulePrecision.DAY, localDate, timeProvider.today().toString(), null)
         val date = LocalDate.parse(localDate)
         val goalflowDayOfWeek = date.dayOfWeek.value % 7
+        val initialHabit = database.withTransaction {
+            habits.get(habitId) ?: throw SchedulingException("Habit not found.")
+        }
+        val initiallyAllowed = initialHabit.frequency == HabitFrequency.DAILY.name ||
+            goalflowDayOfWeek in initialHabit.specificDays.split(",").mapNotNull(String::toIntOrNull)
+        if (!initiallyAllowed) return null
+        if (!claimHabitGeneration(habitId, localDate)) {
+            return database.withTransaction {
+                tasks.get(habitTaskId(habitId, localDate))?.let(::toDomain)
+                    ?: tasks.getAll().firstOrNull {
+                        it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
+                    }?.let(::toDomain)
+            }
+        }
+
+        try {
         val result = database.withTransaction {
             var habit = habits.get(habitId) ?: throw SchedulingException("Habit not found.")
             var habitChanged = false
@@ -1186,14 +1259,19 @@ class GoalflowRepository(
             }
             val allowed = habit.frequency == HabitFrequency.DAILY.name ||
                 goalflowDayOfWeek in habit.specificDays.split(",").mapNotNull(String::toIntOrNull)
-            if (!allowed) return@withTransaction null to habitChanged
+            if (!allowed) {
+                rawCollections.delete(habitGenerationHealthKey(habitId, localDate))
+                return@withTransaction null to habitChanged
+            }
             val existing = tasks.getAll().firstOrNull {
                 it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
             }
             if (existing != null) {
-                toDomain(existing) to habitChanged
+                val task = toDomain(existing)
+                writeHabitGenerationHealthInTransaction(habitId, localDate, HabitGenerationStatus.GENERATED, task.id, null)
+                task to habitChanged
             } else {
-                val now = System.currentTimeMillis()
+                val now = timeProvider.now().toEpochMilli()
                 val todaysTasks = tasks.getAll().filter {
                     it.scheduledFor == localDate && it.schedulePrecision == SchedulePrecision.DAY.name
                         && it.deletedAt == null
@@ -1223,20 +1301,103 @@ class GoalflowRepository(
                 require(conflictingId == null || conflictingId.habitId == habit.id && conflictingId.scheduledFor == localDate) {
                     "Generated habit task id already belongs to different data; no task was overwritten."
                 }
-                if (conflictingId != null) return@withTransaction toDomain(conflictingId) to habitChanged
+                if (conflictingId != null) {
+                    val task = toDomain(conflictingId)
+                    writeHabitGenerationHealthInTransaction(habitId, localDate, HabitGenerationStatus.GENERATED, task.id, null)
+                    return@withTransaction task to habitChanged
+                }
                 tasks.insert(toEntity(task))
                 enqueueRecordInTransaction("tasks", task.id, GoalflowJson.taskPayload(task).toString())
                 recordTaskEventInTransaction(task.id, "created", localDate)
+                writeHabitGenerationHealthInTransaction(habitId, localDate, HabitGenerationStatus.GENERATED, task.id, null)
                 task to true
             }
         }
         if (result.second) onMutation()
         return result.first
+        } catch (failure: Exception) {
+            recordHabitGenerationFailure(habitId, localDate, failure)
+            throw failure
+        }
+    }
+
+    private suspend fun claimHabitGeneration(habitId: String, localDate: String): Boolean = database.withTransaction {
+        val key = habitGenerationHealthKey(habitId, localDate)
+        val row = rawCollections.get(key)
+        val existing = row?.let {
+            parseHabitGenerationHealth(it.entityType, it.payload)
+                ?: throw SchedulingException("Habit generation health is damaged; export a backup before retrying.")
+        }
+        if (existing?.status == HabitGenerationStatus.GENERATED &&
+            (existing.taskId == null || tasks.get(existing.taskId) != null)
+        ) return@withTransaction false
+        val now = timeProvider.now()
+        if (existing?.status == HabitGenerationStatus.IN_PROGRESS) {
+            val lastAttempt = runCatching { Instant.parse(existing.updatedAt) }.getOrNull()
+            if (lastAttempt != null && now.toEpochMilli() - lastAttempt.toEpochMilli() < HABIT_GENERATION_LEASE_MILLIS) {
+                return@withTransaction false
+            }
+        }
+        writeHabitGenerationHealthInTransaction(
+            habitId = habitId,
+            localDate = localDate,
+            status = HabitGenerationStatus.IN_PROGRESS,
+            taskId = existing?.taskId,
+            errorMessage = null,
+            attemptCount = (existing?.attemptCount ?: 0) + 1
+        )
+        true
+    }
+
+    private suspend fun recordHabitGenerationFailure(habitId: String, localDate: String, failure: Exception) {
+        database.withTransaction {
+            val key = habitGenerationHealthKey(habitId, localDate)
+            val existing = rawCollections.get(key)?.let {
+                parseHabitGenerationHealth(it.entityType, it.payload)
+            }
+            writeHabitGenerationHealthInTransaction(
+                habitId = habitId,
+                localDate = localDate,
+                status = HabitGenerationStatus.FAILED,
+                taskId = existing?.taskId,
+                errorMessage = (failure.message ?: failure::class.simpleName ?: "Generation failed").take(500),
+                attemptCount = existing?.attemptCount ?: 1
+            )
+        }
+    }
+
+    private suspend fun writeHabitGenerationHealthInTransaction(
+        habitId: String,
+        localDate: String,
+        status: HabitGenerationStatus,
+        taskId: String?,
+        errorMessage: String?,
+        attemptCount: Int = rawCollections.get(habitGenerationHealthKey(habitId, localDate))
+            ?.let { parseHabitGenerationHealth(it.entityType, it.payload)?.attemptCount }
+            ?: 0
+    ) {
+        val now = timeProvider.now().toString()
+        val health = HabitGenerationHealth(
+            habitId = habitId,
+            scheduledFor = localDate,
+            status = status,
+            taskId = taskId,
+            attemptCount = attemptCount.coerceAtLeast(0),
+            errorMessage = errorMessage,
+            updatedAt = now
+        )
+        rawCollections.insert(
+            RawCollectionEntity(
+                entityType = habitGenerationHealthKey(habitId, localDate),
+                payload = health.toRawPayload(),
+                updatedAt = now,
+                deletedAt = null
+            )
+        )
     }
 
     suspend fun exportBackup(password: String): String = database.withTransaction {
-        GoalflowBackup.encrypt(
-            GoalflowBackupPayload(
+        val payload = GoalflowBackupPayload(
                 tasks = tasks.getAll().map(::toDomain),
                 goals = goals.getAll().map(::toDomain),
                 plans = plans.getAll().map(::toDomain),
@@ -1245,29 +1406,96 @@ class GoalflowRepository(
                 outbox = outbox.getAll(),
                 syncMeta = syncMeta.getAll(),
                 conflicts = conflicts.getAll(),
-                rawCollections = rawCollections.getAll().associate { it.entityType to it.payload }
-            ),
-            password
+                rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
+                syncBinding = syncBindingProvider()
+            )
+        val envelope = GoalflowBackup.encrypt(
+            payload,
+            password,
+            exportedAt = timeProvider.now().toString()
         )
+        check(GoalflowBackup.decrypt(envelope, password) == payload) {
+            "The encrypted backup failed its immediate reopen verification."
+        }
+        envelope
     }
 
-    suspend fun restoreBackup(envelope: String, password: String, mode: BackupRestoreMode = BackupRestoreMode.REPLACE) {
-        // Decrypt and validate completely before opening the destructive transaction.
-        val payload = GoalflowBackup.decrypt(envelope, password)
+    suspend fun previewBackup(envelope: String, password: String): NativeBackupPreview {
+        val document = GoalflowBackup.decryptDocument(envelope, password)
+        return database.withTransaction { buildBackupPreview(document) }
+    }
+
+    /**
+     * Restores by merge unless the user explicitly chooses replacement. The
+     * checkpoint is created and the full restore is committed in one Room
+     * transaction, so a process death cannot leave a half-restored store.
+     */
+    suspend fun restoreBackup(
+        envelope: String,
+        password: String,
+        mode: BackupRestoreMode = BackupRestoreMode.MERGE
+    ): NativeBackupPreview {
+        val document = GoalflowBackup.decryptDocument(envelope, password)
+        val preview = database.withTransaction { buildBackupPreview(document) }
         database.withTransaction {
-            val originalTasks = tasks.getAll().map(::toDomain)
-            val originalGoals = goals.getAll().map(::toDomain)
-            val originalHabits = habits.getAll().map(::toDomain)
-            val originalPlans = plans.getAll().map(::toDomain)
-            val originalEvents = taskEvents.getAll()
-            val originalRaw = rawCollections.getAll()
-            val preservedOutbox = mergeExactById(
-                outbox.getAll(), payload.outbox, SyncOutboxEntity::mutationId, "pending mutation"
-            )
-            val preservedConflicts = mergeExactById(
-                conflicts.getAll(), payload.conflicts, SyncConflictEntity::id, "conflict"
-            )
-            val mergedMeta = (syncMeta.getAll() + payload.syncMeta).groupBy { it.entityType }.map { (key, values) ->
+            restoreBackupInTransaction(document.payload, envelope, password, mode, createCheckpoint = true)
+        }
+        verifyRestoredPayload(document.payload, mode)
+        onMutation()
+        return preview
+    }
+
+    suspend fun hasRestoreCheckpoint(): Boolean = database.withTransaction {
+        rawCollections.get(RESTORE_CHECKPOINT_KEY)?.let { row ->
+            runCatching { JSONObject(row.payload).optString("encryptedBackup").isNotBlank() }.getOrDefault(false)
+        } ?: false
+    }
+
+    suspend fun rollbackLastRestore(password: String): NativeBackupPreview {
+        val checkpoint = database.withTransaction {
+            rawCollections.get(RESTORE_CHECKPOINT_KEY)?.let { row ->
+                runCatching { JSONObject(row.payload).optString("encryptedBackup") }
+                    .getOrNull()
+                    ?.takeIf(String::isNotBlank)
+            }
+        } ?: throw BackupFormatException("No automatic restore checkpoint is available.")
+        val document = GoalflowBackup.decryptDocument(checkpoint, password)
+        val preview = database.withTransaction { buildBackupPreview(document) }
+        database.withTransaction {
+            // Keep the checkpoint itself so a repeated rollback remains
+            // recoverable after a process death.
+            restoreBackupInTransaction(document.payload, checkpoint, password, BackupRestoreMode.REPLACE, createCheckpoint = false)
+        }
+        verifyRestoredPayload(document.payload, BackupRestoreMode.REPLACE)
+        onMutation()
+        return preview
+    }
+
+    private suspend fun restoreBackupInTransaction(
+        payload: GoalflowBackupPayload,
+        envelope: String,
+        password: String,
+        mode: BackupRestoreMode,
+        createCheckpoint: Boolean
+    ) {
+        val originalTasks = tasks.getAll().map(::toDomain)
+        val originalGoals = goals.getAll().map(::toDomain)
+        val originalHabits = habits.getAll().map(::toDomain)
+        val originalPlans = plans.getAll().map(::toDomain)
+        val originalEvents = taskEvents.getAll()
+        val originalRaw = rawCollections.getAll()
+        val currentBinding = syncBindingProvider()
+        val syncStatePresent = payload.syncBinding != null || payload.outbox.isNotEmpty() ||
+            payload.syncMeta.isNotEmpty() || payload.conflicts.isNotEmpty()
+        val syncCompatible = !syncStatePresent || payload.syncBinding != null && payload.syncBinding == currentBinding
+        val preservedOutbox = if (syncCompatible) {
+            mergeExactById(outbox.getAll(), payload.outbox, SyncOutboxEntity::mutationId, "pending mutation")
+        } else outbox.getAll()
+        val preservedConflicts = if (syncCompatible) {
+            mergeExactById(conflicts.getAll(), payload.conflicts, SyncConflictEntity::id, "conflict")
+        } else conflicts.getAll()
+        val mergedMeta = if (syncCompatible) {
+            (syncMeta.getAll() + payload.syncMeta).groupBy { it.entityType }.map { (key, values) ->
                 SyncMetaEntity(
                     entityType = key,
                     cursor = values.maxOfOrNull { it.cursor } ?: 0L,
@@ -1276,109 +1504,240 @@ class GoalflowRepository(
                     lastSuccessfulSync = values.mapNotNull { it.lastSuccessfulSync }.maxOrNull()
                 )
             }
-            if (mode == BackupRestoreMode.REPLACE) {
-                tasks.deleteAll()
-                goals.deleteAll()
-                plans.deleteAll()
-                habits.deleteAll()
-            }
-            val incomingTasks = payload.tasks.map(::toEntity)
-            val incomingGoals = payload.goals.map(::toEntity)
-            val incomingHabits = payload.habits.map(::toEntity)
-            val incomingPlans = payload.plans.map(::toEntity)
-            val incomingEvents = payload.events
-            val nowIso = Instant.now().toString()
-            val rawByType = linkedMapOf<String, RawCollectionEntity>().apply {
-                originalRaw.forEach { put(it.entityType, it) }
-                payload.rawCollections.forEach { (entityType, rawPayload) ->
-                    val existing = get(entityType)
-                    if (mode == BackupRestoreMode.MERGE && existing != null) {
-                        require(jsonEquivalent(existing.payload, rawPayload)) {
-                            "Backup raw collection identity is reused for different data."
-                        }
+        } else syncMeta.getAll()
+        val incomingTasks = payload.tasks.map(::toEntity)
+        val incomingGoals = payload.goals.map(::toEntity)
+        val incomingHabits = payload.habits.map(::toEntity)
+        val incomingPlans = payload.plans.map(::toEntity)
+        val mergedTasks = if (mode == BackupRestoreMode.MERGE) {
+            mergeExactById(originalTasks.map(::toEntity), incomingTasks, TaskEntity::id, "task")
+        } else incomingTasks
+        val mergedGoals = if (mode == BackupRestoreMode.MERGE) {
+            mergeExactById(originalGoals.map(::toEntity), incomingGoals, GoalEntity::id, "goal")
+        } else incomingGoals
+        val mergedHabits = if (mode == BackupRestoreMode.MERGE) {
+            mergeExactById(originalHabits.map(::toEntity), incomingHabits, HabitEntity::id, "habit")
+        } else incomingHabits
+        val mergedPlans = if (mode == BackupRestoreMode.MERGE) {
+            mergeExactById(originalPlans.map(::toEntity), incomingPlans, DailyPlanEntity::localDate, "daily plan")
+        } else incomingPlans
+        val restoredEvents = if (mode == BackupRestoreMode.MERGE) {
+            mergeExactById(originalEvents, payload.events, TaskEventEntity::id, "task event")
+        } else payload.events
+        val nowIso = timeProvider.now().toString()
+        val rawByType = linkedMapOf<String, RawCollectionEntity>().apply {
+            originalRaw.forEach { put(it.entityType, it) }
+            payload.rawCollections.forEach { (entityType, rawPayload) ->
+                if (entityType == RESTORE_CHECKPOINT_KEY || entityType.startsWith(RESTORE_QUARANTINE_PREFIX)) return@forEach
+                val existing = get(entityType)
+                if (mode == BackupRestoreMode.MERGE && existing != null) {
+                    require(jsonEquivalent(existing.payload, rawPayload)) {
+                        "Backup raw collection identity is reused for different data."
                     }
-                    put(entityType, RawCollectionEntity(entityType, rawPayload, nowIso, null))
                 }
+                put(entityType, RawCollectionEntity(entityType, rawPayload, nowIso, null))
             }
-            if (mode == BackupRestoreMode.MERGE) {
-                val mergedTasks = mergeExactById(tasks.getAll(), incomingTasks, TaskEntity::id, "task")
-                val mergedGoals = mergeExactById(goals.getAll(), incomingGoals, GoalEntity::id, "goal")
-                val mergedHabits = mergeExactById(habits.getAll(), incomingHabits, HabitEntity::id, "habit")
-                val mergedPlans = mergeExactById(plans.getAll(), incomingPlans, DailyPlanEntity::localDate, "daily plan")
-                tasks.deleteAll()
-                goals.deleteAll()
-                habits.deleteAll()
-                plans.deleteAll()
-                tasks.insertAll(mergedTasks)
-                goals.insertAll(mergedGoals)
-                habits.insertAll(mergedHabits)
-                plans.insertAll(mergedPlans)
-            } else {
-                tasks.insertAll(incomingTasks)
-                goals.insertAll(incomingGoals)
-                habits.insertAll(incomingHabits)
-                plans.insertAll(incomingPlans)
-            }
-            val restoredEvents = when {
-                mode == BackupRestoreMode.MERGE ->
-                    mergeExactById(originalEvents, incomingEvents, TaskEventEntity::id, "task event")
-                incomingEvents.isNotEmpty() -> incomingEvents
-                else -> originalEvents
-            }
-            taskEvents.deleteAll()
-            taskEvents.insertAll(restoredEvents)
-            outbox.deleteAll()
-            outbox.insertAll(preservedOutbox)
-            syncMeta.insertAll(mergedMeta)
-            conflicts.deleteAll()
-            conflicts.insertAll(preservedConflicts)
-            rawCollections.deleteAll()
-            rawCollections.insertAll(rawByType.values.toList())
-            if (mode == BackupRestoreMode.REPLACE) {
-                val deletedAt = Instant.now().toString()
-                val restoredTaskIds = payload.tasks.mapTo(hashSetOf()) { it.id }
-                val restoredGoalIds = payload.goals.mapTo(hashSetOf()) { it.id }
-                val restoredHabitIds = payload.habits.mapTo(hashSetOf()) { it.id }
-                val restoredPlanIds = payload.plans.mapTo(hashSetOf()) { it.localDate }
-                originalTasks.filterNot { it.id in restoredTaskIds }.forEach {
-                    enqueueRecordInTransaction("tasks", it.id, GoalflowJson.taskPayload(it).toString(), deletedAt)
-                }
-                originalGoals.filterNot { it.id in restoredGoalIds }.forEach {
-                    enqueueRecordInTransaction("goals", it.id, GoalflowJson.goalPayload(it).toString(), deletedAt)
-                }
-                originalHabits.filterNot { it.id in restoredHabitIds }.forEach {
-                    enqueueRecordInTransaction("habits", it.id, GoalflowJson.habitPayload(it).toString(), deletedAt)
-                }
-                originalPlans.filterNot { it.localDate in restoredPlanIds }.forEach {
-                    enqueueRecordInTransaction("daily_plans", it.localDate, GoalflowJson.planPayload(it).toString(), deletedAt)
-                }
-            }
-            payload.tasks.forEach { enqueueRecordInTransaction("tasks", it.id, GoalflowJson.taskPayload(it).toString()) }
-            payload.goals.forEach { enqueueRecordInTransaction("goals", it.id, GoalflowJson.goalPayload(it).toString()) }
-            payload.habits.forEach { enqueueRecordInTransaction("habits", it.id, GoalflowJson.habitPayload(it).toString()) }
-            payload.plans.forEach { enqueueRecordInTransaction("daily_plans", it.localDate, GoalflowJson.planPayload(it).toString()) }
-            payload.events.forEach { event ->
-                val taskPredecessor = outbox.getForEntity("tasks", event.taskId).lastOrNull()?.mutationId
-                enqueueRecordInTransaction(
-                    "task_events",
-                    event.id,
-                    GoalflowTaskEventJson.eventPayload(event).toString(),
-                    dependsOnMutationIdOverride = taskPredecessor
-                )
-            }
-            // Preserve collections introduced by a newer client locally, but
-            // only enqueue collections this client explicitly understands for
-            // synchronization. This prevents a future/unknown backup key from
-            // becoming an unsolicited server mutation while keeping the data
-            // available for a later native client or re-export.
-            payload.rawCollections
-                .filterKeys { it in NATIVE_RAW_COLLECTION_TYPES }
-                .forEach { (entityType, rawPayload) ->
-                    enqueueRecordInTransaction(entityType, "singleton", rawPayload)
-                }
         }
-        onMutation()
+        if (!syncCompatible && syncStatePresent) {
+            val key = restoreQuarantineKey(envelope)
+            rawByType[key] = RawCollectionEntity(
+                entityType = key,
+                payload = JSONObject().apply {
+                    put("reason", "The backup synchronization binding differs from this installation.")
+                    put("incomingBinding", payload.syncBinding?.let { syncBindingJson(it) } ?: JSONObject.NULL)
+                    put("currentBinding", syncBindingJson(currentBinding))
+                    put("encryptedBackup", envelope)
+                }.toString(),
+                updatedAt = nowIso,
+                deletedAt = null
+            )
+        }
+
+        if (createCheckpoint) {
+            val checkpointPayload = currentBackupPayloadInTransaction()
+            val checkpointEnvelope = GoalflowBackup.encrypt(
+                checkpointPayload,
+                password,
+                exportedAt = timeProvider.now().toString()
+            )
+            check(GoalflowBackup.decrypt(checkpointEnvelope, password) == checkpointPayload) {
+                "The automatic restore checkpoint failed its reopen verification."
+            }
+            rawByType[RESTORE_CHECKPOINT_KEY] = RawCollectionEntity(
+                entityType = RESTORE_CHECKPOINT_KEY,
+                payload = JSONObject()
+                    .put("version", 1)
+                    .put("createdAt", nowIso)
+                    .put("encryptedBackup", checkpointEnvelope)
+                    .toString(),
+                updatedAt = nowIso,
+                deletedAt = null
+            )
+        }
+
+        tasks.deleteAll()
+        goals.deleteAll()
+        habits.deleteAll()
+        plans.deleteAll()
+        taskEvents.deleteAll()
+        tasks.insertAll(mergedTasks)
+        goals.insertAll(mergedGoals)
+        habits.insertAll(mergedHabits)
+        plans.insertAll(mergedPlans)
+        taskEvents.insertAll(restoredEvents)
+        outbox.deleteAll()
+        outbox.insertAll(preservedOutbox)
+        syncMeta.deleteAll()
+        syncMeta.insertAll(mergedMeta)
+        conflicts.deleteAll()
+        conflicts.insertAll(preservedConflicts)
+        rawCollections.deleteAll()
+        rawCollections.insertAll(rawByType.values.toList())
+
+        if (mode == BackupRestoreMode.REPLACE) {
+            val deletedAt = timeProvider.now().toString()
+            val restoredTaskIds = payload.tasks.mapTo(hashSetOf()) { it.id }
+            val restoredGoalIds = payload.goals.mapTo(hashSetOf()) { it.id }
+            val restoredHabitIds = payload.habits.mapTo(hashSetOf()) { it.id }
+            val restoredPlanIds = payload.plans.mapTo(hashSetOf()) { it.localDate }
+            originalTasks.filterNot { it.id in restoredTaskIds }.forEach {
+                enqueueRecordInTransaction("tasks", it.id, GoalflowJson.taskPayload(it).toString(), deletedAt)
+            }
+            originalGoals.filterNot { it.id in restoredGoalIds }.forEach {
+                enqueueRecordInTransaction("goals", it.id, GoalflowJson.goalPayload(it).toString(), deletedAt)
+            }
+            originalHabits.filterNot { it.id in restoredHabitIds }.forEach {
+                enqueueRecordInTransaction("habits", it.id, GoalflowJson.habitPayload(it).toString(), deletedAt)
+            }
+            originalPlans.filterNot { it.localDate in restoredPlanIds }.forEach {
+                enqueueRecordInTransaction("daily_plans", it.localDate, GoalflowJson.planPayload(it).toString(), deletedAt)
+            }
+        }
+        payload.tasks.forEach { enqueueRecordInTransaction("tasks", it.id, GoalflowJson.taskPayload(it).toString()) }
+        payload.goals.forEach { enqueueRecordInTransaction("goals", it.id, GoalflowJson.goalPayload(it).toString()) }
+        payload.habits.forEach { enqueueRecordInTransaction("habits", it.id, GoalflowJson.habitPayload(it).toString()) }
+        payload.plans.forEach { enqueueRecordInTransaction("daily_plans", it.localDate, GoalflowJson.planPayload(it).toString()) }
+        payload.events.forEach { event ->
+            val taskPredecessor = outbox.getForEntity("tasks", event.taskId).lastOrNull()?.mutationId
+            enqueueRecordInTransaction(
+                "task_events",
+                event.id,
+                GoalflowTaskEventJson.eventPayload(event).toString(),
+                dependsOnMutationIdOverride = taskPredecessor
+            )
+        }
+        payload.rawCollections
+            .filterKeys { it in NATIVE_RAW_COLLECTION_TYPES }
+            .forEach { (entityType, rawPayload) -> enqueueRecordInTransaction(entityType, "singleton", rawPayload) }
     }
+
+    private suspend fun currentBackupPayloadInTransaction(): GoalflowBackupPayload = GoalflowBackupPayload(
+        tasks = tasks.getAll().map(::toDomain),
+        goals = goals.getAll().map(::toDomain),
+        plans = plans.getAll().map(::toDomain),
+        events = taskEvents.getAll(),
+        habits = habits.getAll().map(::toDomain),
+        outbox = outbox.getAll(),
+        syncMeta = syncMeta.getAll(),
+        conflicts = conflicts.getAll(),
+        rawCollections = rawCollections.getAll().associate { it.entityType to it.payload },
+        syncBinding = syncBindingProvider()
+    )
+
+    private suspend fun buildBackupPreview(document: GoalflowBackupDocument): NativeBackupPreview {
+        val payload = document.payload
+        val currentTasks = tasks.getAll().map(::toDomain)
+        val currentGoals = goals.getAll().map(::toDomain)
+        val currentHabits = habits.getAll().map(::toDomain)
+        val currentPlans = plans.getAll().map(::toDomain)
+        val taskCounts = previewCounts(currentTasks, payload.tasks, GoalflowTask::id)
+        val goalCounts = previewCounts(currentGoals, payload.goals, GoalflowGoal::id)
+        val habitCounts = previewCounts(currentHabits, payload.habits, GoalflowHabit::id)
+        val planCounts = previewCounts(currentPlans, payload.plans, DailyPlan::localDate)
+        val syncStatePresent = payload.syncBinding != null || payload.outbox.isNotEmpty() ||
+            payload.syncMeta.isNotEmpty() || payload.conflicts.isNotEmpty()
+        val compatible = !syncStatePresent || payload.syncBinding == syncBindingProvider()
+        return NativeBackupPreview(
+            schemaVersion = document.schemaVersion,
+            exportedAt = document.exportedAt,
+            incomingTaskCount = payload.tasks.size,
+            incomingGoalCount = payload.goals.size,
+            incomingHabitCount = payload.habits.size,
+            incomingPlanCount = payload.plans.size,
+            incomingEventCount = payload.events.size,
+            incomingRawCollectionCount = payload.rawCollections.size,
+            tasksToAdd = taskCounts.first,
+            tasksToChange = taskCounts.second,
+            tasksToRemoveOnReplace = taskCounts.third,
+            goalsToAdd = goalCounts.first,
+            goalsToChange = goalCounts.second,
+            goalsToRemoveOnReplace = goalCounts.third,
+            habitsToAdd = habitCounts.first,
+            habitsToChange = habitCounts.second,
+            habitsToRemoveOnReplace = habitCounts.third,
+            syncStateCompatible = compatible,
+            syncStateWillBeQuarantined = syncStatePresent && !compatible
+        )
+    }
+
+    private fun <T> previewCounts(
+        current: List<T>,
+        incoming: List<T>,
+        id: (T) -> String
+    ): Triple<Int, Int, Int> {
+        val currentById = current.associateBy(id)
+        val incomingById = incoming.associateBy(id)
+        val common = currentById.keys.intersect(incomingById.keys)
+        return Triple(
+            (incomingById.keys - currentById.keys).size,
+            common.count { currentById[it] != incomingById[it] },
+            (currentById.keys - incomingById.keys).size
+        )
+    }
+
+    private suspend fun verifyRestoredPayload(payload: GoalflowBackupPayload, mode: BackupRestoreMode) {
+        database.withTransaction {
+            payload.tasks.forEach { expected ->
+                check(tasks.get(expected.id)?.let(::toDomain) == expected) {
+                    "The restored task could not be verified after commit."
+                }
+            }
+            payload.goals.forEach { expected ->
+                check(goals.get(expected.id)?.let(::toDomain) == expected) {
+                    "The restored goal could not be verified after commit."
+                }
+            }
+            payload.habits.forEach { expected ->
+                check(habits.get(expected.id)?.let(::toDomain) == expected) {
+                    "The restored habit could not be verified after commit."
+                }
+            }
+            payload.plans.forEach { expected ->
+                check(plans.get(expected.localDate)?.let(::toDomain) == expected) {
+                    "The restored daily plan could not be verified after commit."
+                }
+            }
+            if (mode == BackupRestoreMode.REPLACE) {
+                check(tasks.getAll().map { it.id }.toSet() == payload.tasks.map { it.id }.toSet())
+                check(goals.getAll().map { it.id }.toSet() == payload.goals.map { it.id }.toSet())
+                check(habits.getAll().map { it.id }.toSet() == payload.habits.map { it.id }.toSet())
+                check(plans.getAll().map { it.localDate }.toSet() == payload.plans.map { it.localDate }.toSet())
+            }
+        }
+    }
+
+    private fun syncBindingJson(binding: GoalflowSyncBinding): JSONObject = JSONObject().apply {
+        put("backendOrigin", binding.backendOrigin)
+        put("protocolVersion", binding.protocolVersion)
+        put("accountSubject", binding.accountSubject ?: JSONObject.NULL)
+    }
+
+    private fun restoreQuarantineKey(envelope: String): String =
+        "$RESTORE_QUARANTINE_PREFIX${sha256(envelope).take(16)}"
+
+    private fun sha256(value: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(value.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
 
     /** Only causally-ready mutations are sent. Later edits remain durable behind their predecessor. */
     suspend fun readySyncMutations(limit: Int = 50): List<SyncOutboxEntity> = database.withTransaction {
@@ -1393,7 +1752,7 @@ class GoalflowRepository(
 
     suspend fun pendingSyncMutations(): List<SyncOutboxEntity> = outbox.getAll()
 
-    suspend fun markSyncAttempted(mutationIds: List<String>, attemptedAt: String = Instant.now().toString()) {
+    suspend fun markSyncAttempted(mutationIds: List<String>, attemptedAt: String = timeProvider.now().toString()) {
         if (mutationIds.isNotEmpty()) outbox.markAttempted(mutationIds, attemptedAt)
     }
 
@@ -1490,7 +1849,7 @@ class GoalflowRepository(
                             serverPayload = result.serverPayload,
                             serverDeletedAt = result.serverDeletedAt,
                             serverVersion = result.serverVersion,
-                            createdAt = Instant.now().toString(),
+                            createdAt = timeProvider.now().toString(),
                             status = if (result.replayMismatch) "replay_mismatch" else "unresolved"
                         )
                     )
@@ -1552,7 +1911,7 @@ class GoalflowRepository(
                                     serverPayload = payload,
                                     serverDeletedAt = record.deletedAt,
                                     serverVersion = record.serverVersion,
-                                    createdAt = Instant.now().toString()
+                                    createdAt = timeProvider.now().toString()
                                 )
                             )
                             val predecessorIds = pending.map { it.mutationId }.toSet()
@@ -1610,7 +1969,7 @@ class GoalflowRepository(
                             serverPayload = record.payload,
                             serverDeletedAt = record.deletedAt,
                             serverVersion = record.serverVersion,
-                            createdAt = Instant.now().toString()
+                            createdAt = timeProvider.now().toString()
                         )
                     )
                     val predecessorIds = pending.map { it.mutationId }.toSet()
@@ -1647,7 +2006,7 @@ class GoalflowRepository(
         }
     }
 
-    suspend fun markSyncSuccessful(at: String = Instant.now().toString()) {
+    suspend fun markSyncSuccessful(at: String = timeProvider.now().toString()) {
         database.withTransaction {
             syncMeta.getAll().forEach { syncMeta.insert(it.copy(lastSuccessfulSync = at)) }
         }
@@ -1687,7 +2046,7 @@ class GoalflowRepository(
                     baseServerVersion = conflict.serverVersion,
                     version = version,
                     payload = conflict.localPayload,
-                    updatedAt = Instant.now().toString(),
+                    updatedAt = timeProvider.now().toString(),
                     deletedAt = conflict.localDeletedAt,
                     resolvesConflictId = conflict.id
                 )
@@ -1856,7 +2215,7 @@ class GoalflowRepository(
     private suspend fun recordTaskEventInTransaction(
         taskId: String,
         eventType: String,
-        localDate: String = LocalDate.now().toString(),
+        localDate: String = timeProvider.today().toString(),
         metadata: JSONObject = JSONObject()
     ) {
         require(eventType in GoalflowTaskEventJson.KNOWN_EVENT_TYPES) {
@@ -1874,7 +2233,7 @@ class GoalflowRepository(
             eventType = eventType,
             localDate = normalizedDate,
             metadata = metadata.toString(),
-            createdAt = System.currentTimeMillis()
+            createdAt = timeProvider.now().toEpochMilli()
         )
         taskEvents.insert(event)
         val taskPredecessor = outbox.getForEntity("tasks", taskId).lastOrNull()?.mutationId
@@ -1899,7 +2258,7 @@ class GoalflowRepository(
         val nextVersion = maxOf(current?.localVersion ?: 0L, existing.maxOfOrNull { it.version } ?: 0L) + 1L
         val mutationId = UUID.randomUUID().toString()
         requireMutationIdAvailableInTransaction(mutationId)
-        val updatedAt = Instant.now().toString()
+        val updatedAt = timeProvider.now().toString()
         val unresolved = conflicts.getUnresolved(entityType, entityId)
         if (unresolved != null) {
             val history = JSONArray(unresolved.localHistory)
@@ -2048,7 +2407,7 @@ class GoalflowRepository(
                         serverPayload = record.payload,
                         serverDeletedAt = record.deletedAt,
                         serverVersion = record.serverVersion,
-                        createdAt = Instant.now().toString(),
+                        createdAt = timeProvider.now().toString(),
                         status = "unsupported_remote"
                     )
                 )
@@ -2113,7 +2472,7 @@ class GoalflowRepository(
                 serverPayload = record.payload,
                 serverDeletedAt = record.deletedAt,
                 serverVersion = record.serverVersion,
-                createdAt = Instant.now().toString()
+                createdAt = timeProvider.now().toString()
             )
         )
         return true
@@ -2146,7 +2505,7 @@ class GoalflowRepository(
         if (raw.isNullOrBlank()) return GoalflowStats()
         return runCatching {
             val root = JSONObject(raw)
-            val day = LocalDate.now().toString()
+            val day = timeProvider.today().toString()
             val value = if (root.has("tasksCompleted") || root.has("frogsEaten")) {
                 root
             } else {
@@ -2314,7 +2673,7 @@ class GoalflowRepository(
             RawCollectionEntity(
                 entityType = entityType,
                 payload = payload,
-                updatedAt = Instant.now().toString(),
+                updatedAt = timeProvider.now().toString(),
                 deletedAt = null
             )
         )
@@ -2325,7 +2684,7 @@ class GoalflowRepository(
         require(entityType in NATIVE_RAW_COLLECTION_TYPES) { "This collection is not supported by native synchronization." }
         val previousPayload = rawCollections.get(entityType)?.payload ?: "{}"
         rawCollections.delete(entityType)
-        enqueueRecordInTransaction(entityType, "singleton", previousPayload, Instant.now().toString())
+        enqueueRecordInTransaction(entityType, "singleton", previousPayload, timeProvider.now().toString())
     }
 
     private suspend fun restoreStatsProjectionInTransaction(undo: JSONObject) {
@@ -2603,6 +2962,9 @@ class GoalflowRepository(
 
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"
+        const val RESTORE_CHECKPOINT_KEY = "__goalflow.restore.checkpoint"
+        const val RESTORE_QUARANTINE_PREFIX = "__goalflow.restore.quarantine."
+        const val HABIT_GENERATION_LEASE_MILLIS = 10 * 60 * 1_000L
         const val HABIT_TASK_NAMESPACE = "c3e4bcbb-9f56-4ff5-a3a8-9f7478284169"
         const val COMPLETION_UNDO_KEY = "__goalflowCompletionUndo"
         val TRUE_NORTH_KNOWN_KEYS = setOf(

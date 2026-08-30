@@ -4,6 +4,8 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.HabitGenerationHealth
+import com.mariusschober.goalflow.nativeapp.data.HabitGenerationStatus
 import com.mariusschober.goalflow.nativeapp.data.NativeReorderResult
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
@@ -30,7 +32,6 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.time.LocalDate
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class GoalflowViewModel(
@@ -40,7 +41,7 @@ class GoalflowViewModel(
     private val _reorderUndo = MutableStateFlow<NativeReorderResult?>(null)
     val reorderUndo: StateFlow<NativeReorderResult?> = _reorderUndo.asStateFlow()
 
-    private val _today = MutableStateFlow(LocalDate.now().toString())
+    private val _today = MutableStateFlow(repository.timeProvider.today().toString())
     val today: StateFlow<String> = _today.asStateFlow()
 
     val tasks: StateFlow<List<GoalflowTask>> = repository.taskStream.stateIn(
@@ -60,6 +61,10 @@ class GoalflowViewModel(
         SharingStarted.WhileSubscribed(5_000),
         emptyList()
     )
+
+    val habitGenerationFailures: StateFlow<List<HabitGenerationHealth>> = repository.habitGenerationHealthStream
+        .map { health -> health.filter { it.status != HabitGenerationStatus.GENERATED } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val stats: StateFlow<GoalflowStats> = repository.statsStream.stateIn(
         viewModelScope,
@@ -122,7 +127,7 @@ class GoalflowViewModel(
         viewModelScope.launch {
             while (isActive) {
                 delay(60_000)
-                _today.value = LocalDate.now().toString()
+                _today.value = repository.timeProvider.today().toString()
             }
         }
         viewModelScope.launch {
@@ -130,9 +135,12 @@ class GoalflowViewModel(
                 .collectLatest { (currentHabits, date) ->
                     currentHabits.forEach { habit ->
                         runCatching { repository.generateHabitInstance(habit.id, date) }
+                            .onFailure { failure ->
+                                _error.value = failure.message ?: "A habit could not be generated safely."
+                            }
                     }
                 }
-        }
+            }
     }
 
     fun createTask(
@@ -220,6 +228,11 @@ class GoalflowViewModel(
     }
 
     fun clearUndo() { _undoTaskId.value = null }
+
+    /** Refreshes the injected local calendar after resume, midnight, or zone changes. */
+    fun refreshToday() {
+        _today.value = repository.timeProvider.today().toString()
+    }
 
     fun skipTask(task: GoalflowTask) {
         viewModelScope.launch {
@@ -395,6 +408,17 @@ class GoalflowViewModel(
             runCatching { repository.deleteHabit(habit.id) }
                 .onSuccess { _notice.value = "Habit removed; history remains." }
                 .onFailure { failure -> _error.value = failure.message ?: "The habit could not be removed." }
+        }
+    }
+
+    fun retryHabitGeneration(health: HabitGenerationHealth) {
+        viewModelScope.launch {
+            clearError()
+            runCatching { repository.generateHabitInstance(health.habitId, health.scheduledFor) }
+                .onSuccess { _notice.value = "Habit generation retried locally" }
+                .onFailure { failure ->
+                    _error.value = failure.message ?: "The habit could not be generated safely."
+                }
         }
     }
 

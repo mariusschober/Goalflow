@@ -350,8 +350,14 @@ interface RawCollectionDao {
     @Query("SELECT * FROM raw_collections")
     suspend fun getAll(): List<RawCollectionEntity>
 
+    @Query("SELECT * FROM raw_collections WHERE entityType LIKE :prefix ORDER BY entityType ASC")
+    fun observeByPrefix(prefix: String): Flow<List<RawCollectionEntity>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(collection: RawCollectionEntity)
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIfAbsent(collection: RawCollectionEntity): Long
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(collections: List<RawCollectionEntity>)
@@ -376,7 +382,7 @@ interface RawCollectionDao {
         TaskEventEntity::class
     ],
     version = 6,
-    exportSchema = false
+    exportSchema = true
 )
 abstract class GoalflowDatabase : RoomDatabase() {
     abstract fun taskDao(): TaskDao
@@ -436,10 +442,18 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
         }
 
+        fun migrations(): Array<Migration> = arrayOf(
+            MIGRATION_1_2,
+            MIGRATION_2_3,
+            MIGRATION_3_4,
+            MIGRATION_4_5,
+            MIGRATION_5_6
+        )
+
         fun create(context: Context): GoalflowDatabase = Room.databaseBuilder(
             context,
             GoalflowDatabase::class.java,
             "goalflow-native.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).build()
+        ).addMigrations(*migrations()).build()
     }
 }

@@ -128,12 +128,14 @@ import com.mariusschober.goalflow.nativeapp.domain.BreakdownChild
 import com.mariusschober.goalflow.nativeapp.domain.PlanningGate
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.data.NATIVE_RAW_COLLECTION_TYPES
+import com.mariusschober.goalflow.nativeapp.data.BackupRestoreMode
+import com.mariusschober.goalflow.nativeapp.data.NativeBackupPreview
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
-import java.time.Instant
+import com.mariusschober.goalflow.nativeapp.time.datePickerMillisToLocalDate
+import com.mariusschober.goalflow.nativeapp.time.localDateToDatePickerMillis
 import java.time.LocalDate
-import java.time.ZoneId
 import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
@@ -177,6 +179,7 @@ fun GoalflowRoot(
     val tasks by goalflowViewModel.tasks.collectAsStateWithLifecycle()
     val goals by goalflowViewModel.goals.collectAsStateWithLifecycle()
     val habits by goalflowViewModel.habits.collectAsStateWithLifecycle()
+    val habitGenerationFailures by goalflowViewModel.habitGenerationFailures.collectAsStateWithLifecycle()
     val stats by goalflowViewModel.stats.collectAsStateWithLifecycle()
     val progress by goalflowViewModel.progress.collectAsStateWithLifecycle()
     val circadian by goalflowViewModel.circadian.collectAsStateWithLifecycle()
@@ -225,6 +228,12 @@ fun GoalflowRoot(
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingRestoreContents by remember { mutableStateOf<String?>(null) }
+    var pendingRestorePassword by remember { mutableStateOf<String?>(null) }
+    var restorePreview by remember { mutableStateOf<NativeBackupPreview?>(null) }
+    var replaceRestoreConfirmation by remember { mutableStateOf(false) }
+    var restoreInProgress by remember { mutableStateOf(false) }
+    var restoreCheckpointAvailable by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
 
@@ -240,6 +249,10 @@ fun GoalflowRoot(
             focusStartedAt = storedFocus.startedAtMillis
             focusTask = storedTask
         }
+    }
+
+    LaunchedEffect(Unit) {
+        restoreCheckpointAvailable = application.repository.hasRestoreCheckpoint()
     }
 
     LaunchedEffect(tasks) {
@@ -291,6 +304,7 @@ fun GoalflowRoot(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                goalflowViewModel.refreshToday()
                 sessionActive = application.sessionStore.read() != null
             }
         }
@@ -339,6 +353,34 @@ fun GoalflowRoot(
             pendingImportUri = uri
             backupError = null
             backupAction = "import"
+        }
+    }
+
+    fun clearRestorePreview() {
+        restorePreview = null
+        pendingRestoreContents = null
+        pendingRestorePassword = null
+        replaceRestoreConfirmation = false
+        restoreInProgress = false
+    }
+
+    fun restoreWithMode(mode: BackupRestoreMode) {
+        val contents = pendingRestoreContents ?: return
+        val password = pendingRestorePassword ?: return
+        restoreInProgress = true
+        scope.launch {
+            runCatching { application.repository.restoreBackup(contents, password, mode) }
+                .onSuccess {
+                    clearRestorePreview()
+                    restoreCheckpointAvailable = true
+                    snackbarHostState.showSnackbar(
+                        if (mode == BackupRestoreMode.MERGE) "Backup merged safely" else "Backup replaced safely; checkpoint saved"
+                    )
+                }
+                .onFailure { failure ->
+                    restoreInProgress = false
+                    backupError = failure.message ?: "Backup restore failed"
+                }
         }
     }
 
@@ -466,6 +508,7 @@ fun GoalflowRoot(
                         habits = habits,
                         goals = goals,
                         error = error,
+                        generationFailures = habitGenerationFailures,
                         onCreate = { draft, onComplete ->
                             goalflowViewModel.createHabit(
                                 draft.title,
@@ -492,9 +535,11 @@ fun GoalflowRoot(
                                 onComplete
                             )
                         },
-                        onDelete = goalflowViewModel::deleteHabit
+                        onDelete = goalflowViewModel::deleteHabit,
+                        onRetryGeneration = goalflowViewModel::retryHabitGeneration
                     )
                     RootDestination.GOALS -> NativeGoalsScreen(
+                        today = today,
                         goals = goals,
                         trueNorth = trueNorth,
                         amalgam = amalgam,
@@ -535,7 +580,7 @@ fun GoalflowRoot(
                                     anchorHabit = draft.anchorHabit,
                                     anchorTask = draft.anchorTask,
                                     anchorHabitDuration = draft.anchorHabitDuration,
-                                    createdAt = System.currentTimeMillis()
+                                    createdAt = 0L
                                 ),
                                 onComplete
                             )
@@ -561,6 +606,7 @@ fun GoalflowRoot(
                         onOpenInsights = { destination = RootDestination.INSIGHTS }
                     )
                     RootDestination.INSIGHTS -> NativeInsightsScreen(
+                        today = today,
                         tasks = tasks,
                         habits = habits,
                         stats = stats,
@@ -583,6 +629,11 @@ fun GoalflowRoot(
                         },
                         onImport = {
                             importLauncher.launch(arrayOf("application/json", "text/plain"))
+                        },
+                        restoreCheckpointAvailable = restoreCheckpointAvailable,
+                        onRollback = {
+                            backupError = null
+                            backupAction = "rollback"
                         }
                     )
                 }
@@ -627,6 +678,7 @@ fun GoalflowRoot(
         CaptureSheet(
             formKey = captureFormKey,
             initialTitle = captureSeed,
+            today = today,
             goals = goals,
             error = error,
             onDismiss = {
@@ -655,6 +707,7 @@ fun GoalflowRoot(
     if (circadianOpen) {
         CircadianCheckInSheet(
             initial = circadian,
+            today = today,
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
@@ -727,6 +780,7 @@ fun GoalflowRoot(
     breakdownTask?.let { task ->
         BreakdownDialog(
             task = task,
+            today = today,
             error = error,
             onDismiss = {
                 goalflowViewModel.clearError()
@@ -747,7 +801,7 @@ fun GoalflowRoot(
         )
     }
 
-    if (backupAction == "export" || backupAction == "import") {
+    if (backupAction in setOf("export", "import", "rollback")) {
         BackupPasswordDialog(
             action = backupAction!!,
             error = backupError,
@@ -763,22 +817,38 @@ fun GoalflowRoot(
                     backupAction = null
                     pendingExportPassword = password
                     exportLauncher.launch("Goalflow-backup.json")
+                } else if (backupAction == "rollback") {
+                    backupAction = null
+                    scope.launch {
+                        runCatching { application.repository.rollbackLastRestore(password) }
+                            .onSuccess {
+                                restoreCheckpointAvailable = true
+                                snackbarHostState.showSnackbar("Last restore rolled back safely")
+                            }
+                            .onFailure {
+                                backupError = it.message ?: "Rollback failed"
+                                backupAction = "rollback"
+                            }
+                    }
                 } else {
                     val uri = pendingImportUri
                     if (uri == null) {
                         backupError = "Choose a backup file first."
                     } else {
                         backupAction = null
+                        backupAction = null
                         scope.launch {
                             runCatching {
                                 val contents = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
                                     ?: throw IllegalStateException("The backup file could not be opened.")
-                                application.repository.restoreBackup(contents, password)
-                            }.onSuccess {
+                                contents to application.repository.previewBackup(contents, password)
+                            }.onSuccess { (contents, preview) ->
                                 pendingImportUri = null
-                                snackbarHostState.showSnackbar("Backup restored safely")
+                                pendingRestoreContents = contents
+                                pendingRestorePassword = password
+                                restorePreview = preview
                             }.onFailure {
-                                backupError = it.message ?: "Backup restore failed"
+                                backupError = it.message ?: "Backup preview failed"
                                 backupAction = "import"
                             }
                         }
@@ -786,6 +856,30 @@ fun GoalflowRoot(
                 }
             }
         )
+    }
+
+    restorePreview?.let { preview ->
+        RestorePreviewDialog(
+            preview = preview,
+            busy = restoreInProgress,
+            onDismiss = ::clearRestorePreview,
+            onMerge = { restoreWithMode(BackupRestoreMode.MERGE) },
+            onReplace = { replaceRestoreConfirmation = true }
+        )
+    }
+
+    if (replaceRestoreConfirmation) {
+        restorePreview?.let { preview ->
+            ReplaceRestoreDialog(
+                preview = preview,
+                busy = restoreInProgress,
+                onDismiss = { replaceRestoreConfirmation = false },
+                onConfirm = {
+                    replaceRestoreConfirmation = false
+                    restoreWithMode(BackupRestoreMode.REPLACE)
+                }
+            )
+        }
     }
 
     if (signInOpen) {
@@ -1791,7 +1885,9 @@ private fun SettingsScreen(
     onSignIn: () -> Unit,
     onSignOut: () -> Unit,
     onExport: () -> Unit,
-    onImport: () -> Unit
+    onImport: () -> Unit,
+    restoreCheckpointAvailable: Boolean,
+    onRollback: () -> Unit
 ) {
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -1832,6 +1928,15 @@ private fun SettingsScreen(
             OutlinedButton(onClick = onImport, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                 Text("Import backup")
             }
+            if (restoreCheckpointAvailable) {
+                Text(
+                    "An encrypted checkpoint from the last restore is available.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedButton(onClick = onRollback, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Text("Rollback last restore")
+                }
+            }
         }
         item {
             SettingsCard(
@@ -1865,12 +1970,23 @@ private fun BackupPasswordDialog(
     var password by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (action == "export") "Protect backup" else "Unlock backup") },
+        title = {
+            Text(
+                when (action) {
+                    "export" -> "Protect backup"
+                    "rollback" -> "Unlock restore checkpoint"
+                    else -> "Unlock backup"
+                }
+            )
+        },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    if (action == "export") "Use a password you can recover later. Goalflow cannot reset it."
-                    else "The restore is validated before it changes local data.",
+                    when (action) {
+                        "export" -> "Use a password you can recover later. Goalflow cannot reset it."
+                        "rollback" -> "The checkpoint was encrypted before the last restore."
+                        else -> "The backup is validated and previewed before it changes local data."
+                    },
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
@@ -1887,10 +2003,82 @@ private fun BackupPasswordDialog(
         },
         confirmButton = {
             Button(onClick = { onConfirm(password) }, enabled = password.isNotBlank()) {
-                Text(if (action == "export") "Continue" else "Restore")
+                Text(if (action == "export") "Continue" else if (action == "rollback") "Rollback" else "Preview restore")
             }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun RestorePreviewDialog(
+    preview: NativeBackupPreview,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onMerge: () -> Unit,
+    onReplace: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Preview backup restore") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("Exported: ${preview.exportedAt ?: "unknown"}")
+                Text(
+                    "Incoming: ${preview.incomingTaskCount} tasks, ${preview.incomingGoalCount} goals, " +
+                        "${preview.incomingHabitCount} habits, ${preview.incomingPlanCount} plans, " +
+                        "${preview.incomingEventCount} events, ${preview.incomingRawCollectionCount} preserved collections."
+                )
+                Text(
+                    "Merge: +${preview.tasksToAdd} tasks, ${preview.tasksToChange} changed, " +
+                        "+${preview.goalsToAdd} goals, +${preview.habitsToAdd} habits."
+                )
+                Text(
+                    "Explicit Replace would remove ${preview.tasksToRemoveOnReplace} tasks, " +
+                        "${preview.goalsToRemoveOnReplace} goals, and ${preview.habitsToRemoveOnReplace} habits locally."
+                )
+                if (preview.syncStateWillBeQuarantined) {
+                    Text(
+                        "Sync metadata belongs to another backend, protocol, or account and will be quarantined locally.",
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onMerge, enabled = !busy) {
+                Text(if (busy) "Restoring…" else "Merge safely")
+            }
+        },
+        dismissButton = {
+            Column(horizontalAlignment = Alignment.End) {
+                TextButton(onClick = onReplace, enabled = !busy) { Text("Review explicit Replace") }
+                TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") }
+            }
+        }
+    )
+}
+
+@Composable
+private fun ReplaceRestoreDialog(
+    preview: NativeBackupPreview,
+    busy: Boolean,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text("Replace local data?") },
+        text = {
+            Text(
+                "This explicit choice removes records missing from the backup, creates an encrypted rollback checkpoint first, " +
+                    "and queues the resulting local changes for safe reconciliation."
+            )
+        },
+        confirmButton = {
+            Button(onClick = onConfirm, enabled = !busy) { Text(if (busy) "Replacing…" else "Replace and checkpoint") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !busy) { Text("Cancel") } }
     )
 }
 
@@ -1945,6 +2133,7 @@ private fun SignInDialog(
 private fun CaptureSheet(
     formKey: Int,
     initialTitle: String,
+    today: String,
     goals: List<GoalflowGoal>,
     error: String?,
     onDismiss: () -> Unit,
@@ -1954,7 +2143,7 @@ private fun CaptureSheet(
     var title by rememberSaveable(formKey) { mutableStateOf(initialTitle) }
     var notes by rememberSaveable(formKey) { mutableStateOf("") }
     var precision by rememberSaveable(formKey) { mutableStateOf(SchedulePrecision.DAY) }
-    var selectedDate by rememberSaveable(formKey) { mutableStateOf(LocalDate.now().toString()) }
+    var selectedDate by rememberSaveable(formKey) { mutableStateOf(today) }
     var scheduledTime by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
     var frog by rememberSaveable(formKey) { mutableStateOf(false) }
     var selectedGoalId by rememberSaveable(formKey) { mutableStateOf<String?>(null) }
@@ -2044,8 +2233,9 @@ private fun CaptureSheet(
                 PrecisionButton("Exact day", precision == SchedulePrecision.DAY) { precision = SchedulePrecision.DAY }
                 PrecisionButton("Future month", precision == SchedulePrecision.MONTH) {
                     precision = SchedulePrecision.MONTH
-                    if (selectedDate.substring(0, 7) <= YearMonth.now().toString()) {
-                        selectedDate = YearMonth.now().plusMonths(1).atDay(1).toString()
+                    val currentMonth = YearMonth.parse(today.substring(0, 7))
+                    if (selectedDate.substring(0, 7) <= currentMonth.toString()) {
+                        selectedDate = currentMonth.plusMonths(1).atDay(1).toString()
                     }
                 }
             }
@@ -2107,12 +2297,12 @@ private fun CaptureSheet(
 @Composable
 private fun CircadianCheckInSheet(
     initial: GoalflowCircadianState,
+    today: String,
     error: String?,
     onDismiss: () -> Unit,
     onSave: (GoalflowCircadianState) -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val today = LocalDate.now().toString()
     var wakeTime by rememberSaveable { mutableStateOf<String?>(initial.wakeTime ?: "07:00") }
     var firstMealTime by rememberSaveable { mutableStateOf<String?>(initial.firstMealTime ?: "08:00") }
     var morningLight by rememberSaveable { mutableStateOf(initial.sunrise) }
@@ -2289,6 +2479,7 @@ private fun GoalSheet(error: String?, onDismiss: () -> Unit, onSave: (String, St
 @Composable
 private fun BreakdownDialog(
     task: GoalflowTask,
+    today: String,
     error: String?,
     onDismiss: () -> Unit,
     onConfirm: (List<BreakdownChild>) -> Unit
@@ -2353,7 +2544,7 @@ private fun BreakdownDialog(
                             value.trim().takeIf(String::isNotBlank)?.let { cleanTitle ->
                                 BreakdownChild(
                                     title = cleanTitle,
-                                    scheduledFor = LocalDate.now().toString(),
+                                    scheduledFor = today,
                                     duration = durations.getOrElse(index) { 25 }
                                 )
                             }
@@ -2371,15 +2562,15 @@ private fun BreakdownDialog(
 @Composable
 internal fun GoalflowDatePickerDialog(initialDate: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     val initialMillis = runCatching {
-        LocalDate.parse(initialDate.take(10)).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-    }.getOrDefault(System.currentTimeMillis())
+        localDateToDatePickerMillis(LocalDate.parse(initialDate.take(10)))
+    }.getOrDefault(localDateToDatePickerMillis(LocalDate.ofEpochDay(0)))
     val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
     DatePickerDialog(
         onDismissRequest = onDismiss,
         confirmButton = {
             TextButton(onClick = {
                 val selected = state.selectedDateMillis ?: initialMillis
-                onConfirm(Instant.ofEpochMilli(selected).atZone(ZoneId.systemDefault()).toLocalDate().toString())
+                onConfirm(datePickerMillisToLocalDate(selected).toString())
             }) { Text("Use date") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }

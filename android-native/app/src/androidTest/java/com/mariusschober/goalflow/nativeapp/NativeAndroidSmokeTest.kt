@@ -191,10 +191,16 @@ class NativeAndroidSmokeTest {
                 duration = 10
             ).also { created -> application.repository.confirmPlan(today, listOf(created.id)) }
         }
+        val snapshot = runBlocking { application.repository.widgetSnapshot(today) }
+        val visible = checkNotNull(snapshot.currentTask)
         application.sendBroadcast(
             Intent(application, com.mariusschober.goalflow.nativeapp.widget.GoalflowWidgetProvider::class.java)
                 .setAction("com.mariusschober.goalflow.WIDGET_ACTION")
                 .putExtra("goalflow_widget_action", "complete")
+                .putExtra("goalflow_widget_task_id", visible.id)
+                .putExtra("goalflow_widget_expected_updated_at", visible.updatedAt)
+                .putExtra("goalflow_widget_local_date", snapshot.localDate)
+                .putExtra("goalflow_widget_plan_fingerprint", snapshot.planFingerprint)
         )
         composeRule.waitUntil(10_000) {
             runBlocking { application.database.taskDao().get(task.id)?.status == "COMPLETED" }

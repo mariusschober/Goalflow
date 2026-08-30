@@ -6,7 +6,9 @@ import androidx.test.core.app.ApplicationProvider
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import com.mariusschober.goalflow.nativeapp.domain.HabitFrequency
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowCircadianState
+import com.mariusschober.goalflow.nativeapp.domain.TaskStatus
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.first
 import org.json.JSONArray
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -22,7 +24,10 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.time.Instant
 import java.time.LocalDate
+import java.time.Clock
+import java.time.ZoneId
 import java.util.UUID
+import com.mariusschober.goalflow.nativeapp.time.FixedGoalflowTimeProvider
 
 @RunWith(RobolectricTestRunner::class)
 class GoalflowRepositorySyncTest {
@@ -59,6 +64,23 @@ class GoalflowRepositorySyncTest {
         assertEquals(1, pending.size)
         assertEquals(task.id, pending.single().entityId)
         assertEquals("Never lose this", org.json.JSONObject(pending.single().payload).getString("title"))
+    }
+
+    @Test
+    fun `repository uses injected local zone for date-sensitive transitions`() = runTest {
+        val provider = FixedGoalflowTimeProvider(
+            Clock.fixed(Instant.parse("2024-02-29T23:59:59Z"), ZoneId.of("UTC")),
+            ZoneId.of("Pacific/Kiritimati")
+        )
+        val clockedRepository = GoalflowRepository(database, deviceId = "clocked", timeProvider = provider)
+        val today = provider.today().toString()
+        val task = clockedRepository.createTask("Leap-day boundary", "", SchedulePrecision.DAY, today, null, false)
+        clockedRepository.confirmPlan(today, listOf(task.id))
+        clockedRepository.completeTask(task.id)
+
+        assertEquals("2024-03-01", today)
+        assertEquals("2024-03-01", database.taskEventDao().getAll().last().localDate)
+        assertTrue(database.rawCollectionDao().get("stats")!!.payload.contains("2024-03-01"))
     }
 
     @Test
@@ -123,6 +145,49 @@ class GoalflowRepositorySyncTest {
             pending.groupingBy { it.entityType }.eachCount()
         )
         assertEquals(1, repository.pendingSyncMutations().count { it.entityType == "task_events" })
+    }
+
+    @Test
+    fun `habit generation failure is durable and retryable`() = runTest {
+        val habit = repository.createHabit("Collision habit")
+        val today = LocalDate.now().toString()
+        database.taskDao().insert(
+            TaskEntity(
+                id = uuidV5("${habit.id}:$today"),
+                title = "Different record",
+                notes = "",
+                schedulePrecision = SchedulePrecision.DAY.name,
+                scheduledFor = today,
+                scheduledTime = null,
+                plannedOrder = 0,
+                status = TaskStatus.OPEN.name,
+                isFrog = false,
+                beforeFrog = false,
+                frogFailures = 0,
+                source = "MANUAL",
+                goalId = null,
+                parentTaskId = null,
+                habitId = "another-habit",
+                createdAt = 1L,
+                updatedAt = 1L,
+                completedAt = null,
+                deletedAt = null
+            )
+        )
+
+        repeat(2) {
+            try {
+                repository.generateHabitInstance(habit.id, today)
+                fail("Expected the deterministic identity collision to remain visible")
+            } catch (expected: IllegalArgumentException) {
+                assertTrue(expected.message.orEmpty().contains("already belongs"))
+            }
+        }
+
+        val health = repository.habitGenerationHealthStream.first().single()
+        assertEquals(HabitGenerationStatus.FAILED, health.status)
+        assertEquals(2, health.attemptCount)
+        assertTrue(health.errorMessage.orEmpty().contains("already belongs"))
     }
 
     @Test
@@ -648,6 +713,111 @@ class GoalflowRepositorySyncTest {
 
         assertEquals("{\"enabled\":true}", database.rawCollectionDao().get("future_feature")?.payload)
         assertTrue(repository.pendingSyncMutations().isEmpty())
+    }
+
+    @Test
+    fun `restore defaults to merge and keeps local records`() = runTest {
+        val today = LocalDate.now().toString()
+        val local = repository.createTask("Keep local", "", SchedulePrecision.DAY, today, null, false)
+        val incoming = local.copy(id = "incoming-task", title = "From backup")
+        val envelope = GoalflowBackup.encrypt(
+            GoalflowBackupPayload(listOf(incoming), emptyList(), emptyList()),
+            "strong-password"
+        )
+
+        repository.restoreBackup(envelope, "strong-password")
+
+        assertEquals("Keep local", database.taskDao().get(local.id)?.title)
+        assertEquals("From backup", database.taskDao().get(incoming.id)?.title)
+        assertTrue(repository.hasRestoreCheckpoint())
+    }
+
+    @Test
+    fun `replace creates an encrypted checkpoint that can roll back`() = runTest {
+        val today = LocalDate.now().toString()
+        val local = repository.createTask("Original", "", SchedulePrecision.DAY, today, null, false)
+        val incoming = local.copy(id = "replacement-task", title = "Replacement")
+        val envelope = GoalflowBackup.encrypt(
+            GoalflowBackupPayload(listOf(incoming), emptyList(), emptyList()),
+            "strong-password"
+        )
+
+        repository.restoreBackup(envelope, "strong-password", BackupRestoreMode.REPLACE)
+        assertEquals(null, database.taskDao().get(local.id))
+        assertEquals("Replacement", database.taskDao().get(incoming.id)?.title)
+        assertTrue(repository.hasRestoreCheckpoint())
+
+        repository.rollbackLastRestore("strong-password")
+
+        assertEquals("Original", database.taskDao().get(local.id)?.title)
+        assertEquals(null, database.taskDao().get(incoming.id))
+    }
+
+    @Test
+    fun `foreign sync binding is quarantined instead of merged`() = runTest {
+        val envelope = GoalflowBackup.encrypt(
+            GoalflowBackupPayload(
+                tasks = emptyList(),
+                goals = emptyList(),
+                plans = emptyList(),
+                syncMeta = listOf(SyncMetaEntity("tasks:foreign", 4, 2, 7, null)),
+                syncBinding = GoalflowSyncBinding("https://other.example", 99, "other-account")
+            ),
+            "strong-password"
+        )
+
+        val preview = repository.restoreBackup(envelope, "strong-password")
+
+        assertTrue(preview.syncStateWillBeQuarantined)
+        assertTrue(database.syncMetaDao().getAll().isEmpty())
+        assertTrue(database.rawCollectionDao().getAll().any { it.entityType.startsWith(RESTORE_QUARANTINE_PREFIX) })
+    }
+
+    @Test
+    fun `widget action is rejected when the visible plan changed`() = runTest {
+        val today = LocalDate.now().toString()
+        val first = repository.createTask("First", "", SchedulePrecision.DAY, today, null, false)
+        val second = repository.createTask("Second", "", SchedulePrecision.DAY, today, null, false)
+        repository.confirmPlan(today, listOf(first.id, second.id))
+        val snapshot = repository.widgetSnapshot(today)
+        val visible = snapshot.currentTask ?: error("A confirmed plan should expose its first task")
+        val target = NativeWidgetTarget(
+            taskId = visible.id,
+            expectedUpdatedAt = visible.updatedAt,
+            localDate = snapshot.localDate,
+            planFingerprint = snapshot.planFingerprint
+        )
+
+        repository.moveToday(today, second.id, -1)
+
+        try {
+            repository.executeWidgetAction(NativeWidgetAction.COMPLETE, target)
+            fail("Expected the stale widget action to be rejected")
+        } catch (expected: StaleWidgetActionException) {
+            assertTrue(expected.message.orEmpty().contains("Refresh"))
+        }
+        assertEquals(TaskStatus.OPEN.name, database.taskDao().get(first.id)?.status)
+        assertEquals(TaskStatus.OPEN.name, database.taskDao().get(second.id)?.status)
+    }
+
+    @Test
+    fun `widget action is rejected when the exact task version changed`() = runTest {
+        val today = LocalDate.now().toString()
+        val task = repository.createTask("Stable target", "", SchedulePrecision.DAY, today, null, false)
+        repository.confirmPlan(today, listOf(task.id))
+        val snapshot = repository.widgetSnapshot(today)
+        val visible = snapshot.currentTask ?: error("A confirmed plan should expose its first task")
+        val target = NativeWidgetTarget(visible.id, visible.updatedAt, snapshot.localDate, snapshot.planFingerprint)
+
+        repository.updateTask(task.id, "Changed elsewhere", "", SchedulePrecision.DAY, today)
+
+        try {
+            repository.executeWidgetAction(NativeWidgetAction.COMPLETE, target)
+            fail("Expected the stale task version to be rejected")
+        } catch (expected: StaleWidgetActionException) {
+            assertTrue(expected.message.orEmpty().contains("changed"))
+        }
+        assertEquals(TaskStatus.OPEN.name, database.taskDao().get(task.id)?.status)
     }
 
     private fun accepted(mutation: SyncOutboxEntity, serverVersion: Long): NativePushResult =

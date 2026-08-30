@@ -79,6 +79,7 @@ import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTrueNorth
 import com.mariusschober.goalflow.nativeapp.domain.HabitFrequency
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
+import com.mariusschober.goalflow.nativeapp.data.HabitGenerationHealth
 
 data class NativeHabitDraft(
     val title: String,
@@ -115,9 +116,11 @@ fun NativeHabitsScreen(
     habits: List<GoalflowHabit>,
     goals: List<GoalflowGoal>,
     error: String?,
+    generationFailures: List<HabitGenerationHealth>,
     onCreate: (NativeHabitDraft, () -> Unit) -> Unit,
     onUpdate: (GoalflowHabit, NativeHabitDraft, () -> Unit) -> Unit,
-    onDelete: (GoalflowHabit) -> Unit
+    onDelete: (GoalflowHabit) -> Unit,
+    onRetryGeneration: (HabitGenerationHealth) -> Unit
 ) {
     var editor by remember { mutableStateOf<GoalflowHabit?>(null) }
     var editorOpen by rememberSaveable { mutableStateOf(false) }
@@ -142,6 +145,23 @@ fun NativeHabitsScreen(
         }
         error?.let { message ->
             item { Text(message, color = MaterialTheme.colorScheme.error) }
+        }
+        generationFailures.forEach { health ->
+            item(key = "habit-generation-${health.habitId}-${health.scheduledFor}") {
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                    shape = RoundedCornerShape(18.dp)
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Habit generation needs attention", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "${health.scheduledFor}: ${health.errorMessage ?: "Generation did not finish; retry is safe."}",
+                            color = MaterialTheme.colorScheme.onErrorContainer
+                        )
+                        Button(onClick = { onRetryGeneration(health) }) { Text("Retry generation") }
+                    }
+                }
+            }
         }
         if (habits.isEmpty()) {
             item {
@@ -362,6 +382,7 @@ private fun CheckRow(label: String, checked: Boolean, body: String, onChange: (B
 
 @Composable
 fun NativeGoalsScreen(
+    today: String,
     goals: List<GoalflowGoal>,
     trueNorth: List<GoalflowTrueNorth>,
     amalgam: String,
@@ -470,6 +491,7 @@ fun NativeGoalsScreen(
     if (goalEditorOpen) {
         GoalEditorSheet(
             initial = goalEditor,
+            today = today,
             error = error,
             onDismiss = { goalEditorOpen = false },
             onSave = { draft ->
@@ -590,7 +612,7 @@ private fun GoalCard(goal: GoalflowGoal, onEdit: () -> Unit, onDelete: () -> Uni
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: () -> Unit, onSave: (NativeGoalDraft) -> Unit) {
+private fun GoalEditorSheet(initial: GoalflowGoal?, today: String, error: String?, onDismiss: () -> Unit, onSave: (NativeGoalDraft) -> Unit) {
     val key = initial?.id ?: "new"
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var name by rememberSaveable(key) { mutableStateOf(initial?.name.orEmpty()) }
@@ -640,7 +662,7 @@ private fun GoalEditorSheet(initial: GoalflowGoal?, error: String?, onDismiss: (
     }
     if (showDatePicker) {
         GoalflowDatePickerDialog(
-            initialDate = deadline.ifBlank { java.time.LocalDate.now().toString() },
+            initialDate = deadline.ifBlank { today },
             onDismiss = { showDatePicker = false },
             onConfirm = { date -> deadline = date; showDatePicker = false }
         )
@@ -710,13 +732,13 @@ private fun ConfirmDeleteDialog(title: String, body: String, onConfirm: () -> Un
 
 @Composable
 fun NativeInsightsScreen(
+    today: String,
     tasks: List<GoalflowTask>,
     habits: List<GoalflowHabit>,
     stats: GoalflowStats,
     progress: GoalflowProgress,
     onBack: () -> Unit
 ) {
-    val today = java.time.LocalDate.now().toString()
     val completedTasks = tasks
         .filter { it.status.name == "COMPLETED" && it.deletedAt == null }
         .sortedWith(compareByDescending<GoalflowTask> { it.completedAt ?: 0L }.thenBy { it.id })

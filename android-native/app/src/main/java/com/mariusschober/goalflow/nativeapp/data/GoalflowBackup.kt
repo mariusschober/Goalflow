@@ -27,7 +27,43 @@ data class GoalflowBackupPayload(
     val syncMeta: List<SyncMetaEntity> = emptyList(),
     val conflicts: List<SyncConflictEntity> = emptyList(),
     /** Raw JSON for web collections without a dedicated native model yet. */
-    val rawCollections: Map<String, String> = emptyMap()
+    val rawCollections: Map<String, String> = emptyMap(),
+    /** Prevents a restore from mixing records from another backend/account. */
+    val syncBinding: GoalflowSyncBinding? = null
+)
+
+data class GoalflowSyncBinding(
+    val backendOrigin: String,
+    val protocolVersion: Int,
+    val accountSubject: String?
+)
+
+data class GoalflowBackupDocument(
+    val payload: GoalflowBackupPayload,
+    val schemaVersion: Int,
+    val exportedAt: String?
+)
+
+data class NativeBackupPreview(
+    val schemaVersion: Int,
+    val exportedAt: String?,
+    val incomingTaskCount: Int,
+    val incomingGoalCount: Int,
+    val incomingHabitCount: Int,
+    val incomingPlanCount: Int,
+    val incomingEventCount: Int,
+    val incomingRawCollectionCount: Int,
+    val tasksToAdd: Int,
+    val tasksToChange: Int,
+    val tasksToRemoveOnReplace: Int,
+    val goalsToAdd: Int,
+    val goalsToChange: Int,
+    val goalsToRemoveOnReplace: Int,
+    val habitsToAdd: Int,
+    val habitsToChange: Int,
+    val habitsToRemoveOnReplace: Int,
+    val syncStateCompatible: Boolean,
+    val syncStateWillBeQuarantined: Boolean
 )
 
 class BackupFormatException(message: String) : IllegalArgumentException(message)
@@ -45,11 +81,15 @@ object GoalflowBackup {
     private const val MAX_CIPHERTEXT_BYTES = 10 * 1024 * 1024
     private const val RAW_JSON_VALUE_KEY = "__goalflowNativeRawJsonV1"
 
-    fun encrypt(payload: GoalflowBackupPayload, password: String): String {
+    fun encrypt(
+        payload: GoalflowBackupPayload,
+        password: String,
+        exportedAt: String = Instant.now().toString()
+    ): String {
         requirePassword(password)
         val salt = ByteArray(16).also(SecureRandom()::nextBytes)
         val iv = ByteArray(12).also(SecureRandom()::nextBytes)
-        val plaintext = backupJson(payload).toString().toByteArray(StandardCharsets.UTF_8)
+        val plaintext = backupJson(payload, exportedAt).toString().toByteArray(StandardCharsets.UTF_8)
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, deriveKey(password, salt, ITERATIONS), GCMParameterSpec(128, iv))
         val ciphertext = cipher.doFinal(plaintext)
@@ -65,7 +105,10 @@ object GoalflowBackup {
         }.toString()
     }
 
-    fun decrypt(envelopeText: String, password: String): GoalflowBackupPayload {
+    fun decrypt(envelopeText: String, password: String): GoalflowBackupPayload =
+        decryptDocument(envelopeText, password).payload
+
+    fun decryptDocument(envelopeText: String, password: String): GoalflowBackupDocument {
         requirePassword(password)
         try {
             val envelope = JSONObject(envelopeText)
@@ -87,7 +130,8 @@ object GoalflowBackup {
             val schemaVersion = envelopePayload.optInt("schemaVersion", 1)
             if (schemaVersion !in 1..SCHEMA_VERSION) throw BackupFormatException("This backup was created by a newer Goalflow version.")
             val collections = envelopePayload.optJSONObject("collections") ?: envelopePayload
-            val payload = parsePayload(collections)
+            val syncBinding = envelopePayload.optJSONObject("syncBinding")?.let(::parseSyncBinding)
+            val payload = parsePayload(collections, syncBinding)
             val expectedChecksum = envelopePayload.optString("checksum", collections.optString("checksum"))
             val rawChecksum = sha256(collections.toString())
             val canonicalChecksum = sha256(checksumSource(payload, schemaVersion).toString())
@@ -99,7 +143,11 @@ object GoalflowBackup {
             ) {
                 throw BackupFormatException("Backup checksum validation failed.")
             }
-            return payload
+            return GoalflowBackupDocument(
+                payload = payload,
+                schemaVersion = schemaVersion,
+                exportedAt = envelopePayload.optString("exportedAt").takeIf(String::isNotBlank)
+            )
         } catch (error: BackupFormatException) {
             throw error
         } catch (_: Exception) {
@@ -107,7 +155,7 @@ object GoalflowBackup {
         }
     }
 
-    private fun parsePayload(collections: JSONObject): GoalflowBackupPayload {
+    private fun parsePayload(collections: JSONObject, syncBinding: GoalflowSyncBinding? = null): GoalflowBackupPayload {
         // The web backup stores only non-empty collections and calls daily
         // planning decisions `daily_plans`; native backups use explicit empty
         // arrays and the shorter `plans` name. Accept both without weakening
@@ -139,7 +187,7 @@ object GoalflowBackup {
         }
         val metadataKeys = setOf(
             "tasks", "goals", "plans", "daily_plans", "events", "task_events", "habits", "outbox", "syncMeta", "conflicts",
-            "rawCollections", "schemaVersion", "exportedAt", "checksum"
+            "rawCollections", "schemaVersion", "exportedAt", "checksum", "syncBinding"
         )
         val directKeys = collections.keys()
         while (directKeys.hasNext()) {
@@ -155,7 +203,8 @@ object GoalflowBackup {
             outbox = optionalArrayOrNull(collections, "outbox")?.let(::parseOutbox).orEmpty(),
             syncMeta = optionalArrayOrNull(collections, "syncMeta")?.let(::parseSyncMeta).orEmpty(),
             conflicts = optionalArrayOrNull(collections, "conflicts")?.let(::parseConflicts).orEmpty(),
-            rawCollections = rawCollections
+            rawCollections = rawCollections,
+            syncBinding = syncBinding
         )
         requireUnique(payload.tasks.map { it.id }, "task")
         requireUnique(payload.goals.map { it.id }, "goal")
@@ -200,11 +249,32 @@ object GoalflowBackup {
         }
     }
 
-    private fun backupJson(payload: GoalflowBackupPayload): JSONObject = JSONObject().apply {
+    private fun backupJson(payload: GoalflowBackupPayload, exportedAt: String): JSONObject = JSONObject().apply {
         put("schemaVersion", SCHEMA_VERSION)
-        put("exportedAt", Instant.now().toString())
+        requireInstant(exportedAt, "backup export timestamp")
+        put("exportedAt", exportedAt)
         put("checksum", sha256(checksumSource(payload).toString()))
         put("collections", checksumSource(payload))
+        payload.syncBinding?.let { put("syncBinding", syncBindingPayload(it)) }
+    }
+
+    private fun syncBindingPayload(binding: GoalflowSyncBinding): JSONObject = JSONObject().apply {
+        if (binding.backendOrigin.isBlank() || binding.protocolVersion <= 0) {
+            throw BackupFormatException("Backup synchronization binding is invalid.")
+        }
+        put("backendOrigin", binding.backendOrigin)
+        put("protocolVersion", binding.protocolVersion)
+        put("accountSubject", binding.accountSubject ?: JSONObject.NULL)
+    }
+
+    private fun parseSyncBinding(value: JSONObject): GoalflowSyncBinding {
+        val backendOrigin = value.optString("backendOrigin").trim()
+        val protocolVersion = value.optInt("protocolVersion", 0)
+        val accountSubject = value.nullableString("accountSubject")
+        if (backendOrigin.isBlank() || protocolVersion <= 0) {
+            throw BackupFormatException("Backup synchronization binding is invalid.")
+        }
+        return GoalflowSyncBinding(backendOrigin, protocolVersion, accountSubject)
     }
 
     private fun checksumSource(payload: GoalflowBackupPayload, schemaVersion: Int = SCHEMA_VERSION): JSONObject = JSONObject().apply {
