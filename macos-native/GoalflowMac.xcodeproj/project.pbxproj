@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		007E36C66EAF2106D3514231 /* GoalflowTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 880B660E82110CAAE59ADDFE /* GoalflowTask.swift */; };
+		0673FCDD5C3E69F35FE7F688 /* BreakTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5038BA3EE94A007C361CAFD /* BreakTests.swift */; };
 		10E03DAA781503AFBC6E19F1 /* SessionCTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED8B433835052765E7E6AE45 /* SessionCTests.swift */; };
 		135DD9D3DA32A0612CAF1B71 /* Clock.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE52DE69BD05AC4D252BB4DA /* Clock.swift */; };
 		1718155336168592F9FA0148 /* FocusSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */; };
@@ -16,6 +17,7 @@
 		4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */; };
 		5710A612E06235FF7D483818 /* ExecutionState.swift in Sources */ = {isa = PBXBuildFile; fileRef = E5C87EF4808BAD06681002F0 /* ExecutionState.swift */; };
 		5722A6922CE4FE200C36E23A /* CompletionHoldController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1EB038AE360BE1536348F106 /* CompletionHoldController.swift */; };
+		5DB9286BBA73464CB5CD7461 /* BreakOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1185E4C2299C0A53C9A8DB57 /* BreakOverlayView.swift */; };
 		5DD963E313BFF17381576342 /* SessionBTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */; };
 		5E8389CAEA35DDE445C7804B /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6684235E22D79D819CB18A13 /* AppDelegate.swift */; };
 		60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */; };
@@ -27,7 +29,11 @@
 		BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */; };
 		BF355797A88E29C871B9C6D4 /* FrogBadge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A4381C35D15C589E1D40DDEC /* FrogBadge.swift */; };
 		C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */; };
+		D0819892FBD4BB230AF1A8AE /* BreakCoverWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC962937822DE8C2E51E9D0B /* BreakCoverWindowController.swift */; };
+		E4CDA98D62567B9132B74BA7 /* BreakState.swift in Sources */ = {isa = PBXBuildFile; fileRef = F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */; };
+		E78C949924887CD6318461D3 /* BreakTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0660F5AC970BC266A22A532D /* BreakTimer.swift */; };
 		F0B4F0EE32D6B024CDB46009 /* ExecutionTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515E9C93B6B9719CF468116B /* ExecutionTimer.swift */; };
+		FF21BC7017A6812FB051FF56 /* BreakSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE465DAECF78F1FB607F6C2 /* BreakSessionStore.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -41,13 +47,16 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		0660F5AC970BC266A22A532D /* BreakTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakTimer.swift; sourceTree = "<group>"; };
 		07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSessionStoreTests.swift; sourceTree = "<group>"; };
+		1185E4C2299C0A53C9A8DB57 /* BreakOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakOverlayView.swift; sourceTree = "<group>"; };
 		1BBBFC89A865C6633CBBE07A /* SchedulingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchedulingTests.swift; sourceTree = "<group>"; };
 		1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimerTests.swift; sourceTree = "<group>"; };
 		1EB038AE360BE1536348F106 /* CompletionHoldController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompletionHoldController.swift; sourceTree = "<group>"; };
 		22B28255CB37DBEE686DBAA4 /* SoundGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGateway.swift; sourceTree = "<group>"; };
 		4DB08E5F433C83D224127157 /* GoalflowMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GoalflowMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		515E9C93B6B9719CF468116B /* ExecutionTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimer.swift; sourceTree = "<group>"; };
+		5AE465DAECF78F1FB607F6C2 /* BreakSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakSessionStore.swift; sourceTree = "<group>"; };
 		6684235E22D79D819CB18A13 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		68F5A6ED2FD04BD29C94E7EF /* CircularProgress.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CircularProgress.swift; sourceTree = "<group>"; };
 		70482D819537B5A5EA7A89F7 /* GoalflowMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = GoalflowMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -57,11 +66,14 @@
 		A8AF22FD8137D7B6FF84A034 /* SessionBTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionBTests.swift; sourceTree = "<group>"; };
 		ABB927C139D6B157B28F18CE /* FocusSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FocusSessionStore.swift; sourceTree = "<group>"; };
 		B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionPanelView.swift; sourceTree = "<group>"; };
+		C5038BA3EE94A007C361CAFD /* BreakTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakTests.swift; sourceTree = "<group>"; };
+		CC962937822DE8C2E51E9D0B /* BreakCoverWindowController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakCoverWindowController.swift; sourceTree = "<group>"; };
 		D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalflowMacApp.swift; sourceTree = "<group>"; };
 		E5C87EF4808BAD06681002F0 /* ExecutionState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionState.swift; sourceTree = "<group>"; };
 		E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionStateTests.swift; sourceTree = "<group>"; };
 		ED8B433835052765E7E6AE45 /* SessionCTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionCTests.swift; sourceTree = "<group>"; };
 		F21CF60C75DE1529F13E73B8 /* CurrentTaskProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CurrentTaskProvider.swift; sourceTree = "<group>"; };
+		F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakState.swift; sourceTree = "<group>"; };
 		FAE072D1C4311EFEA0DC0B39 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		FE52DE69BD05AC4D252BB4DA /* Clock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clock.swift; sourceTree = "<group>"; };
 		FFA4039F314B59CFA20F0483 /* TTSGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSGateway.swift; sourceTree = "<group>"; };
@@ -80,6 +92,8 @@
 		12E22FE03C4739359B319BEB /* UI */ = {
 			isa = PBXGroup;
 			children = (
+				CC962937822DE8C2E51E9D0B /* BreakCoverWindowController.swift */,
+				1185E4C2299C0A53C9A8DB57 /* BreakOverlayView.swift */,
 				B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */,
 				709EFFFA262264B84A634724 /* MenuBarController.swift */,
 				DEC072C4D1BB68140659E710 /* Components */,
@@ -120,6 +134,7 @@
 		A0759524B7F2DAF72654F6D3 /* Domain */ = {
 			isa = PBXGroup;
 			children = (
+				F5F07494A3C0321FC9AE2FE8 /* BreakState.swift */,
 				E5C87EF4808BAD06681002F0 /* ExecutionState.swift */,
 				880B660E82110CAAE59ADDFE /* GoalflowTask.swift */,
 			);
@@ -129,6 +144,7 @@
 		A1E18F7DE90BD7411E05791F /* GoalflowMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				C5038BA3EE94A007C361CAFD /* BreakTests.swift */,
 				E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */,
 				1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */,
 				07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */,
@@ -142,6 +158,8 @@
 		A6794FC7FA49D918360DF595 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				5AE465DAECF78F1FB607F6C2 /* BreakSessionStore.swift */,
+				0660F5AC970BC266A22A532D /* BreakTimer.swift */,
 				FE52DE69BD05AC4D252BB4DA /* Clock.swift */,
 				1EB038AE360BE1536348F106 /* CompletionHoldController.swift */,
 				515E9C93B6B9719CF468116B /* ExecutionTimer.swift */,
@@ -259,6 +277,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				0673FCDD5C3E69F35FE7F688 /* BreakTests.swift in Sources */,
 				60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */,
 				BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */,
 				C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */,
@@ -273,6 +292,11 @@
 			buildActionMask = 2147483647;
 			files = (
 				5E8389CAEA35DDE445C7804B /* AppDelegate.swift in Sources */,
+				D0819892FBD4BB230AF1A8AE /* BreakCoverWindowController.swift in Sources */,
+				5DB9286BBA73464CB5CD7461 /* BreakOverlayView.swift in Sources */,
+				FF21BC7017A6812FB051FF56 /* BreakSessionStore.swift in Sources */,
+				E4CDA98D62567B9132B74BA7 /* BreakState.swift in Sources */,
+				E78C949924887CD6318461D3 /* BreakTimer.swift in Sources */,
 				1E01F12735B34083BC188EEE /* CircularProgress.swift in Sources */,
 				135DD9D3DA32A0612CAF1B71 /* Clock.swift in Sources */,
 				5722A6922CE4FE200C36E23A /* CompletionHoldController.swift in Sources */,

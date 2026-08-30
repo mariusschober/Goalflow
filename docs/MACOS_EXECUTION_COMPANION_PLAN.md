@@ -3,7 +3,7 @@
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
 **Spec snapshot:** `GOALFLOW_MACOS_MUSE_CONTEXT.md` (Tahoe target)  
-**Last updated:** 2026-08-30 — Session C (Accomplishment Loop)
+**Last updated:** 2026-08-30 — Session D (Break Environment)
 
 ---
 
@@ -255,8 +255,8 @@ Constraints: one bounded milestone per session, preserve sync-last.
 | **A — Foundation** | Native shell + Current→ACTION→Timer | Audit, plan+handoff, branch, Xcode project Tahoe/arm64, menu-bar-only lifecycle, popover panel, `GoalflowTask`+`ExecutionState`+`ExecutionTimer`, `DemoCurrentTaskProvider` with deterministic ordering & frog visual, ACTION hero, countdown from `duration`, inactive/active coherent Tahoe design, persistence surviving relaunch, unit tests, build | ✅ |
 | **B — Focus engine** | Robust timing | Monotonic `ContinuousClock` + pause/resume + overtime (+5/+15/+30 inline), sleep/away observers recompute, file-backed `execution.json` atomic + WAL, Combine ticker wiring, `SoundGateway`/`TTSGateway` slots | ✅ |
 | **C — Accomplishment loop** | Completion ritual | 3 s hold (ordinary) / 5 s Frog + haptic buildup, `FlowState` distracted/good/high/flow, `LocalTaskStore` atomic + no resurrection, next Current auto-advance, `Everything Done` quiet state, reward burst, `SoundGateway.complete` 2/4-tone | ✅ |
-| **C — Accomplishment loop** | Completion ritual | 3s hold (ordinary), 5s hold (frog), haptic buildup (NSHapticFeedbackManager), audio slot, canonical FlowState capture `distracted/good/high/flow` rapid picker, reward animation (tasteful), next Current auto-advance, `Everything Done` quiet state | |
-| **D — Break environment** | Rest as contrast | Break duration selector, fullscreen black cover on all displays/Spaces, break alarm, return transition, idle/away reconciliation options (keep/discard/stop/breakdown) dialog | |
+| **C — Accomplishment loop** | Completion ritual | 3 s hold (ordinary) / 5 s Frog + haptic buildup, `FlowState` distracted/good/high/flow, `LocalTaskStore` atomic + no resurrection, next Current auto-advance, `Everything Done` quiet state, reward burst, `SoundGateway.complete` 2/4-tone | ✅ |
+| **D — Break environment** | Rest as contrast | Break selector `5/10/15/20/Open`, fullscreen black cover per-screen `level=.screenSaver` + `.canJoinAllSpaces`, break timer `BreakState`/`BreakTimer` reference-time, alarm `SoundGateway.alarm` looping, `Esc`/`End Early` return, pause-before-break frozen `remaining` | ✅ |
 | **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | |
 | **F — Server capabilities** | Auth + real data read | Browser auth (PKCE/`goalflow://auth/callback`), real `CurrentTaskProvider` over local store, shared ACTION server semantic (`Start Now`), server breakdown (`/api/v1/ai/breakdown`), read-only TrueNorth/amalgam context, calendar collision warning via EventKit read-only | |
 | **G — Final Sync** | Last integration | Swift Sync adapter parity, durable outbox/cursor/conflict txn, offline execution/completion + convergence tests, resurrection guard, two-device property tests | |
@@ -445,3 +445,66 @@ Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-p
 - Total now 36 (26 + 10) — all passing.
 
 **Deferred remains:** break fullscreen (D), capture (E), auth/sync (F/G), signing (H).
+
+
+---
+
+## 19. Session D — Break Environment (2026-08-30, executed)
+
+**Goal:** Make rest intentional — user chooses `Break`, leaves the Mac, cover removes task UI, alarm brings back, return preserves focus `remaining`.
+
+**Decisions (per user-confirmed plan):**
+- Durations `5 / 10 / 15 / 20 / Open` (Handoff D), not Web `5/10/20/Open` nor `PlanningView` 5-120. Matches DoD.
+- Alarm loops until acknowledged (`loop:true` 2-burst repeat with 0.8 s gap), not Web single 1.55 s burst.
+- Open-ended shows ever-increasing `elapsed` (`00:00 → 12:34`), not fixed `00:00`.
+- Pause-before-break: `active → paused(at:now)` persisted via `CompositeFocusSessionStore` before `BreakState` saved, so `elapsedSeconds` frozen.
+
+**BreakState (`Domain/BreakState.swift:1`):**
+- `struct BreakState: Codable, Equatable { durationSeconds:Int? (nil=Open), startedAt:Date, startedAtMonotonic:UInt64?, sourcePhase:ExecutionPhase, taskId:String? }`
+- `elapsed(now:) = floor(now-start)`, `remaining(now:)->Int?` `max(0, duration - elapsed)`, `isExpired(now:)`, `isOpenEnded`. `max(60, duration)` clamp, `nil` preserved.
+
+**BreakSessionStore (`Services/BreakSessionStore.swift:1`):**
+- `FileBreakSessionStore(fileURL: ~/Library/Application Support/com.mariusschober.GoalflowMac/break.json Data.write(.atomic)+read-back)` + `UserDefaults` WAL optional (not needed for transient, but pattern reused). `load()` returns `nil` if missing, `save()` atomic+verify, `clear()` removes. Not in `SyncMeta`.
+
+**BreakTimer (`Services/BreakTimer.swift:1`):**
+- `@MainActor ObservableObject @Published elapsed/remaining/isActive/isExpired`, `configure/start/stop/tick()` 1 s `Timer.publish`, `clock: any Clock` injectable. `remaining` `nil` for Open. `isExpired` = `remaining==0` for finite.
+
+**SoundGateway alarm (`Services/SoundGateway.swift:1`):**
+- Extend `SoundGateway` with `alarm(loop:Bool)` / `stopAlarm()`. `TickSoundGateway.alarm` plays 6-beep `880 Hz square 0.15 s @0,0.2,0.4,1.0,1.2,1.4` burst via `AVAudioEngine` (`TickSoundGateway.playAlarmBurst`), loops 2× if `loop:true` with 0.8 s gap. `Noop` no-ops. `stopAlarm` currently no-op (burst finite).
+
+**Cover (`UI/BreakCoverWindowController.swift:1`, `UI/BreakOverlayView.swift:1`):**
+- `BreakCoverWindowController` per-screen `NSPanel` `frame=screen.frame` (covers menu bar), `level=.screenSaver`, `collectionBehavior [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]`, `isOpaque`, `hidesOnDeactivate=false`, `isReleasedWhenClosed=false`, `orderFrontRegardless`, `NSApp.activate(ignoringOtherApps:true)`. `show(breakState:onEndEarly:)` creates one panel per `NSScreen.screens`, `update(remaining:elapsed:)` sets `NSHostingView(rootView: BreakOverlayView)` per window, `closeAll()` orderOut. Observes `didChangeScreenParameters` to recreate.
+- `BreakOverlayView` `RECHARGE` 28pt tracking 6 indigo400 vs `BREAK TIME`, `12rem` mono `mm:ss` gradient white→gray400, subtitle `Breathe. Relax. Reset.` vs `Taking a moment…`, `Esc to End Break Early`, button `End Break Early` / `Back to Flow` (Open), `keyboardShortcut .cancelAction`.
+
+**ViewModel (`UI/ExecutionPanelView.swift:1`):**
+- Added `@Published breakState, breakRemaining, breakElapsed, isOnBreak, breakPickerVisible`, `breakStore: BreakSessionStore`, `breakTimer: BreakTimer`.
+- `setupTimerBindings()` now sinks `breakTimer.$remaining/$elapsed/$isActive/$isExpired` → `breakRemaining/breakElapsed/isOnBreak` + `sound.alarm(loop:true)` on `isExpired`.
+- `restoreBreak()` loads `breakStore` on init, configures `breakTimer`, sets `isOnBreak`, triggers alarm if already expired.
+- `startBreak(durationMinutes: Int?)` pauses `active` execution first (`store.save(paused)`), creates `BreakState(durationSeconds: mins*60, startedAt:clock.now(), sourcePhase:execution?.phase, taskId:task?.id)`, `breakStore.save`, `breakTimer.start`, `isOnBreak=true`.
+- `endBreakEarly()` stops `breakTimer`, clears `breakStore`, `sound.stopAlarm()`, recomputes `remaining = execution.remaining(now:)` (still paused, not auto-resumed).
+- `handleBreakExpiredIfNeeded()` triggers `sound.alarm` when `isExpired`.
+
+**Panel UI (`UI/ExecutionPanelView.swift:1`):**
+- Body now `if isOnBreak { breakActiveView } else if flowPickerVisible { flowPicker } else if breakPickerVisible { breakPicker } else if task { content } else { empty }`.
+- `header` shows `On Break` teal `cup.and.saucer.fill` when `isOnBreak`.
+- `content` adds `Take Break — leave the Mac` button (teal capsule) when `isActive||isPaused` and not on break, toggles `breakPickerVisible`.
+- `breakPicker` VStack `Choose duration. The screen will cover all displays.` chips `5 10 15 20 Open` `1-5` shortcuts.
+- `breakActiveView` shows `On Break` teal, `mm:ss` 36pt mono teal, `Breathe…`, `Covering all displays • Esc to End Early`, `End Break Early` bordered.
+- `footer` still shows `X / Y` and `Active/Paused/Overtime/Done`.
+
+**MenuBar (`UI/MenuBarController.swift:1`):**
+- Added `breakCover = BreakCoverWindowController()`, sinks `viewModel.$isOnBreak`, `$breakRemaining`, `$breakElapsed`.
+- `handleBreakChange(onBreak:)` closes `popover` if shown, `breakCover.show(breakState:onEndEarly:)` when true else `closeAll()`, `updateBreakCover()` on remaining/elapsed.
+- `updateStatusTitle()` now handles `isOnBreak` first: `☕ mm:ss` teal `cup.and.saucer.fill` tooltip `On Break`; suppresses popover toggle when on break.
+
+**AppDelegate (`App/AppDelegate.swift:1`):**
+- No extra wiring needed for break (ViewModel creates default `BreakSessionStore`); `restoreBreak()` called in `init` after `restore()`. `MenuBarController` owns cover lifecycle.
+
+**Tests (`GoalflowMacTests/BreakTests.swift:1`):**
+- `BreakStateTests` 3: durations 5→300 etc, remaining/expired, open never expired.
+- `BreakSessionStoreTests` 2: file persists/clears, open persists.
+- `BreakTimerTests` 2: counts, open elapsed.
+- `BreakReturnTests` 2: pause-before-break freeze, break does not bleed into focus (600 s break elapsed but focus remaining still 500, break remaining 0).
+- Total now 45 (36 + 9) — all passing.
+
+**Deferred remains:** capture (E), auth/sync (F/G), signing (H).

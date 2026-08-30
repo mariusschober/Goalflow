@@ -14,19 +14,26 @@ final class ExecutionViewModel: ObservableObject {
     @Published var showReward: Bool = false
     @Published var completedTodayCount: Int = 0
     @Published var queueCount: Int = 0
+    @Published var breakState: BreakState?
+    @Published var breakRemaining: Int? = nil
+    @Published var breakElapsed: Int = 0
+    @Published var isOnBreak: Bool = false
+    @Published var breakPickerVisible: Bool = false
     private let provider: DemoCurrentTaskProvider
     private let store: any FocusSessionStore
     private let clock: any Clock
     private let timer = ExecutionTimer()
+    private let breakTimer = BreakTimer()
+    private let breakStore: BreakSessionStore
     private let sound: any SoundGateway
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
     private var holdController: CompletionHoldController?
     private var holdTimer: AnyCancellable?
     private var pendingCompletedId: String?
-    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway()) {
-        self.provider = provider; self.store = store; self.clock = clock; self.sound = sound
-        setupTimerBindings(); restore()
+    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore()) {
+        self.provider = provider; self.store = store; self.clock = clock; self.sound = sound; self.breakStore = breakStore
+        setupTimerBindings(); restore(); restoreBreak()
     }
     private func setupTimerBindings() {
         timer.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.remainingSeconds = v }.store(in: &cancellables)
@@ -37,6 +44,12 @@ final class ExecutionViewModel: ObservableObject {
         }.store(in: &cancellables)
         timer.$isPaused.receive(on: DispatchQueue.main).sink { [weak self] v in self?.isPaused = v }.store(in: &cancellables)
         timer.$isActive.receive(on: DispatchQueue.main).sink { [weak self] _ in self?.objectWillChange.send() }.store(in: &cancellables)
+        breakTimer.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.breakRemaining = v }.store(in: &cancellables)
+        breakTimer.$elapsedSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.breakElapsed = v }.store(in: &cancellables)
+        breakTimer.$isActive.receive(on: DispatchQueue.main).sink { [weak self] v in self?.isOnBreak = v; if !v { self?.handleBreakExpiredIfNeeded() } }.store(in: &cancellables)
+        breakTimer.$isExpired.receive(on: DispatchQueue.main).sink { [weak self] expired in
+            if expired { self?.sound.alarm(loop: true) }
+        }.store(in: &cancellables)
     }
     func restore() {
         task = provider.fetchCurrent()
@@ -53,6 +66,73 @@ final class ExecutionViewModel: ObservableObject {
         else if let t = task { remainingSeconds = t.plannedDurationSeconds; overtimeSeconds = 0; isPaused = false }
         else { remainingSeconds = 0; overtimeSeconds = 0; isPaused = false }
     }
+
+    func restoreBreak() {
+        if let bs = breakStore.load() {
+            breakState = bs
+            breakTimer.configure(state: bs, clock: clock)
+            isOnBreak = true
+            breakRemaining = bs.remainingSeconds(now: clock.now())
+            breakElapsed = bs.elapsedSeconds(now: clock.now())
+            if bs.isExpired(now: clock.now()) {
+                sound.alarm(loop: true)
+            }
+        } else {
+            breakState = nil
+            breakRemaining = nil
+            breakElapsed = 0
+            isOnBreak = false
+        }
+    }
+
+    func startBreak(durationMinutes: Int?) {
+        if let e = execution, e.isActive {
+            if let paused = e.paused(at: clock.now()) {
+                try? store.save(paused)
+                execution = paused
+                timer.reflectPause(paused)
+                isPaused = true
+                remainingSeconds = paused.remainingSeconds(now: clock.now())
+                overtimeSeconds = paused.overtimeSeconds(now: clock.now())
+            }
+        }
+        let durationSeconds: Int? = durationMinutes != nil ? durationMinutes! * 60 : nil
+        let bs = BreakState(durationSeconds: durationSeconds, startedAt: clock.now(), startedAtMonotonic: (clock as? any MonotonicClock)?.monotonicNow, sourcePhase: execution?.phase ?? .idle, taskId: task?.id)
+        do {
+            try breakStore.save(bs)
+            breakState = bs
+            breakTimer.start(state: bs)
+            isOnBreak = true
+            breakRemaining = bs.remainingSeconds(now: clock.now())
+            breakElapsed = bs.elapsedSeconds(now: clock.now())
+            breakPickerVisible = false
+        } catch {
+            print("[Break] start failed:", error)
+        }
+    }
+
+    func endBreakEarly() {
+        guard isOnBreak else { return }
+        breakTimer.stop()
+        isOnBreak = false
+        breakState = nil
+        breakRemaining = nil
+        breakElapsed = 0
+        try? breakStore.clear()
+        sound.stopAlarm()
+        if let e = execution {
+            remainingSeconds = e.remainingSeconds(now: clock.now())
+            overtimeSeconds = e.overtimeSeconds(now: clock.now())
+        }
+        breakPickerVisible = false
+    }
+
+    private func handleBreakExpiredIfNeeded() {
+        if let bs = breakState, bs.isExpired(now: clock.now()) {
+            sound.alarm(loop: true)
+        }
+    }
+
     var isActive: Bool { execution?.isActive == true }
     var isOvertime: Bool { overtimeSeconds > 0 }
     var progress: Double {
@@ -91,6 +171,9 @@ final class ExecutionViewModel: ObservableObject {
         do { try store.save(next); execution = next; timer.reflectExtend(next) } catch { print("[Execution] extend persist failed:", error) }
     }
     func add5() { extend(by: 5*60) }; func add15() { extend(by: 15*60) }; func add30() { extend(by: 30*60) }
+
+    // MARK: - Break
+
     var holdDuration: TimeInterval { (task?.isFrog == true) ? 5.0 : 3.0 }
     func beginHold() {
         guard let t = task, execution != nil, !holding else { return }
@@ -168,7 +251,9 @@ struct ExecutionPanelView: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider().opacity(0.08)
-            if vm.flowPickerVisible { flowPicker } else if let task = vm.task { content(task: task) } else { empty }
+            if vm.isOnBreak {
+                breakActiveView
+            } else if vm.flowPickerVisible { flowPicker } else if vm.breakPickerVisible { breakPicker } else if let task = vm.task { content(task: task) } else { empty }
             footer
         }
         .frame(width: 380)
@@ -193,11 +278,11 @@ struct ExecutionPanelView: View {
     }
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: vm.isPaused ? "pause.circle.fill" : vm.isOvertime ? "exclamationmark.circle.fill" : "scope")
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(vm.isOvertime ? Color.orange : .secondary)
-            Text(vm.isPaused ? "Paused" : vm.isOvertime ? "Overtime" : "Current")
+            Image(systemName: vm.isOnBreak ? "cup.and.saucer.fill" : vm.isPaused ? "pause.circle.fill" : vm.isOvertime ? "exclamationmark.circle.fill" : "scope")
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(vm.isOnBreak ? Color.teal : vm.isOvertime ? Color.orange : .secondary)
+            Text(vm.isOnBreak ? "On Break" : vm.isPaused ? "Paused" : vm.isOvertime ? "Overtime" : "Current")
                 .font(.system(size: 11, weight: .semibold, design: .rounded)).tracking(0.8).textCase(.uppercase)
-                .foregroundStyle(vm.isOvertime ? Color.orange : .secondary)
+                .foregroundStyle(vm.isOnBreak ? Color.teal : vm.isOvertime ? Color.orange : .secondary)
             Spacer()
             if let task = vm.task, task.isFrog { FrogBadge(compact: true) }
             Menu {
@@ -236,6 +321,42 @@ struct ExecutionPanelView: View {
     }
     private func colorForFlow(_ flow: FlowState) -> Color {
         switch flow { case .distracted: return Color.gray; case .good: return Color.blue; case .high: return Color.indigo; case .flow: return Color.purple }
+    }
+
+    private var breakPicker: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Take a break — leave the Mac.").font(.system(size: 13, weight: .semibold, design: .rounded))
+            Text("Choose duration. The screen will cover all displays.").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                ForEach([5,10,15,20], id: \.self) { mins in
+                    Button(action: { vm.startBreak(durationMinutes: mins) }) {
+                        Text("\(mins)m").font(.system(size: 12, weight: .bold, design: .rounded))
+                            .frame(maxWidth: .infinity).padding(.vertical, 10)
+                            .background(Capsule().fill(Color.teal.opacity(0.14)))
+                            .overlay(Capsule().stroke(Color.teal.opacity(0.24), lineWidth: 1))
+                    }.buttonStyle(.plain).keyboardShortcut(mins == 5 ? "1" : mins == 10 ? "2" : mins == 15 ? "3" : "4")
+                }
+                Button(action: { vm.startBreak(durationMinutes: nil) }) {
+                    Text("Open").font(.system(size: 12, weight: .bold, design: .rounded))
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .background(Capsule().fill(Color.gray.opacity(0.12)))
+                        .overlay(Capsule().stroke(Color.gray.opacity(0.22), lineWidth: 1))
+                }.buttonStyle(.plain).keyboardShortcut("5")
+            }
+            Button("Cancel (Esc)") { vm.breakPickerVisible = false }.font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).keyboardShortcut(.cancelAction)
+        }.padding(.horizontal, 16).padding(.vertical, 16)
+    }
+
+    private var breakActiveView: some View {
+        VStack(spacing: 16) {
+            Text("On Break").font(.system(size: 13, weight: .semibold, design: .rounded)).foregroundStyle(Color.teal)
+            Text(vm.breakState?.isOpenEnded == true ? String(format: "%02d:%02d", vm.breakElapsed/60, vm.breakElapsed%60) : String(format: "%02d:%02d", (vm.breakRemaining ?? 0)/60, (vm.breakRemaining ?? 0)%60))
+                .font(.system(size: 36, weight: .bold, design: .rounded).monospacedDigit())
+                .foregroundStyle(Color.teal)
+            Text("Breathe. Relax. Reset.").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
+            Text("Covering all displays • Esc to End Early").font(.system(size: 10, weight: .regular)).foregroundStyle(.secondary.opacity(0.7))
+            Button("End Break Early (Esc)") { vm.endBreakEarly() }.buttonStyle(.bordered).keyboardShortcut(.cancelAction)
+        }.padding(24).frame(maxWidth: .infinity)
     }
     private func content(task: GoalflowTask) -> some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -294,6 +415,19 @@ struct ExecutionPanelView: View {
                     }.buttonStyle(.plain).keyboardShortcut(.defaultAction)
                 }
             }.padding(.vertical, 4).animation(.easeInOut(duration: 0.35), value: vm.isActive).animation(.easeInOut(duration: 0.35), value: vm.isPaused).animation(.easeInOut(duration: 0.35), value: vm.isOvertime)
+            if vm.isActive || vm.isPaused {
+                if !vm.breakPickerVisible && !vm.isOnBreak {
+                    Button(action: { vm.breakPickerVisible = true }) {
+                        Label("Take Break — leave the Mac", systemImage: "cup.and.saucer")
+                            .font(.system(size: 11, weight: .medium, design: .rounded))
+                            .foregroundStyle(Color.teal)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Color.teal.opacity(0.10)))
+                            .overlay(Capsule().stroke(Color.teal.opacity(0.18), lineWidth: 1))
+                    }.buttonStyle(.plain)
+                }
+            }
             if !(vm.isActive || vm.isPaused || vm.isOvertime) {
                 Text("Tap ACTION to start. The timer counts from \(task.durationMinutes) minutes — it will persist if Goalflow restarts. Pause is low friction; overtime counts separately.")
                     .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
