@@ -53,6 +53,7 @@ Excluded unless a direct web production blocker requires otherwise: native Andro
 - Materialized the exact branch text tree through the connected GitHub integration after direct shell Git authentication proved unavailable. The local web mirror contains 137 web/server/migration/test/documentation files. Remote binary asset SHAs remain unchanged and were not copied into the local mirror.
 - Installed the locked dependency graph with Node `v24.19.0` / npm `11.9.0`: 676 packages installed.
 - Executed the complete sequential release script at the isolated head: TypeScript, 102 tests, client/server builds, production health startup, client bundle secret scan, and dependency audit all passed.
+- Installed and executed PostgreSQL `16.15` in a disposable local cluster. The static migration verifier, empty-database migration path, seeded current-schema upgrade path, integrity assertions, and malformed-CASE regression all passed.
 - No production branch, production database, or production deployment was modified.
 
 ## Test and command evidence
@@ -74,7 +75,10 @@ Evidence generated in this mission:
 | Production startup/health | `npm run verify:server` | PASS; HTTP 200, `status=ok`, version `0.1.0`; local test intentionally had no cloud credentials |
 | Client secret scan | `npm run verify:client-secrets` after build | PASS across 23 built files |
 | Dependency audit | `npm audit --audit-level=high` | PASS; 0 vulnerabilities |
-| PostgreSQL 16 migrations | Not executed yet in this mission | PENDING |
+| Migration static verification | `npm run verify:migrations` | PASS; 6 migrations, empty order and additive safety |
+| PostgreSQL identity | `select version(); select current_user;` | PASS; PostgreSQL 16.15, superuser `postgres` |
+| Empty + seeded migration harness | `bash scripts/test-postgres-migrations.sh` | PASS; empty database, current-schema upgrade, idempotency, conflict preservation, cursor rebase, atomic restore, native task events, unknown payload preservation |
+| PostgreSQL CASE regression | `bash scripts/test-postgres-migration-case-regression.sh` | PASS; malformed CASE rejected and full corrected harness accepted |
 | Browser/PWA/staging/RLS/backup/rollback | Not executed yet in this mission | PENDING |
 
 Inherited repository documentation claims local PASS at earlier commit `5e30d7831de9bd12fd5ba0e190ac0ce799a40324` for lint, 102 tests, builds, migration verification, and PostgreSQL harness. Those claims are orientation only and must be reproduced at this branch head.
@@ -86,6 +90,7 @@ Inherited repository documentation claims local PASS at earlier commit `5e30d783
 - **Decision:** Repeatedly rerunning zero-step GitHub Actions failures has no release value.
 - **Decision:** Direct shell Git authentication remains unavailable, so connector-backed source materialization and connector-backed commits are the safe execution path. This no longer blocks local web gates.
 - **Constraint:** The local mirror omits binary PWA icon files. The remote branch still contains their original blobs. Local build evidence is valid for code and bundling, but PWA icon/install evidence must come from an exact staging deployment or a credentialed full checkout.
+- **Decision:** The PostgreSQL gate used real Ubuntu PostgreSQL 16.15 binaries and disposable databases. The executor maps only UID 0, so a temporary preload shim reported the existing `nobody` identity and ownership metadata to PostgreSQL and disabled Unix sockets; the server ran over loopback TCP. The shim was outside the repository and changes no SQL or database behavior. PostgreSQL version and user were queried before the harness.
 - **Defect/blocker:** Hosted CI cannot currently provide code evidence because jobs fail before steps.
 - **Unknown:** Railway project/environment, Supabase staging project, secret availability, deployment URL, and production rollback/backup configuration have not yet been verified.
 - **Unknown:** Real Chrome/Safari, PWA, RLS, backup/restore, and two-browser behavior remain unproven.
@@ -108,16 +113,16 @@ Never commit credentials or copy secrets into logs, tests, fixtures, or this han
 
 **NO-GO — web/PWA production release is unproven.**
 
-Reason: the current-head web/server/security baseline is green, but executable PostgreSQL evidence, exact browser/PWA evidence, staging identity/health, RLS isolation drill, backup/restore proof, and rollback proof do not yet exist for this mission.
+Reason: the current-head web/server/security and PostgreSQL gates are green, but exact browser/PWA evidence, staging identity/health, real Supabase RLS isolation, staging backup/restore, and rollback proof do not yet exist for this mission.
 
 ## Exact next actions and commands
 
-Run PostgreSQL verification next (after confirming a PostgreSQL 16 runtime is available):
+Review PR #1 against the current production base next:
 
 ```bash
-npm run verify:migrations
-bash scripts/test-postgres-migrations.sh
-bash scripts/test-postgres-migration-case-regression.sh
+git log --oneline --decorate --graph goalflow-production..codex/zero-data-loss-finalization
+git diff --stat goalflow-production...codex/zero-data-loss-finalization
+git diff goalflow-production...codex/zero-data-loss-finalization -- services hooks server supabase scripts package.json .github
 ```
 
 Then inspect actual scripts before invoking any non-existent aliases:
