@@ -11,7 +11,10 @@ mkdir -p "$apk_dir" "$runner_temp"
 apk="$apk_dir/app-production-debug.apk"
 printf '%s\n' 'test-only apk' > "$apk"
 found_apk="$(find "$apk_dir" -name '*.apk' -print -quit)"
-[ "$found_apk" = /* ]
+case "$found_apk" in
+    /*) ;;
+    *) exit 1 ;;
+esac
 [ "$found_apk" = "$apk" ]
 printf '%s\n' "$found_apk" > "$runner_temp/goalflow-production-debug-apk"
 
