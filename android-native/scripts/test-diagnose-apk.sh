@@ -50,7 +50,6 @@ primary_output="$(
     PATH="$tool_dir:$PATH" \
     EXPECTED_APK="$work_dir/test.apk" \
     CALL_LOG="$work_dir/aapt2-call" \
-    AAPT2_INCLUDE_SDK=0 \
     AAPT2_INCLUDE_SDK=1 \
     GOALFLOW_APK_LABEL=TEST-ONLY \
     "$script_dir/diagnose-apk.sh" "$work_dir/test.apk"
@@ -62,6 +61,7 @@ output="$(
     PATH="$tool_dir:$PATH" \
     EXPECTED_APK="$work_dir/test.apk" \
     CALL_LOG="$work_dir/aapt2-call" \
+    AAPT2_INCLUDE_SDK=0 \
     GOALFLOW_APK_LABEL=TEST-ONLY \
     "$script_dir/diagnose-apk.sh" "$work_dir/test.apk"
 )"
