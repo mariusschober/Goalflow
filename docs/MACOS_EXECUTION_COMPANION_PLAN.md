@@ -3,14 +3,14 @@
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
 **Spec snapshot:** `GOALFLOW_MACOS_MUSE_CONTEXT.md` (Tahoe target)  
-**Last updated:** 2026-08-30 — Session D (Break Environment)
+**Last updated:** 2026-08-30 — Session F (Server Capabilities)
 
 ---
 
 ## 1. Base identity & isolation
 
 - Recorded exact SHA at session start: `f93684ac50562c03c99328d98e57eb67f862eb3b`. Confirmed via `git fetch origin && git rev-parse origin/goalflow-production`. Local HEAD before branch was `7fa5a17` (goalflow-production behind remote by 5 tranche-1 Android migration commits). Branch `feature/macos-execution-companion` created tip-on that SHA. If branch already exists in a later session, verify `git merge-base` equals that SHA and re-record with `git log --oneline -5`.
-- No direct commits to `goalflow-production`. All Mac work under `macos-native/`. Cross-cutting docs under `docs/MACOS_*`. No modifications to `android-native/`, `android/`, or sync server contracts in Session A-D.
+- No direct commits to `goalflow-production`. All Mac work under `macos-native/`. Cross-cutting docs under `docs/MACOS_*`. No modifications to `android-native/`, `android/`, or sync server contracts in Session A-F (read-only until G).
 - Integration rule: do not rebase on moving production until milestones are coherent. Final integration is a deliberate merge with QA.
 
 ---
@@ -257,8 +257,8 @@ Constraints: one bounded milestone per session, preserve sync-last.
 | **C — Accomplishment loop** | Completion ritual | 3 s hold (ordinary) / 5 s Frog + haptic buildup, `FlowState` distracted/good/high/flow, `LocalTaskStore` atomic + no resurrection, next Current auto-advance, `Everything Done` quiet state, reward burst, `SoundGateway.complete` 2/4-tone | ✅ |
 | **C — Accomplishment loop** | Completion ritual | 3 s hold (ordinary) / 5 s Frog + haptic buildup, `FlowState` distracted/good/high/flow, `LocalTaskStore` atomic + no resurrection, next Current auto-advance, `Everything Done` quiet state, reward burst, `SoundGateway.complete` 2/4-tone | ✅ |
 | **D — Break environment** | Rest as contrast | Break selector `5/10/15/20/Open`, fullscreen black cover per-screen `level=.screenSaver` + `.canJoinAllSpaces`, break timer `BreakState`/`BreakTimer` reference-time, alarm `SoundGateway.alarm` looping, `Esc`/`End Early` return, pause-before-break frozen `remaining` | ✅ |
-| **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | |
-| **F — Server capabilities** | Auth + real data read | Browser auth (PKCE/`goalflow://auth/callback`), real `CurrentTaskProvider` over local store, shared ACTION server semantic (`Start Now`), server breakdown (`/api/v1/ai/breakdown`), read-only TrueNorth/amalgam context, calendar collision warning via EventKit read-only | |
+| **E — Capture & context** | Entry without planning drift | Global shortcut (MASShortcut-style, user-configurable), centered overlay like Spotlight, schedule invariant `Select date`, date/month picker fallback, notes/URLs, ADD vs ACTION gateway, hashtag→app mapping launch (`NSWorkspace.open`), privacy mode | ✅ |
+| **F — Server capabilities** | Auth + real data read | Browser auth (PKCE/`goalflow://auth/callback`), real `CurrentTaskProvider` over local store, shared ACTION server semantic (`Start Now`), server breakdown (`/api/v1/ai/breakdown`), read-only TrueNorth/amalgam context, calendar collision warning via EventKit read-only | ✅ |
 | **G — Final Sync** | Last integration | Swift Sync adapter parity, durable outbox/cursor/conflict txn, offline execution/completion + convergence tests, resurrection guard, two-device property tests | |
 | **H — Hardening** | Ship quality | Login item, Sparkle update, hardened entitlements, code sign/notarization prep, privacy (screen sharing detection via `CGWindowListCopyWindowInfo`/ScreenCaptureKit, not brittle), multi-display/Spaces polish, launch at login, a11y/voiceover pass, performance, release packaging, final merge to production | |
 
@@ -560,5 +560,75 @@ Entry criteria: verify no outstanding Sync-breaking change on `origin/goalflow-p
 - `CaptureServiceTests` 6: ADD persists + no resurrection, empty title `invalidTitle`, tail `plannedOrder 0/1/0`, month future+time validation, URL→notes+tags, day `14:30` vs invalid.
 - `CaptureViewModelTests` 7 @MainActor: `needsDate` factory, parsed date `canSubmit`, picker flow `ADD` creates with `selectedDate`, month picker `future month`, notes+URL, privacy blank `••••`, empty title fails `errorMessage`.
 - Total now 78 (45 +33) — all passing.
+
+---
+
+## 21. Session F — Server Capabilities (2026-08-30, executed)
+
+**Goal:** Read real user data behind auth, gate Current with planning, share ACTION/breakdown semantics, surface read-only context and calendar overlap — without yet pushing sync.
+
+**Decisions (per user delegation to recommendations):**
+- Auth: `ASWebAuthenticationSession` (system sheet, cancelable) with PKCE `code_verifier 32B base64url` `code_challenge SHA256 base64url` `state UUID`, `SupabaseAuthService.shared`; `KeychainSessionStore` `kSecClassGenericPassword com.mariusschober.goalflow.mac service session kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly kSecUseDataProtectionKeychain` non-syncable; `Info.plist CFBundleURLTypes goalflow` + `AppDelegate application(_:open:)` `goalflow://auth/callback?code&state` or `#access_token` fragment fallback; `NotificationCenter .authDidChange`.
+- Config: `SUPABASE_URL/SUPABASE_ANON_KEY/API_ORIGIN` via `Info.plist` (`SUPABASE_URL` `SUPABASE_ANON_KEY` `API_ORIGIN https://app.goalflow.com`) + `UserDefaults` override; `ENABLE_LOCAL_DEMO true` keeps `Bearer local-demo` path via `localDemo` pseudo-token.
+- Gate: Swift port `getPlanningGate` precedence 1 monthly `scheduledFor<=currentMonth` → `monthlyPlanningRequired`, 2 overdue `<today` or `queue>0 && !planMatches` → `dailyPlanningRequired`, 3 ready, 4 empty; `planMatches` filters `taskIds` to `plannedIds` order+length eq (matches `scheduling.test.ts:93`). Store `DailyPlanStore`/`GoalStore`/`TrueNorthStore`/`AmalgamStore` file+WAL `UserDefaults` mirror like `LocalTaskStore`.
+- Provider: keep `DemoCurrentTaskProvider` but compute gate in `ExecutionViewModel` via `dailyPlanStore` + `goalStore` etc.; `SyncBackedCurrentTaskProvider` exists for future but `Demo` with `gateEnabled:true` (AppDelegate) yields same gate wall. `task.goalId` added to `GoalflowTask`.
+- ACTION prep: local `ExecutionState` still created, `extraJson {plannedDuration, startedAt}` prepared for G; no server `POST` yet.
+- Breakdown: `ServerBreakdownGateway` `POST /api/v1/ai/breakdown {"taskTitle"}` `Bearer` + alias `/api/gemini/breakdown` → `subtasks 1..8 {title 1..240, estimatedDuration 1..1440}` 429 quota / 503 circuit surfaced; `LocalBreakdownService` validates `1..50 children` title+duration+`assertSchedule(.day, today)` tail `plannedOrder parent+index`, closes parent `broken_down version+1 updatedAt extraJson completedAt`, inserts children `parentTaskId` `version1`, plan-preservation replaces parent id with children ids when `previousPlan.taskIds==previousQueueIds` else deletes plan, single `saveAll` txn.
+- Calendar: `CalendarCollisionService` `EKEventStore` `requestFullAccessToEvents` (14) fallback `requestAccess(to:.event)`, `Info.plist NSCalendarsUsageDescription/NSCalendarsFullAccessUsageDescription`, interval `[taskStart 14:30, +duration)` vs `predicateForEvents(withStart:endOfDay)` filter `!isAllDay && start < taskEnd && end > taskStart`; `NoopCalendarService` for tests; UI amber capsule `⚠️ Overlaps calendar: “Sprint Planning” 14:00–15:00` or `Check calendar` button when notDetermined.
+
+**PlanningGate (`Domain/PlanningGate.swift:1`):**
+- `DailyPlan {localDate: String(YYYY-MM-DD), confirmedAt: String, taskIds:[String]}` `PlanningGate {monthlyPlanningRequired(month,taskIds), dailyPlanningRequired(localDate,overdueTaskIds,taskIds), ready(queue), empty}`.
+- `getPlanningGate(tasks:[GoalflowTask], today:String, dailyPlan:DailyPlan?)` as above, uses `isRealDay/isRealMonth/monthOf/assertSchedule` port, `buildTodayQueue` filter `isOpen && day && scheduledFor==today` sorted `goalflowTaskComparator`.
+
+**Stores (`Services/DailyPlanStore.swift:1`, `Services/GoalStore.swift:1`):**
+- `DailyPlanStore` `dailyPlans.json` `UserDefaults goalflow.daily_plans.v1` normalized `isRealDay && !taskIds empty` atomic+read-back. `loadAll/load(for:)/save/saveAll/clearAll`.
+- `GoalStore` `goals.json` `goalflow.goals.v1`, `TrueNorthStore` `truenorth.json` `goalflow.truenorth.v1`, `AmalgamStore` `amalgam.json` `goalflow.amalgam.v1` each atomic+WAL.
+
+**Goal models (`Domain/GoalModels.swift:1`):**
+- `Goal {id,name,description,color,createdAt:Double}`, `TrueNorthGoal {id,vision,isMoneyGoal,tangibleReality,sensoryDetails,planB,importance,anchorHabit,anchorTask,createdAt}`.
+
+**SyncBacked provider (`Providers/SyncBackedCurrentTaskProvider.swift:1`):**
+- `SyncBackedCurrentTaskProvider(taskStore,dailyPlanStore,goalStore,trueNorthStore,amalgamStore,clock)` `fetchGate()`, `fetchCurrent()` only when `ready`, `allGoals/allTrueNorth/amalgam/goal(for:)`. `makeTodayString` injected.
+
+**GoalflowTask change (`Domain/GoalflowTask.swift:14`):**
+- Added `goalId: String?` optional to preserve `Task.goalId` link, Codable optional missing→nil, initializer `goalId: String?=nil`, `isOpen` etc unchanged, `plannedDurationSeconds` etc.
+
+**Keychain (`Services/KeychainSessionStore.swift:1`):**
+- `NativeSession {accessToken,refreshToken,expiresAt,userId?}` `KeychainSessionStore: AuthGateway` `SecItemCopyMatching/Add/Delete` `service com.mariusschober.goalflow.mac account session` `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly kSecUseDataProtectionKeychain` `isAuthenticated == expiresAt > now+60` `read/save/clear` with read-back verify `accessToken` eq, `currentAccessToken(supabaseUrl:anonKey:) async` refresh `POST /auth/v1/token?grant_type=refresh_token {refresh_token} Header apikey` → new `expiresAt` `Date+expires_in`. `KeychainError` mapped. `StubAuthGateway` remains in `CurrentTaskProvider.swift:138`.
+
+**Supabase auth (`Services/SupabaseAuthService.swift:1`):**
+- `SupabaseAuthService.shared` reads `SUPABASE_URL/ANON_KEY` from `Info.plist` or `UserDefaults supabase_url`, `isConfigured`, `generateVerifier 32B SecRandomCopyBytes base64url`, `challenge SHA256 base64url`, `requestMagicLink(email)` `POST /auth/v1/otp {email, create_user:false, options:{redirect_to:goalflow://auth/callback}} Header apikey`, `startBrowserAuth(provider=custom:telegram, anchor: ASPresentationAnchor)` builds `\${SUPABASE_URL}/auth/v1/authorize?provider&redirect_to=goalflow://auth/callback&code_challenge&code_challenge_method=s256&state` then `ASWebAuthenticationSession(url:callbackURLScheme:goalflow)` `presentationContextProvider`, `handleCallback(url: URL)` handles `?code&state` → `exchangeCode` `POST /auth/v1/token?grant_type=pkce {auth_code,code_verifier}` vs `#access_token` fragment parse, saves `NativeSession` `expiresAt Date+expires_in` via `KeychainSessionStore` `NotificationCenter authDidChange`. `PresentationContext` helper, `Data base64URLEncodedString`.
+
+**SignIn (`UI/SignInView.swift:1`):**
+- `SignInView` SwiftUI `360pt ultraThinMaterial 14` header `Sign in` `TextField email` `Button Send link` `ProgressView` while `isSending`, `message`, `Button Sign in with browser (Telegram OAuth) globe` `Label`, disabled `!isConfigured` shows orange `Supabase not configured`, `Button Continue offline (demo)` `onClose`.
+
+**Info.plist (`Resources/Info.plist:1`):**
+- Added `CFBundleURLTypes [{CFBundleURLName com.mariusschober.goalflow.auth, CFBundleURLSchemes [goalflow]}]`, `NSCalendarsUsageDescription`, `NSCalendarsFullAccessUsageDescription`, `SUPABASE_URL ""`, `SUPABASE_ANON_KEY ""`, `API_ORIGIN https://app.goalflow.com`.
+
+**App (`App/AppDelegate.swift:1`):**
+- Added `supabaseAuth = SupabaseAuthService.shared`, `application(_:open:)` loops `urls` `scheme==goalflow && host==auth && path==/callback` → `Task { await supabaseAuth.handleCallback }`. In `applicationDidFinishLaunching` after `provider/clock` creates `dailyPlanStore/goalStore/trueNorthStore/amalgamStore` then `menuBar.start(..., dailyPlanStore, goalStore, trueNorthStore, amalgamStore, gateEnabled:true)`, registers `CarbonHotkeyGateway { menuBar.toggleCapture() }`.
+
+**MenuBar (`UI/MenuBarController.swift:1`):**
+- Added `captureController/store/clock` already but now `start(..., dailyPlanStore, goalStore, trueNorthStore, amalgamStore, gateEnabled)` creates `ExecutionViewModel(provider:store:clock:dailyPlanStore:goalStore:trueNorthStore:amalgamStore:gateEnabled:)` . `updateStatusTitle` now checks `viewModel.gate` first: monthly → `Plan monthly` orange `calendar.badge.exclamationmark`, daily → `Plan the day` orange, else uses `viewModel.task ?? provider.fetchCurrent()` with `Display` `●/⏸`.
+
+**ViewModel + Panel (`UI/ExecutionPanelView.swift:1`):**
+- `ExecutionViewModel` now `@Published gate: PlanningGate .empty`, `goals:[Goal]`, `amalgam:String?`, `trueNorth:[TrueNorthGoal]`, `calendarCollision:CalendarCollision?`, `showBreakdown/breakdownSuggestions/breakdownChildren/breakdownLoading/breakdownError`, `showSignIn/isAuthenticated` `NotificationCenter authDidChange` publisher, injected `dailyPlanStore/goalStore/trueNorthStore/amalgamStore/calendarService/breakdownGateway/localBreakdown/gateEnabled/appOrigin` `KeychainSessionStore`. `init(provider:store:clock:sound:breakStore:dailyPlanStore:goalStore:trueNorthStore:amalgamStore:calendarService:breakdownGateway:gateEnabled:appOrigin)` sets `localBreakdown = LocalBreakdownService(taskStore: provider.taskStore)`, `setupTimerBindings`, `restore`, `restoreBreak`, observes `authDidChange`. `restore()` loads `goals/amalgam/trueNorth`, `completedTodayCount/queueCount`, computes `gate` via `getPlanningGate(tasks: provider.taskStore.loadAll(), today, dailyPlanStore.load(for:today))` when `gateEnabled` else `task != nil ? ready : empty`; switches `gate` to set `task` nil when gated. Loads `execution` from `store`, `configureTimer`, `checkCalendarCollision` async. Helpers `checkCalendarCollision` `requestCalendarAccess` `openWebPlan` `openWebPlan` `NSWorkspace.open("\(appOrigin)?view=planning")` `goal(for:)`, breakdown `openBreakdown` (sets `showBreakdown` true, clears suggestions/children, `breakdownLoading true`, `await breakdownGateway.suggest` catches `BreakdownError quota/unavailable`), `stageSuggestion/stageManual/removeStaged/confirmBreakdown` (calls `localBreakdown.breakdown(taskId:children:)` closes parent if `execution.taskId==parent` then `store.clear` `timer.stop`, `restore()`).
+- `ExecutionPanelView` body now `if let am { amalgamBanner }` top `indigo-50/50` `text[10px] tracking 1.2`, `header` shows `checkmark.shield` vs `Sign in` button + `FrogBadge`, `Menu` adds `Sign in…/Sign out` divider, `Divider`, `if isOnBreak breakActiveView else if flowPickerVisible else if breakPickerVisible else if isGateWall gateWall else if task content else empty`, `footer` plus `trueNorthFooter` collapsed 2 visions `background 0.04`, `.sheet breakdown` + `.sheet signIn`. `isGateWall` checks `monthly/daily`. `gateWall` shows `calendar.badge.exclamationmark` `gateTitle` `gateMessage` `gateCounts` + `Button Open Web Plan` `Capsule accentColor`. `gateTitle/gateMessage/gateCounts/gateCTA` switches. `amalgamBanner`, `trueNorthFooter`. `content` now shows goal dot `Circle Color(hex:goal.color) ?? blue 8` + `goal.name`, calendar warning `HStack calendar.badge.exclamationmark Overlaps calendar: “Sprint” 14:00–15:00` amber capsule `orange 0.12` else `Button Check calendar for overlaps calendar` plain, plus `Take Break` and new `Break down into next actions list.bullet.indent indigo 0.08` button when `!isOnBreak && !flowPickerVisible`. `Color(hex:)` extension `private extension Color {init?(hex: String) }` parses `#RRGGBB`.
+
+**Breakdown (`Services/BreakdownService.swift:1`, `UI/BreakdownSheet.swift:1`):**
+- `BreakdownSuggestion {title, estimatedDuration}` `BreakdownGateway` `suggest` → `[BreakdownSuggestion]`; `Stub` returns `[]`; `ServerBreakdownGateway(supabaseUrl,apiOrigin,anonKey)` `suggest` `await keychain.currentAccessToken` fallback `[]` if no token, `POST {apiOrigin}/api/v1/ai/breakdown {"taskTitle"}` `Authorization Bearer token` `Content-Type json` handles 429 quotaReached 503 unavailable else decode `subtasks 1..8`. `BreakdownError quotaReached/unavailable/invalid`. `BreakdownChildInput {title, notes="", durationMinutes=25}` `LocalBreakdownService(taskStore,clock,dailyPlanStore)` `breakdown(taskId:children:)` validates 1..50 title 1..240 duration 1..1440 `assertSchedule(.day,today)` tail `plannedOrder parent+index` (for today), closes parent `brokenDown version+1 updatedAt extraJson completedAt`, creates children `UUID parentTaskId version1`, plan-preservation replaces parent id with children ids when `previousPlan.taskIds==previousQueueIds` and parent in queue else deletes plan via `saveAll` filtered, `saveAll` txn.
+- `BreakdownSheet` 420pt `List staged` chip `+ Stage`, `TextField title` + `duration m` `Add`, `Confirm Break down` disabled when empty, shows `AI suggestions` `BreakdownSuggestions` with `+ Add`, `ProgressView` when loading, orange `breakdownError`.
+
+**Calendar (`Services/CalendarCollisionService.swift:1`):**
+- `CalendarCollision {eventTitle,start,end}` `CalendarCollisionService` `collision(for:today) async -> CalendarCollision?` `requestAccessIfNeeded async -> Bool`; `NoopCalendarService` returns nil/false; `EKCalendarCollisionService` `EKEventStore` `requestFullAccessToEvents` (14) else `requestAccess(to:.event)`, `collision` parses `today 14:30` via `DateFormatter YYYY-MM-dd HH:mm current` `start+duration 25` `dayStart/end` `predicateForEvents` filter `!isAllDay && start < taskEnd && end > taskStart` first match.
+
+**Tests (`GoalflowMacTests/PlanningGateTests.swift:1`, `BreakdownTests.swift:1`, `CalendarTests.swift:1`):**
+- `PlanningGateTests` 8: monthly blocks, future month not, overdue, queue without plan, ready when matches, ignores completed, empty, order mismatch.
+- `LocalBreakdownTests` 6: closes parent+2 children `plannedOrder 0/1` `parentTaskId`, empty fails, >50 fails, preserves plan when matching, parent not open fails, stub suggest empty.
+- `CalendarTests` 6: no scheduledTime nil, month nil, mock overlap 14:30→Sprint Planning, no collision, interval 14:30-14:55, requestAccess false.
+- Total now 98 (78 +20) — 3 runs clean.
+
+**Deferred remains:** final Sync (G), hardening (H).
+
 
 **Deferred remains:** auth/sync (F/G), signing (H).

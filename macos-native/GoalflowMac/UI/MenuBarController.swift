@@ -13,8 +13,8 @@ final class MenuBarController: NSObject {
     private var clock: (any Clock)?
     private var cancellables: Set<AnyCancellable> = []
     override init() { super.init() }
-    func start(taskProvider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock()) {
-        self.taskProvider = taskProvider; self.store = store; self.clock = clock; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock)
+    func start(taskProvider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), gateEnabled: Bool = false) {
+        self.taskProvider = taskProvider; self.store = store; self.clock = clock; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock, dailyPlanStore: dailyPlanStore, goalStore: goalStore, trueNorthStore: trueNorthStore, amalgamStore: amalgamStore, gateEnabled: gateEnabled)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
             button.image = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow"); button.imagePosition = .imageOnly
@@ -95,7 +95,14 @@ final class MenuBarController: NSObject {
             button.contentTintColor = .systemTeal
             return
         }
-        let task = taskProvider?.fetchCurrent()
+        // Respect planning gate when enabled
+        if case .monthlyPlanningRequired = viewModel.gate {
+            button.title = "Plan monthly"; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); button.toolTip = "Monthly planning required"; button.contentTintColor = .systemOrange; return
+        }
+        if case .dailyPlanningRequired = viewModel.gate {
+            button.title = "Plan the day"; button.imagePosition = .imageLeading; button.image = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
+        }
+        let task = viewModel.task ?? taskProvider?.fetchCurrent()
         let isPaused = viewModel?.isPaused ?? false; let isOvertime = viewModel?.isOvertime ?? false; let isActive = viewModel?.isActive ?? false
         let display: String
         if let t = task {

@@ -19,6 +19,18 @@ final class ExecutionViewModel: ObservableObject {
     @Published var breakElapsed: Int = 0
     @Published var isOnBreak: Bool = false
     @Published var breakPickerVisible: Bool = false
+    @Published var gate: PlanningGate = .empty
+    @Published var goals: [Goal] = []
+    @Published var amalgam: String?
+    @Published var trueNorth: [TrueNorthGoal] = []
+    @Published var calendarCollision: CalendarCollision?
+    @Published var showBreakdown: Bool = false
+    @Published var breakdownSuggestions: [BreakdownSuggestion] = []
+    @Published var breakdownChildren: [BreakdownChildInput] = []
+    @Published var breakdownLoading: Bool = false
+    @Published var breakdownError: String?
+    @Published var showSignIn: Bool = false
+    @Published var isAuthenticated: Bool = KeychainSessionStore().isAuthenticated
     private let provider: DemoCurrentTaskProvider
     private let store: any FocusSessionStore
     private let clock: any Clock
@@ -26,14 +38,32 @@ final class ExecutionViewModel: ObservableObject {
     private let breakTimer = BreakTimer()
     private let breakStore: BreakSessionStore
     private let sound: any SoundGateway
+    private let dailyPlanStore: DailyPlanStore
+    private let goalStore: GoalStore
+    private let trueNorthStore: TrueNorthStore
+    private let amalgamStore: AmalgamStore
+    private let calendarService: any CalendarCollisionService
+    private let breakdownGateway: any BreakdownGateway
+    private let localBreakdown: LocalBreakdownService
+    private let gateEnabled: Bool
+    private let appOrigin: String
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
     private var holdController: CompletionHoldController?
     private var holdTimer: AnyCancellable?
     private var pendingCompletedId: String?
-    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore()) {
+    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), calendarService: any CalendarCollisionService = NoopCalendarService(), breakdownGateway: any BreakdownGateway = StubBreakdownGateway(), gateEnabled: Bool = false, appOrigin: String = "https://app.goalflow.com") {
         self.provider = provider; self.store = store; self.clock = clock; self.sound = sound; self.breakStore = breakStore
+        self.dailyPlanStore = dailyPlanStore; self.goalStore = goalStore; self.trueNorthStore = trueNorthStore; self.amalgamStore = amalgamStore
+        self.calendarService = calendarService; self.breakdownGateway = breakdownGateway
+        self.localBreakdown = LocalBreakdownService(taskStore: provider.taskStore, clock: clock, dailyPlanStore: dailyPlanStore)
+        self.gateEnabled = gateEnabled; self.appOrigin = appOrigin
         setupTimerBindings(); restore(); restoreBreak()
+        isAuthenticated = KeychainSessionStore().isAuthenticated
+        NotificationCenter.default.publisher(for: .authDidChange).receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.isAuthenticated = KeychainSessionStore().isAuthenticated
+            self?.restore()
+        }.store(in: &cancellables)
     }
     private func setupTimerBindings() {
         timer.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.remainingSeconds = v }.store(in: &cancellables)
@@ -52,14 +82,108 @@ final class ExecutionViewModel: ObservableObject {
         }.store(in: &cancellables)
     }
     func restore() {
-        task = provider.fetchCurrent()
+        // Load context
+        goals = goalStore.loadAll()
+        amalgam = amalgamStore.load()
+        trueNorth = trueNorthStore.loadAll()
         completedTodayCount = provider.completedCount(today: todayString())
         queueCount = provider.queueCount(today: todayString())
+        // Gate
+        if gateEnabled {
+            let today = todayString()
+            let tasks = provider.taskStore.loadAll()
+            let plan = dailyPlanStore.load(for: today)
+            gate = getPlanningGate(tasks: tasks, today: today, dailyPlan: plan)
+            switch gate {
+            case .ready(let q): task = q.first
+            case .empty: task = nil
+            case .monthlyPlanningRequired, .dailyPlanningRequired: task = nil
+            }
+        } else {
+            task = provider.fetchCurrent()
+            gate = task != nil ? .ready(queue: [task!]) : .empty
+        }
         if let s = store.load() {
             if let t = task, t.id == s.taskId, t.isOpen { execution = s } else { try? store.clear(); execution = nil }
         } else { execution = nil }
         configureTimer()
+        // Calendar collision check
+        checkCalendarCollision()
     }
+
+    private func checkCalendarCollision() {
+        guard let t = task, t.scheduledTime != nil else { calendarCollision = nil; return }
+        Task { @MainActor in
+            let c = await calendarService.collision(for: t, today: todayString())
+            self.calendarCollision = c
+        }
+    }
+
+    func requestCalendarAccess() {
+        Task { @MainActor in
+            _ = await calendarService.requestAccessIfNeeded()
+            checkCalendarCollision()
+        }
+    }
+
+    func openWebPlan() {
+        let urlStr = "\(appOrigin)?view=planning"
+        if let url = URL(string: urlStr) { NSWorkspace.shared.open(url) }
+    }
+
+    func goal(for task: GoalflowTask) -> Goal? {
+        guard let gid = task.goalId else { return nil }
+        return goals.first { $0.id == gid }
+    }
+
+    // MARK: - Breakdown
+
+    func openBreakdown() {
+        guard let t = task else { return }
+        showBreakdown = true
+        breakdownSuggestions = []
+        breakdownChildren = []
+        breakdownError = nil
+        breakdownLoading = true
+        Task { @MainActor in
+            do {
+                let sug = try await breakdownGateway.suggest(for: t)
+                self.breakdownSuggestions = sug
+            } catch let e as BreakdownError {
+                self.breakdownError = e.localizedDescription
+            } catch {
+                self.breakdownError = nil // silent, manual still allowed
+            }
+            self.breakdownLoading = false
+        }
+    }
+
+    func stageSuggestion(_ s: BreakdownSuggestion) {
+        breakdownChildren.append(BreakdownChildInput(title: s.title, durationMinutes: s.estimatedDuration))
+    }
+
+    func stageManual(title: String, duration: Int) {
+        breakdownChildren.append(BreakdownChildInput(title: title, durationMinutes: max(1, min(1440, duration))))
+    }
+
+    func removeStaged(at idx: Int) {
+        guard breakdownChildren.indices.contains(idx) else { return }
+        breakdownChildren.remove(at: idx)
+    }
+
+    func confirmBreakdown() {
+        guard let t = task else { return }
+        guard !breakdownChildren.isEmpty else { return }
+        do {
+            _ = try localBreakdown.breakdown(taskId: t.id, children: breakdownChildren)
+            // Clear focus if breaking current active task
+            if execution?.taskId == t.id { try? store.clear(); execution = nil; timer.stop() }
+            restore()
+        } catch {
+            breakdownError = error.localizedDescription
+        }
+    }
+
     private func configureTimer() {
         timer.configure(state: execution, clock: clock)
         if let e = execution { remainingSeconds = e.remainingSeconds(now: clock.now()); overtimeSeconds = e.overtimeSeconds(now: clock.now()); isPaused = e.isPaused }
@@ -249,13 +373,16 @@ struct ExecutionPanelView: View {
     @Environment(\.colorScheme) var colorScheme
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if let am = vm.amalgam, !am.isEmpty { amalgamBanner(text: am) }
             header
             Divider().opacity(0.08)
             if vm.isOnBreak {
                 breakActiveView
-            } else if vm.flowPickerVisible { flowPicker } else if vm.breakPickerVisible { breakPicker } else if let task = vm.task { content(task: task) } else { empty }
+            } else if vm.flowPickerVisible { flowPicker } else if vm.breakPickerVisible { breakPicker } else if isGateWall { gateWall } else if let task = vm.task { content(task: task) } else { empty }
             footer
-        }
+            if !vm.trueNorth.isEmpty { trueNorthFooter }
+        }.sheet(isPresented: $vm.showBreakdown) { BreakdownSheet(vm: vm) }
+         .sheet(isPresented: $vm.showSignIn) { SignInView(onClose: { vm.showSignIn = false }) }
         .frame(width: 380)
         .background(panelBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -270,7 +397,7 @@ struct ExecutionPanelView: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 18, style: .continuous).fill(.ultraThinMaterial)
                     if vm.isActive || vm.isPaused || vm.isOvertime || vm.showReward {
-                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill((vm.isOvertime ? Color.orange.opacity(0.08) : Color.accentColor.opacity(0.06)))
+                        RoundedRectangle(cornerRadius: 18, style: .continuous).fill((vm.isOvertime ? Color.orange.opacity(0.08) : Color.blue.opacity(0.06)))
                     }
                 }
             } else { Color(nsColor: .windowBackgroundColor) }
@@ -284,6 +411,12 @@ struct ExecutionPanelView: View {
                 .font(.system(size: 11, weight: .semibold, design: .rounded)).tracking(0.8).textCase(.uppercase)
                 .foregroundStyle(vm.isOnBreak ? Color.teal : vm.isOvertime ? Color.orange : .secondary)
             Spacer()
+            if vm.isAuthenticated {
+                Image(systemName: "checkmark.shield.fill").font(.system(size: 10)).foregroundStyle(.green).help("Signed in")
+            } else {
+                Button("Sign in") { vm.showSignIn = true }
+                    .font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(.blue)
+            }
             if let task = vm.task, task.isFrog { FrogBadge(compact: true) }
             Menu {
                 Button(vm.isPaused ? "Resume" : "Pause") { if vm.isPaused { vm.resume() } else { vm.pause() } }.disabled(!(vm.isActive || vm.isPaused))
@@ -294,6 +427,12 @@ struct ExecutionPanelView: View {
                 Divider()
                 Button("Toggle Frog") { vm.toggleFrog() }
                 Button("Reset Demo (clear session)") { vm.resetDemo() }
+                Divider()
+                if vm.isAuthenticated {
+                    Button("Sign out") { KeychainSessionStore().clear(); vm.isAuthenticated = false; NotificationCenter.default.post(name: .authDidChange, object: nil) }
+                } else {
+                    Button("Sign in…") { vm.showSignIn = true }
+                }
             } label: { Image(systemName: "ellipsis.circle").foregroundStyle(.secondary).font(.system(size: 12)) }
             .menuStyle(.borderlessButton).fixedSize()
         }
@@ -364,7 +503,7 @@ struct ExecutionPanelView: View {
                 Text(task.title).font(.system(size: 20, weight: .semibold, design: .rounded)).lineLimit(2).help(task.title)
                 HStack(spacing: 8) {
                     Label("\(task.durationMinutes)m", systemImage: "timer").font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
-                    if !task.tags.isEmpty { ForEach(task.tags, id: \.self) { tag in Text("#\(tag)").font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.accentColor).padding(.horizontal, 6).padding(.vertical, 2).background(Color.accentColor.opacity(0.10)).clipShape(Capsule()) } }
+                    if !task.tags.isEmpty { ForEach(task.tags, id: \.self) { tag in Text("#\(tag)").font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(Color.blue).padding(.horizontal, 6).padding(.vertical, 2).background(Color.blue.opacity(0.10)).clipShape(Capsule()) } }
                     Spacer()
                     if vm.isActive || vm.isPaused {
                         Text(vm.isPaused ? "Paused" : vm.isOvertime ? "Overtime \(vm.displayTime)" : "Focused")
@@ -372,13 +511,30 @@ struct ExecutionPanelView: View {
                             .foregroundStyle(vm.isOvertime ? Color.orange : vm.isPaused ? Color.orange : Color.green)
                     }
                 }
+                if let goal = vm.goal(for: task) {
+                    HStack(spacing: 6) {
+                        Circle().fill(Color(hex: goal.color) ?? Color.blue).frame(width: 8, height: 8)
+                        Text(goal.name).font(.system(size: 11, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    }
+                }
+                if let coll = vm.calendarCollision {
+                    HStack(spacing: 6) {
+                        Image(systemName: "calendar.badge.exclamationmark").font(.system(size: 11, weight: .semibold))
+                        Text("Overlaps calendar: “\(coll.eventTitle)” \(coll.start.formatted(date: .omitted, time: .shortened))–\(coll.end.formatted(date: .omitted, time: .shortened))")
+                            .font(.system(size: 11, weight: .medium, design: .rounded)).lineLimit(1)
+                    }.foregroundStyle(Color.orange).padding(.horizontal, 8).padding(.vertical, 4).background(Capsule().fill(Color.orange.opacity(0.12)))
+                } else if task.scheduledTime != nil {
+                    Button(action: { vm.requestCalendarAccess() }) {
+                        Label("Check calendar for overlaps", systemImage: "calendar").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                    }.buttonStyle(.plain)
+                }
             }
             HStack(spacing: 16) {
                 ZStack {
-                    CircularProgress(progress: vm.progress, lineWidth: 4, tint: vm.isOvertime ? Color.orange : task.isFrog ? Color.green : Color.accentColor, inactive: !(vm.isActive || vm.isPaused || vm.isOvertime))
+                    CircularProgress(progress: vm.progress, lineWidth: 4, tint: vm.isOvertime ? Color.orange : task.isFrog ? Color.green : Color.blue, inactive: !(vm.isActive || vm.isPaused || vm.isOvertime))
                         .frame(width: 72, height: 72)
                     if vm.holding {
-                        CircularProgress(progress: vm.holdProgress, lineWidth: 6, tint: task.isFrog ? Color.green : Color.accentColor, inactive: false)
+                        CircularProgress(progress: vm.holdProgress, lineWidth: 6, tint: task.isFrog ? Color.green : Color.blue, inactive: false)
                             .frame(width: 84, height: 84).opacity(0.9)
                     }
                     Text(vm.displayTime).font(.system(size: vm.isActive || vm.isPaused ? 18 : 16, weight: .semibold, design: .monospaced)).monospacedDigit().foregroundStyle((vm.isActive || vm.isPaused || vm.isOvertime) ? (vm.isOvertime ? Color.orange : .primary) : .secondary)
@@ -411,7 +567,7 @@ struct ExecutionPanelView: View {
                 } else {
                     Button(action: { vm.action() }) {
                         HStack(spacing: 8) { Text("ACTION").font(.system(size: 14, weight: .heavy, design: .rounded)).tracking(1.2); Image(systemName: "arrow.right").font(.system(size: 12, weight: .bold)) }
-                        .foregroundStyle(.white).padding(.horizontal, 22).padding(.vertical, 12).background(Capsule().fill(task.isFrog ? Color.green : Color(red: 0.36, green: 0.36, blue: 0.84))).shadow(color: (task.isFrog ? Color.green : Color.accentColor).opacity(0.30), radius: 10, x: 0, y: 6)
+                        .foregroundStyle(.white).padding(.horizontal, 22).padding(.vertical, 12).background(Capsule().fill(task.isFrog ? Color.green : Color(red: 0.36, green: 0.36, blue: 0.84))).shadow(color: (task.isFrog ? Color.green : Color.blue).opacity(0.30), radius: 10, x: 0, y: 6)
                     }.buttonStyle(.plain).keyboardShortcut(.defaultAction)
                 }
             }.padding(.vertical, 4).animation(.easeInOut(duration: 0.35), value: vm.isActive).animation(.easeInOut(duration: 0.35), value: vm.isPaused).animation(.easeInOut(duration: 0.35), value: vm.isOvertime)
@@ -428,6 +584,17 @@ struct ExecutionPanelView: View {
                     }.buttonStyle(.plain)
                 }
             }
+            if !vm.isOnBreak && !vm.flowPickerVisible {
+                Button(action: { vm.openBreakdown() }) {
+                    Label("Break down into next actions", systemImage: "list.bullet.indent")
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.indigo)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.indigo.opacity(0.08)))
+                        .overlay(Capsule().stroke(Color.indigo.opacity(0.15), lineWidth: 1))
+                }.buttonStyle(.plain)
+            }
             if !(vm.isActive || vm.isPaused || vm.isOvertime) {
                 Text("Tap ACTION to start. The timer counts from \(task.durationMinutes) minutes — it will persist if Goalflow restarts. Pause is low friction; overtime counts separately.")
                     .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
@@ -440,21 +607,21 @@ struct ExecutionPanelView: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 18)
-        .background(RoundedRectangle(cornerRadius: 14).fill((vm.isActive || vm.isPaused || vm.isOvertime) ? (vm.isOvertime ? Color.orange.opacity(0.06) : Color.accentColor.opacity(0.04)) : Color.clear))
+        .background(RoundedRectangle(cornerRadius: 14).fill((vm.isActive || vm.isPaused || vm.isOvertime) ? (vm.isOvertime ? Color.orange.opacity(0.06) : Color.blue.opacity(0.04)) : Color.clear))
         .padding(.horizontal, 10)
     }
     private func holdButton(task: GoalflowTask) -> some View {
         let dur = task.isFrog ? "5s" : "3s"
         return ZStack {
-            Capsule().fill(task.isFrog ? Color.green : Color.accentColor).opacity(vm.holding ? 0.12 : 0.0)
+            Capsule().fill(task.isFrog ? Color.green : Color.blue).opacity(vm.holding ? 0.12 : 0.0)
             Button(action: {}) {
                 HStack(spacing: 6) {
                     Image(systemName: task.isFrog ? "checkmark.circle.fill" : "checkmark.circle").font(.system(size: 12, weight: .bold))
                     Text("Done \(dur)").font(.system(size: 12, weight: .bold, design: .rounded))
                 }
-                .foregroundStyle(task.isFrog ? Color.green : Color.accentColor)
+                .foregroundStyle(task.isFrog ? Color.green : Color.blue)
                 .padding(.horizontal, 14).padding(.vertical, 8)
-                .background(Capsule().stroke(task.isFrog ? Color.green : Color.accentColor, lineWidth: vm.holding ? 2 : 1.2))
+                .background(Capsule().stroke(task.isFrog ? Color.green : Color.blue, lineWidth: vm.holding ? 2 : 1.2))
             }
             .buttonStyle(.plain)
             .simultaneousGesture(
@@ -468,12 +635,75 @@ struct ExecutionPanelView: View {
             if vm.holding {
                 Capsule().stroke(Color.primary.opacity(0.06), lineWidth: 1)
                 GeometryReader { geo in
-                    Capsule().fill((task.isFrog ? Color.green : Color.accentColor).opacity(0.18))
+                    Capsule().fill((task.isFrog ? Color.green : Color.blue).opacity(0.18))
                         .frame(width: geo.size.width * CGFloat(vm.holdProgress))
                         .animation(.linear(duration: 0.02), value: vm.holdProgress)
                 }
             }
         }.frame(height: 36).animation(.easeOut(duration: 0.2), value: vm.holding)
+    }
+    private var isGateWall: Bool {
+        switch vm.gate {
+        case .monthlyPlanningRequired, .dailyPlanningRequired: return true
+        default: return false
+        }
+    }
+    private var gateWall: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Image(systemName: "calendar.badge.exclamationmark").foregroundStyle(.orange).font(.system(size: 14))
+                Text(gateTitle).font(.system(size: 13, weight: .semibold, design: .rounded))
+            }
+            Text(gateMessage).font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
+            if let counts = gateCounts { Text(counts).font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.tertiary) }
+            Button(action: { vm.openWebPlan() }) {
+                HStack(spacing: 6) { Image(systemName: "arrow.up.forward.app"); Text(gateCTA).font(.system(size: 12, weight: .bold, design: .rounded)) }
+                .foregroundStyle(.white).padding(.horizontal, 16).padding(.vertical, 8).background(Capsule().fill(Color.blue))
+            }.buttonStyle(.plain)
+        }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+         .background(RoundedRectangle(cornerRadius: 12).fill(Color.orange.opacity(0.08))).padding(10)
+    }
+    private var gateTitle: String {
+        switch vm.gate {
+        case .monthlyPlanningRequired(let m, _): return "Monthly planning required — \(m)"
+        case .dailyPlanningRequired(_, let over, _): return over.isEmpty ? "Confirm today’s order" : "Resolve overdue"
+        default: return ""
+        }
+    }
+    private var gateMessage: String {
+        switch vm.gate {
+        case .monthlyPlanningRequired(_, let ids): return "Assign each current-month task (\(ids.count)) to an exact day before focus."
+        case .dailyPlanningRequired(let date, let over, let ids):
+            if !over.isEmpty { return "\(over.count) overdue task(s) must be resolved. Review and reschedule for \(date)." }
+            return "Today has \(ids.count) task(s). Review and confirm today’s order in Plan."
+        default: return ""
+        }
+    }
+    private var gateCounts: String? {
+        switch vm.gate {
+        case .monthlyPlanningRequired(_, let ids): return "\(ids.count) month tasks"
+        case .dailyPlanningRequired(_, let over, let ids): return over.isEmpty ? "\(ids.count) today" : "\(over.count) overdue • \(ids.count) today"
+        default: return nil
+        }
+    }
+    private var gateCTA: String {
+        switch vm.gate {
+        case .monthlyPlanningRequired: return "Schedule monthly tasks first"
+        case .dailyPlanningRequired(_, let over, _): return over.isEmpty ? "Open today’s plan" : "Resolve overdue first"
+        default: return "Open plan"
+        }
+    }
+    private func amalgamBanner(text: String) -> some View {
+        Text(text).font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(1.2).textCase(.uppercase).foregroundStyle(Color.indigo.opacity(0.85))
+            .frame(maxWidth: .infinity).padding(.vertical, 6).background(Color.indigo.opacity(0.07))
+    }
+    private var trueNorthFooter: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(vm.trueNorth.prefix(2), id: \.id) { tn in
+                Text(tn.vision).font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }.padding(.horizontal, 14).padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
+         .background(Color.primary.opacity(0.04))
     }
     private var empty: some View {
         VStack(spacing: 10) {
@@ -506,9 +736,17 @@ struct ExecutionPanelView: View {
             if vm.showReward {
                 ZStack {
                     Circle().stroke(Color.primary.opacity(0.10), lineWidth: 1).scaleEffect(vm.showReward ? 1.22 : 1.0).opacity(vm.showReward ? 0 : 0.3)
-                    Circle().fill(Color.accentColor.opacity(vm.task?.isFrog == true ? 0.10 : 0.06)).scaleEffect(vm.showReward ? 1.18 : 0.92).opacity(vm.showReward ? 0.5 : 0)
+                    Circle().fill(Color.blue.opacity(vm.task?.isFrog == true ? 0.10 : 0.06)).scaleEffect(vm.showReward ? 1.18 : 0.92).opacity(vm.showReward ? 0.5 : 0)
                 }.animation(.easeOut(duration: 0.9), value: vm.showReward)
             }
         }
+    }
+}
+private extension Color {
+    init?(hex: String) {
+        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+        if s.hasPrefix("#") { s.removeFirst() }
+        guard s.count == 6, let v = UInt32(s, radix: 16) else { return nil }
+        self.init(red: Double((v >> 16) & 0xFF)/255, green: Double((v >> 8) & 0xFF)/255, blue: Double(v & 0xFF)/255)
     }
 }

@@ -1,0 +1,59 @@
+import SwiftUI
+
+struct SignInView: View {
+    @State private var email = ""
+    @State private var message = ""
+    @State private var isSending = false
+    var onClose: (() -> Void)?
+
+    private let auth = SupabaseAuthService.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack {
+                Text("Sign in").font(.system(size: 16, weight: .semibold, design: .rounded))
+                Spacer()
+                if let close = onClose {
+                    Button(action: { close() }) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
+                }
+            }
+            Text("Enter your Goalflow email to receive a magic link. Or use Telegram OAuth in browser.")
+                .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
+
+            HStack(spacing: 8) {
+                TextField("email@example.com", text: $email).textFieldStyle(.roundedBorder).font(.system(size: 13))
+                Button(action: { Task { await sendLink() } }) {
+                    if isSending { ProgressView().scaleEffect(0.7) } else { Text("Send link").font(.system(size: 12, weight: .bold, design: .rounded)) }
+                }.buttonStyle(.borderedProminent).controlSize(.small).disabled(email.isEmpty || isSending)
+            }
+            if !auth.isConfigured {
+                Text("Supabase not configured — add SUPABASE_URL/ANON_KEY to config. Local demo still works offline.")
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.orange).lineLimit(2)
+            }
+            Button(action: {
+                if let win = NSApp.keyWindow { auth.startBrowserAuth(anchor: win) }
+                else { auth.startBrowserAuth(anchor: nil) }
+            }) {
+                Label("Sign in with browser (Telegram OAuth)", systemImage: "globe")
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+            }.buttonStyle(.bordered).controlSize(.small).disabled(!auth.isConfigured)
+
+            if !message.isEmpty {
+                Text(message).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary).lineLimit(2)
+            }
+            Button("Continue offline (demo)") { onClose?() }.font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
+        }.padding(16).frame(width: 360)
+         .background(RoundedRectangle(cornerRadius: 14).fill(.ultraThinMaterial))
+         .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+
+    private func sendLink() async {
+        isSending = true; defer { isSending = false }
+        do {
+            try await auth.requestMagicLink(email: email)
+            message = "Link sent — check email, then click to return via goalflow://auth/callback"
+        } catch {
+            message = "Failed: \(error.localizedDescription)"
+        }
+    }
+}

@@ -139,5 +139,6 @@ protocol AuthGateway: Sendable { var isAuthenticated: Bool { get } }
 struct StubAuthGateway: AuthGateway { var isAuthenticated: Bool { false } }
 protocol ActionGateway: Sendable { func start(taskId: String) async throws -> ExecutionState }
 struct LocalActionGateway: ActionGateway { func start(taskId: String) async throws -> ExecutionState { fatalError("unused in v1") } }
-protocol BreakdownGateway: Sendable { func suggest(for task: GoalflowTask) async throws -> [String] }
-struct StubBreakdownGateway: BreakdownGateway { func suggest(for task: GoalflowTask) async throws -> [String] { [] } }
+struct BreakdownSuggestion: Codable, Equatable, Sendable { var title: String; var estimatedDuration: Int }
+protocol BreakdownGateway: Sendable { func suggest(for task: GoalflowTask) async throws -> [BreakdownSuggestion] }
+struct StubBreakdownGateway: BreakdownGateway { func suggest(for task: GoalflowTask) async throws -> [BreakdownSuggestion] { [] } }
