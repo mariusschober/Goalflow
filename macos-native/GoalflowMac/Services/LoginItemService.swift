@@ -4,7 +4,7 @@ import ServiceManagement
 final class LoginItemService: ObservableObject, @unchecked Sendable {
     static let shared = LoginItemService()
     @Published var isEnabled: Bool {
-        didSet { Task { await setEnabled(isEnabled) } }
+        didSet { guard oldValue != isEnabled else { return }; Task { await setEnabled(isEnabled) } }
     }
     init() {
         if #available(macOS 13.0, *) {
@@ -21,7 +21,8 @@ final class LoginItemService: ObservableObject, @unchecked Sendable {
             } catch {
                 print("[LoginItem] failed \(error)")
             }
-            isEnabled = SMAppService.mainApp.status == .enabled
+            let newStatus = SMAppService.mainApp.status == .enabled
+            if isEnabled != newStatus { isEnabled = newStatus }
         }
     }
 }

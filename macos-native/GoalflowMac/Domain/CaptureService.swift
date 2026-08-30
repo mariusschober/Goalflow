@@ -109,6 +109,7 @@ final class TagRoutingService: @unchecked Sendable {
         for tag in tags {
             if let urlString = routes[tag.lowercased()] ?? routes["#\(tag.lowercased())"],
                let url = URL(string: urlString) {
+                guard let scheme = url.scheme?.lowercased(), scheme == "https" || scheme == "http" else { continue }
                 DispatchQueue.main.async { _ = NSWorkspace.shared.open(url) }
             }
         }
@@ -121,31 +122,8 @@ protocol PrivacyGateway: Sendable { var isScreenSharing: Bool { get } }
 
 struct ScreenSharingPrivacyGateway: PrivacyGateway {
     var isScreenSharing: Bool {
-        if #available(macOS 12.3, *) {
-            var result = false
-            let sem = DispatchSemaphore(value: 0)
-            Task {
-                do {
-                    let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-                    if content.displays.contains(where: { $0.frame.width > 0 }) {
-                        for app in content.applications where app.bundleIdentifier.lowercased().contains("zoom") || app.bundleIdentifier.lowercased().contains("teams") {
-                            result = true
-                        }
-                    }
-                    for win in content.windows {
-                        let owner = win.owningApplication?.bundleIdentifier.lowercased() ?? ""
-                        let title = win.title?.lowercased() ?? ""
-                        if owner.contains("zoom") || owner.contains("teams") || owner.contains("webex") || owner.contains("meet") || owner.contains("slack") || owner.contains("discord") || owner.contains("loom") {
-                            if title.contains("share") || win.isOnScreen { result = true }
-                        }
-                    }
-                } catch {}
-                sem.signal()
-            }
-            _ = sem.wait(timeout: .now() + 0.5)
-            if result { return true }
-        }
-        // Fallback to CGWindowList
+        // Fast synchronous check via CGWindowList (no blocking, no semaphore)
+        // SCShareableContent requires async and would block MainActor via semaphore — avoided
         guard let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
         for win in info {
             if let owner = win[kCGWindowOwnerName as String] as? String {
@@ -155,6 +133,21 @@ struct ScreenSharingPrivacyGateway: PrivacyGateway {
                 }
             }
         }
+        return false
+    }
+    // Async detailed check (call when needed off MainActor)
+    @available(macOS 12.3, *)
+    func isScreenSharingAsync() async -> Bool {
+        do {
+            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            for win in content.windows {
+                let owner = win.owningApplication?.bundleIdentifier.lowercased() ?? ""
+                let title = win.title?.lowercased() ?? ""
+                if owner.contains("zoom") || owner.contains("teams") || owner.contains("webex") || owner.contains("meet") || owner.contains("slack") || owner.contains("discord") || owner.contains("loom") {
+                    if title.contains("share") || win.isOnScreen { return true }
+                }
+            }
+        } catch {}
         return false
     }
 }
