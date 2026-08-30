@@ -24,7 +24,7 @@ fun interface NativeSessionProvider {
 }
 
 /** Stores cloud session material encrypted by an Android Keystore key. */
-class SecureSessionStore(context: Context) : NativeSessionProvider {
+open class SecureSessionStore(context: Context) : NativeSessionProvider {
     private val preferences = context.getSharedPreferences("goalflow-secure-session", Context.MODE_PRIVATE)
 
     override fun read(): NativeSession? = runCatching {
@@ -37,9 +37,17 @@ class SecureSessionStore(context: Context) : NativeSessionProvider {
             userId = if (!json.has("userId") || json.isNull("userId")) null
                 else json.optString("userId").takeIf(String::isNotBlank)
         )
+    }.recoverCatching { e ->
+        // KeyStore wipe (e.g., lock screen change) makes old ciphertext undecryptable.
+        // Clear the stale entry so the user can re-authenticate; local DB remains intact.
+        if (e is java.security.KeyStoreException || e is java.security.UnrecoverableKeyException || e.cause is java.security.KeyStoreException) {
+            try { preferences.edit().remove(KEY_SESSION).commit() } catch (_: Exception) {}
+            try { KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }.deleteEntry(KEY_ALIAS) } catch (_: Exception) {}
+        }
+        throw e
     }.getOrNull()
 
-    fun write(session: NativeSession) {
+    open fun write(session: NativeSession) {
         val json = JSONObject().apply {
             put("accessToken", session.accessToken)
             put("refreshToken", session.refreshToken)
@@ -51,28 +59,51 @@ class SecureSessionStore(context: Context) : NativeSessionProvider {
         }
     }
 
-    fun clear() {
+    open fun clear() {
         check(preferences.edit().remove(KEY_SESSION).commit()) {
             "The cloud session could not be cleared."
         }
     }
 
+    open fun setPendingState(state: String, verifier: String) {
+        check(preferences.edit().putString(KEY_PENDING_STATE, state).putString(KEY_PENDING_VERIFIER, verifier).commit()) {
+            "The pending auth state could not be stored."
+        }
+    }
+
+    open fun getPendingState(): String? = preferences.getString(KEY_PENDING_STATE, null)
+
+    open fun getPendingVerifier(): String? = preferences.getString(KEY_PENDING_VERIFIER, null)
+
+    open fun clearPendingState() {
+        check(preferences.edit().remove(KEY_PENDING_STATE).remove(KEY_PENDING_VERIFIER).commit()) {
+            "The pending auth state could not be cleared."
+        }
+    }
+
     private fun key(): SecretKey {
-        val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
-        val existing = store.getKey(KEY_ALIAS, null) as? SecretKey
-        if (existing != null) return existing
-        return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).apply {
-            init(
-                KeyGenParameterSpec.Builder(
-                    KEY_ALIAS,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        try {
+            val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
+            val existing = store.getKey(KEY_ALIAS, null) as? SecretKey
+            if (existing != null) return existing
+            return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, ANDROID_KEYSTORE).apply {
+                init(
+                    KeyGenParameterSpec.Builder(
+                        KEY_ALIAS,
+                        KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+                    )
+                        .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                        .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                        .setUserAuthenticationRequired(false)
+                        .setInvalidatedByBiometricEnrollment(false)
+                        .build()
                 )
-                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                    .setUserAuthenticationRequired(false)
-                    .build()
-            )
-        }.generateKey()
+            }.generateKey()
+        } catch (e: Exception) {
+            // If KeyStore is unavailable (e.g., Robolectric), fallback to an in-memory key is handled by the test double.
+            // In production, re-throw to let read() clear the stale entry.
+            throw e
+        }
     }
 
     private fun encrypt(value: String): String {
@@ -96,6 +127,8 @@ class SecureSessionStore(context: Context) : NativeSessionProvider {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "goalflow_native_session"
         const val KEY_SESSION = "encrypted_session"
+        const val KEY_PENDING_STATE = "pending_oauth_state"
+        const val KEY_PENDING_VERIFIER = "pending_code_verifier"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
     }
 }

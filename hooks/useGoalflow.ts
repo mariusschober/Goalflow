@@ -426,13 +426,16 @@ export const useGoalflow = (userKey: string, legacyUserKey = userKey) => {
       setDailyPlans(previous => previous.filter(item => item.id !== localDate));
   }, [setDailyPlans]);
 
-  // --- Habit Generation & Streak Break Logic (Simplified for brevity, logic remains same) ---
-  useEffect(() => {
-      if (isLoading) return;
-      
-      const today = getTodayYYYYMMDD();
-      const todayDate = new Date();
-      const dayOfWeek = todayDate.getDay();
+   // --- Habit Generation & Streak Break Logic (P0-3: guard against infinite loop) ---
+   const prevHabitGenRef = useRef<{ habitsLen: number; tasksLen: number; today: string } | null>(null);
+   useEffect(() => {
+       if (isLoading) return;
+       const today = getTodayYYYYMMDD();
+       const todayDate = new Date();
+       const dayOfWeek = todayDate.getDay();
+       const prev = prevHabitGenRef.current;
+       if (prev && prev.habitsLen === habits.length && prev.tasksLen === tasks.length && prev.today === today) return;
+       prevHabitGenRef.current = { habitsLen: habits.length, tasksLen: tasks.length, today };
       
       let newTasks: Task[] = [];
       let habitsUpdated = false;

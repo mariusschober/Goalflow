@@ -305,10 +305,11 @@ class GoalflowRepository(
             val previousProgress = rawCollections.get("progress")?.payload
             val focusMinutes = (actualDuration ?: taskExtras.optInt("actualDuration", taskExtras.optInt("duration", 0)))
                 .coerceAtLeast(0)
-            val remainingToday = tasks.getAll().count {
-                it.id != id && it.status == TaskStatus.OPEN.name && it.deletedAt == null
-                    && it.schedulePrecision == SchedulePrecision.DAY.name && it.scheduledFor == today
-            }
+            // Use indexed count instead of full table scan (P0-1)
+            val totalToday = tasks.countRemainingToday(today)
+            val remainingToday = if (task.scheduledFor == today && task.status == TaskStatus.OPEN.name && task.deletedAt == null) {
+                (totalToday - 1).coerceAtLeast(0)
+            } else totalToday
             val habitStreak = previousHabit?.let { it.streak + 1 } ?: 0
             var earnedXp = if (task.isFrog) 30 else 10
             if (task.habitId != null) earnedXp += habitStreak * 2
@@ -604,11 +605,11 @@ class GoalflowRepository(
             if (current.isFrog && nextDay > currentDay) {
                 throw SchedulingException("A frog cannot be moved forward.")
             }
-            if (current.habitId != null && schedulePrecision == SchedulePrecision.DAY && tasks.getAll().any {
-                    it.id != id && it.status == TaskStatus.OPEN.name && it.deletedAt == null
-                        && it.habitId == current.habitId && it.scheduledFor == scheduledFor
-                }) {
-                throw SchedulingException("A habit instance already exists on that day.")
+            if (current.habitId != null && schedulePrecision == SchedulePrecision.DAY) {
+                val existing = tasks.getByHabitAndDate(current.habitId, scheduledFor)
+                if (existing != null && existing.id != id && existing.status == TaskStatus.OPEN.name && existing.deletedAt == null) {
+                    throw SchedulingException("A habit instance already exists on that day.")
+                }
             }
             val scheduleChanged = current.schedulePrecision != schedulePrecision.name ||
                 current.scheduledFor != scheduledFor || current.scheduledTime != scheduledTime
@@ -796,15 +797,11 @@ class GoalflowRepository(
             val current = tasks.getAll().firstOrNull { it.id == id }
                 ?: throw SchedulingException("Task not found.")
             if (current.status != TaskStatus.OPEN.name) throw SchedulingException("Only an open task can be changed.")
-            if (current.habitId != null && tasks.getAll().any { other ->
-                    other.id != current.id &&
-                        other.status == TaskStatus.OPEN.name &&
-                        other.deletedAt == null &&
-                        other.habitId == current.habitId &&
-                        other.schedulePrecision == SchedulePrecision.DAY.name &&
-                        other.scheduledFor == scheduledFor
-                }) {
-                throw SchedulingException("A habit instance already exists on that day.")
+            if (current.habitId != null) {
+                val existing = tasks.getByHabitAndDate(current.habitId, scheduledFor)
+                if (existing != null && existing.id != current.id && existing.status == TaskStatus.OPEN.name && existing.deletedAt == null && existing.schedulePrecision == SchedulePrecision.DAY.name) {
+                    throw SchedulingException("A habit instance already exists on that day.")
+                }
             }
             val currentDay = if (current.schedulePrecision == SchedulePrecision.MONTH.name) {
                 "${current.scheduledFor}-01"
@@ -964,7 +961,7 @@ class GoalflowRepository(
     suspend fun deleteGoal(id: String) {
         database.withTransaction {
             val goal = goals.get(id) ?: return@withTransaction
-            val linkedTasks = tasks.getAll().filter { it.goalId == id }
+            val linkedTasks = tasks.getByGoalId(id)
             val linkedHabits = habits.getAll().filter { it.goalId == id }
             val now = timeProvider.now().toEpochMilli()
             tasks.updateAll(linkedTasks.map { it.copy(goalId = null, updatedAt = now) })
@@ -1034,7 +1031,7 @@ class GoalflowRepository(
     suspend fun deleteHabit(id: String) {
         database.withTransaction {
             val habit = habits.get(id) ?: return@withTransaction
-            val linkedTasks = tasks.getAll().filter { it.habitId == id }
+            val linkedTasks = tasks.getByHabitId(id)
             val now = timeProvider.now().toEpochMilli()
             val unlinked = linkedTasks.map { it.copy(habitId = null, updatedAt = now) }
             if (unlinked.isNotEmpty()) tasks.updateAll(unlinked)
@@ -1147,7 +1144,7 @@ class GoalflowRepository(
         database.withTransaction {
             val current = parseTrueNorthCollection(rawCollections.get("truenorth")?.payload)
             if (current.none { it.id == id }) return@withTransaction
-            val linkedTasks = tasks.getAll().filter { it.goalId == id }
+            val linkedTasks = tasks.getByGoalId(id)
             val linkedHabits = habits.getAll().filter { it.goalId == id }
             val now = timeProvider.now().toEpochMilli()
             val unlinkedTasks = linkedTasks.map { it.copy(goalId = null, updatedAt = now) }

@@ -57,11 +57,11 @@ private object GoalflowWidgetState {
     fun error(context: Context): String? = preferences(context).getString(KEY_ERROR, null)
 
     fun setError(context: Context, message: String) {
-        preferences(context).edit().putString(KEY_ERROR, message).apply()
+        preferences(context).edit().putString(KEY_ERROR, message).commit()
     }
 
     fun clearError(context: Context) {
-        preferences(context).edit().remove(KEY_ERROR).apply()
+        preferences(context).edit().remove(KEY_ERROR).commit()
     }
 
     fun setUndo(
@@ -78,7 +78,7 @@ private object GoalflowWidgetState {
             .putString(KEY_UNDO_LOCAL_DATE, localDate)
             .putString(KEY_UNDO_PLAN_FINGERPRINT, planFingerprint)
             .putLong(KEY_UNDO_PRIOR_UPDATED_AT, expectedPriorUpdatedAt)
-            .apply()
+            .commit()
     }
 
     fun undo(context: Context): WidgetUndoState? {
@@ -105,7 +105,7 @@ private object GoalflowWidgetState {
             .remove(KEY_UNDO_LOCAL_DATE)
             .remove(KEY_UNDO_PLAN_FINGERPRINT)
             .remove(KEY_UNDO_PRIOR_UPDATED_AT)
-            .apply()
+            .commit()
     }
 }
 
@@ -207,9 +207,11 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
                 .putExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_UPDATED_AT, task?.updatedAt ?: Long.MIN_VALUE)
                 .putExtra(GoalflowWidgetIntent.EXTRA_LOCAL_DATE, snapshot.localDate)
                 .putExtra(GoalflowWidgetIntent.EXTRA_PLAN_FINGERPRINT, snapshot.planFingerprint)
+            // Use task.id + localDate + action to avoid hashCode collisions (FB/Ea)
+            val requestCode = "${snapshot.localDate}|$action|${task?.id.orEmpty()}|${task?.updatedAt}".hashCode()
             return PendingIntent.getBroadcast(
                 context,
-                listOf(action, task?.id, task?.updatedAt, snapshot.planFingerprint).joinToString("|").hashCode(),
+                requestCode,
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )

@@ -3,12 +3,40 @@ apply plugin: 'com.android.application'
 android {
     namespace "com.mariusschober.goalflow"
     compileSdk rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            def b64 = System.getenv("ANDROID_KEYSTORE_BASE64")
+            if (b64) {
+                def decoded = new File("/tmp/goalflow.keystore")
+                if (!decoded.exists()) {
+                    decoded.bytes = java.util.Base64.getDecoder().decode(b64)
+                }
+                storeFile decoded
+                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: findProperty("goalflowStorePassword") ?: ""
+                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: findProperty("goalflowKeyAlias") ?: "goalflow"
+                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: findProperty("goalflowKeyPassword") ?: ""
+                enableV1Signing true
+                enableV2Signing true
+            } else {
+                def keystorePath = findProperty("goalflowKeystore") ?: ""
+                def keystoreFile = keystorePath ? file(keystorePath) : null
+                if (keystoreFile?.exists()) {
+                    storeFile keystoreFile
+                    storePassword findProperty("goalflowStorePassword") ?: ""
+                    keyAlias findProperty("goalflowKeyAlias") ?: "goalflow"
+                    keyPassword findProperty("goalflowKeyPassword") ?: ""
+                    enableV1Signing true
+                    enableV2Signing true
+                }
+            }
+        }
+    }
     defaultConfig {
         applicationId "com.mariusschober.goalflow"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 3
+        versionName "0.3.0-tranche3"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -35,6 +63,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }

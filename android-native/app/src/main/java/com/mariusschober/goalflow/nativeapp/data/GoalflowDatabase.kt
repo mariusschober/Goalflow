@@ -17,7 +17,14 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
-@Entity(tableName = "tasks")
+@Entity(
+    tableName = "tasks",
+    indices = [
+        Index(value = ["scheduledFor", "schedulePrecision", "status", "deletedAt"]),
+        Index(value = ["goalId"]),
+        Index(value = ["habitId", "scheduledFor", "deletedAt"])
+    ]
+)
 data class TaskEntity(
     @PrimaryKey val id: String,
     val title: String,
@@ -81,7 +88,10 @@ data class HabitEntity(
 
 @Entity(
     tableName = "sync_outbox",
-    indices = [Index(value = ["entityType", "entityId", "version"])]
+    indices = [
+        Index(value = ["entityType", "entityId", "version"]),
+        Index(value = ["dependsOnMutationId"])
+    ]
 )
 data class SyncOutboxEntity(
     @PrimaryKey val mutationId: String,
@@ -154,6 +164,21 @@ interface TaskDao {
 
     @Query("SELECT COALESCE(MAX(plannedOrder), -1) FROM tasks WHERE scheduledFor = :scheduledFor AND schedulePrecision = :precision")
     suspend fun maxOrder(scheduledFor: String, precision: String): Int
+
+    @Query("SELECT COUNT(*) FROM tasks WHERE scheduledFor = :scheduledFor AND status = 'open' AND deletedAt IS NULL AND schedulePrecision = 'day'")
+    suspend fun countRemainingToday(scheduledFor: String): Int
+
+    @Query("SELECT * FROM tasks WHERE scheduledFor = :scheduledFor AND deletedAt IS NULL")
+    suspend fun getByScheduledFor(scheduledFor: String): List<TaskEntity>
+
+    @Query("SELECT * FROM tasks WHERE goalId = :goalId AND deletedAt IS NULL")
+    suspend fun getByGoalId(goalId: String): List<TaskEntity>
+
+    @Query("SELECT * FROM tasks WHERE habitId = :habitId AND scheduledFor = :scheduledFor AND deletedAt IS NULL LIMIT 1")
+    suspend fun getByHabitAndDate(habitId: String, scheduledFor: String): TaskEntity?
+
+    @Query("SELECT * FROM tasks WHERE habitId = :habitId AND deletedAt IS NULL")
+    suspend fun getByHabitId(habitId: String): List<TaskEntity>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(task: TaskEntity)
@@ -400,7 +425,7 @@ interface LocalAccountDao {
         TaskEventEntity::class,
         LocalAccountEntity::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = true
 )
 abstract class GoalflowDatabase : RoomDatabase() {
@@ -521,13 +546,23 @@ abstract class GoalflowDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_scheduledFor_schedulePrecision_status_deletedAt ON tasks(scheduledFor, schedulePrecision, status, deletedAt)")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_goalId ON tasks(goalId) WHERE goalId IS NOT NULL")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_tasks_habit_scheduledFor_deletedAt ON tasks(habitId, scheduledFor, deletedAt) WHERE habitId IS NOT NULL")
+                database.execSQL("CREATE INDEX IF NOT EXISTS index_sync_outbox_dependsOnMutationId ON sync_outbox(dependsOnMutationId) WHERE dependsOnMutationId IS NOT NULL")
+            }
+        }
+
         fun migrations(): Array<Migration> = arrayOf(
             MIGRATION_1_2,
             MIGRATION_2_3,
             MIGRATION_3_4,
             MIGRATION_4_5,
             MIGRATION_5_6,
-            MIGRATION_6_7
+            MIGRATION_6_7,
+            MIGRATION_7_8
         )
         fun create(context: Context): GoalflowDatabase = Room.databaseBuilder(
             context,

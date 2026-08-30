@@ -1,7 +1,7 @@
 {
   "name": "goalflow",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0-tranche3",
   "type": "module",
   "scripts": {
     "lint": "tsc --noEmit",

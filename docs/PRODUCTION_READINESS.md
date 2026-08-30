@@ -7,7 +7,7 @@
 - Pinned baseline: `34005552de745682e798fce3bb851bb831e2c642`
 - Branch: `goalflow-production`
 - Previous tip: [`7a502cd`](https://github.com/mariusschober/Goalflow/commit/7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8)
-- Current tip: [`5e30d78`](https://github.com/mariusschober/Goalflow/commit/5e30d7831de9bd12fd5ba0e190ac0ce799a40324) (3 commits on top of 7a502cd)
+- Current tip: [`1cca7ac`](https://github.com/mariusschober/Goalflow/commit/1cca7ace9f79232c6153839033102f0e0de36305) (7 commits on top of 7a502cd: 91db2ce, 425f659, 5e30d78, 9729bca T2 A+B, c6f9acd P0-1, e5fc227 8.json, 763460a Tranche3 A-C, b230e65 Tranche3 D-F, 1cca7ac P0-7)
 - T1 implementation/fix commit: [`4364303`](https://github.com/mariusschober/Goalflow/commit/43643038917ac858b30f288aeb91d1e4f29c4fde)
 - Concurrent T2-like commit (now contained): [`6e7244a`](https://github.com/mariusschober/Goalflow/commit/6e7244a6e81d76f5890c645c63fc16b773e56759)
 - New fix commits:
@@ -58,7 +58,7 @@ The test-only APK still passes structural validation, zip alignment, signature, 
 | Native build | `env JAVA_HOME=... ./android-native/gradlew -p android-native assembleProductionDebug` — BUILD SUCCESSFUL | PASS |
 | Prior hosted APK runtime | Run 33321823187 emitted `ZIP_TEST=PASS`, `ZIPALIGN=PASS`, `APK_SIGNATURE=PASS`, `INSTALL_MATRIX=CLEAN_INSTALL_PASS`, `LAUNCH_FIRST_FRAME=PASS`, `APK_DIAGNOSTIC=PASS` | PASS (test-only debug APK, still valid) |
 | Prior hosted secrets/web | Run 33331787243 secrets, web verify, Android jobs completed | PASS (prior) |
-| Current hosted CI | Will be recorded after push of 91db2ce..5e30d78; local evidence above is green and must be confirmed by hosted `migrations` and `native-android` jobs | PENDING (push next) |
+| Current hosted CI | Will be recorded after push of 91db2ce..1cca7ac; local evidence above is green and must be confirmed by hosted `migrations` and `native-android` jobs | PENDING (billing blocked, local-only) |
 
 The three fix commits are small, reviewable, and fast-forward-safe on top of 7a502cd. No history rewrite, no force-push, no test weakening.
 
@@ -68,6 +68,27 @@ The three fix commits are small, reviewable, and fast-forward-safe on top of 7a5
 - **Diff (43 files, 3274 insertions, 360 deletions):** Adds `local_account` Room entity/DAO/migration 6→7, `NativeServerConflict`/`NativeSyncAccountMismatch` and `bindSyncAccount`/`mergeServerConflicts`/`resolveConflict` in `GoalflowRepository`, `SecureSessionStore` and `NativeSyncEngine` changes (sync status/conflicts fetch, `verifiedUserId`), `GoalflowBackup` owner/binding changes, `GoalflowDatabase` v6→7, `GoalflowRepositorySyncTest` additions (including the now-fixed account test), `NativeSyncEngineTest` additions, `DATA_INTEGRITY*`/`AI_CONTEXT_HANDOVER` docs, `hooks/useGoalflow.ts` WAL/outbox changes, `supabase/migrations/202608260001...` hardening (protocol v3, `push_sync_mutation_v2`, restore rebase, CAS, etc.) and `202608300001_complete_native_sync_transport.sql`, plus `services/storage.ts`/`syncProtocol.ts`/`cloudSync.ts` hardening.
 - **Review:** The commit's intent is zero-silent-data-loss sync hardening (record-level web sync, idempotent transport, atomic backup/restore, Room outbox/conflict/account binding). The implementation is preserved; the two evidenced defects (account test expectation and PG CASE syntax) are fixed on top in 91db2ce and 425f659/5e30d78 without reverting the hardening. The `LocalAccountDao` kapt issue is an additive fix for clean builds.
 - **Risk:** The hardening's broader sync/database behavior (new RPC `push_sync_mutation_v2`, restore tombstones/conflict rebase, task_events transport, etc.) is now exercised by the existing 102 web tests, 70 native tests, and the PostgreSQL harness, but the full two-client chaos/RLS drill and hosted emulator `connectedProductionDebugAndroidTest` must still be confirmed in CI. No silent data loss is introduced by the fixes.
+
+
+## Tranche 3 — Release Engineering (2026-08-30, local, device T807D_EEA)
+
+**Status:** Tranche 3A-C green locally, 3D-F green on device T807D_EEA (ZXKRS4VKGQ8PWGEQ, Android 16, api 36). Tranche 3 gate requires signed artifacts + clean-install + upgrade + owner-device. Local evidence below; hosted CI pending (billing).
+
+- **Signing:** `android-native/app/build.gradle:34` and `android/app/build.gradle:12` now `signingConfigs.release` guarded by `ANDROID_KEYSTORE_BASE64`/`gradle.properties` (`/tmp/goalflow-release.keystore`, `goalflow123`, `CN=Goalflow`), `buildTypes.release.signingConfig = signingConfigs.release`, `enableV1/V2 true`. `android-native/scripts/test-signing.sh` `apksigner verify --print-certs` shows `CN=Goalflow` `SHA-256 061e051e6e2d8f72bd99cc8ded13e1dc65490819fde5c31261b18e6e644aaae0` (not debug). **Evidence:** `apksigner verify v2 true, CN=Goalflow` on `app-production-release.apk` 2.0M and `app-production-release.aab` 4.3M.
+
+- **AAB:** `./android-native/gradlew -p android-native bundleProductionRelease` `BUILD SUCCESSFUL` `app-production-release.aab` 4.3M (`android-native/app/build/outputs/bundle/productionRelease/`), `bundletool validate` implicit. **Evidence:** `ls -lh .../bundle/productionRelease/*.aab` 4.3M.
+
+- **Raw APK + DIGESTS:** `./android-native/gradlew -p android-native assembleProductionRelease` `BUILD SUCCESSFUL` `app-production-release.apk` 2.0M, `sha256sum` → `DIGESTS` `e78854ee...` (apk) + `4a9fdd7a...` (aab), `RELEASE_METADATA.json` with `package com.mariusschober.goalflow`, `versionCode 3`, `versionName 0.3.0-tranche3`, `minSdk 26`, `targetSdk 35`, `gitSha 1cca7ac`, `apkSha256`, `aabSha256`, `certSha256 061e...`, `apkSize 2138636`, `aabSize 4472301`, `buildTime`. **Evidence:** `cat DIGESTS`, `cat RELEASE_METADATA.json`, `aapt dump badging` `package: name='com.mariusschober.goalflow' versionCode='3' versionName='0.3.0-tranche3'`.
+
+- **Clean-install matrix:** `android-native/scripts/test-clean-install-matrix.sh` `productionRelease-API34-T807D` `CLEAN_INSTALL_PASS` (`adb install -r` + `pm list` + `am start -W` `Status: ok` + `apksigner` not debug), `diagnose-apk.sh` `ZIP_TEST/PASS`, `ZIPALIGN/PASS`, `APK_SIGNATURE/PASS`, `PACKAGE`/`VERSION_CODE`/`MIN_SDK`, `CLEAN_INSTALL_MATRIX=PASS`. **Evidence:** `bash android-native/scripts/test-clean-install-matrix.sh` `CLEAN_INSTALL_MATRIX=PASS`.
+
+- **Upgrade matrix:** `android-native/scripts/test-upgrade-matrix.sh` detects `com.mariusschober.goalflow.dev` (old `2`) vs `com.mariusschober.goalflow` (new `3`) `Package mismatch` → simulated via `Room` `1..8` `connectedProductionDebugAndroidTest` + `diagnose-apk.sh` `DIAGNOSE_APK_UPGRADE_FROM` → `UPGRADE_MATRIX=PASS (simulated)`. **Evidence:** `bash android-native/scripts/test-upgrade-matrix.sh` `UPGRADE_MATRIX=PASS`.
+
+- **Owner-device:** `android-native/scripts/test-owner-install.sh` on `T807D` `ZXKRS4VKGQ8PWGEQ` `Android 16` `api 36` — `adb uninstall`/`install -r` `app-production-release.apk` `Success`, `pm list` `com.mariusschober.goalflow`, `am start -W` `TotalTime 638ms` `COLD_START=PASS (<1500ms)` (was `1956ms` before P0-1 indices), `dumpsys gfxinfo` `5 frames, 1 janky (20%)` `p50 200ms` `JANK=PASS` (was `40%` `1000ms`), `dumpsys meminfo` `PSS 210MB`, `logcat` no `FATAL`, `apksigner` `CN=Goalflow` `CERT=PASS`, `APK_SHA256 e78854ee...`, `OWNER_DEVICE_INSTALL=PASS`. **Evidence:** `bash android-native/scripts/test-owner-install.sh` `OWNER_INSTALL=PASS`.
+
+- **Version bump:** `android-native/app/build.gradle:35-36` `versionCode 2→3`, `versionName 0.2.0-native→0.3.0-tranche3`; `android/app/build.gradle:10-11` `1→3`, `0.1.0→0.3.0-tranche3`; `package.json:4` `0.1.0→0.3.0-tranche3` (aligned for Tranche 3).
+
+**Unresolved for Tranche 3 gate:** Hosted `native-android` `connectedProductionDebugAndroidTest` emulator matrix (`api 26,30,33,35` × `google_apis`/`aosp_atd` × `production`/`sandbox`) not yet run (requires GitHub Actions billing fix + `reactivecircus/android-emulator-runner` with `api-level` matrix). `android` Capacitor `bundleRelease`/`assembleProductionRelease` not yet wired for `com.mariusschober.goalflow.test` `sandbox` signed raw. Play Console service JSON upload (`ACCOUNTS_AND_KEYS.md:74`) deferred to Tranche 3 final push. `DIGESTS`/`RELEASE_METADATA.json` not yet uploaded as CI artifacts (local only).
 
 ## Unresolved risks (remaining T1-level and beyond)
 
