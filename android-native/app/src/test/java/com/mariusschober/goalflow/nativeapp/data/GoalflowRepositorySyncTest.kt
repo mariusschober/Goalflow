@@ -854,7 +854,8 @@ class GoalflowRepositorySyncTest {
 
         repository.executeWidgetAction(NativeWidgetAction.COMPLETE, completionTarget)
         val completed = repository.taskSnapshot(task.id) ?: error("Completed task should remain readable")
-        repository.createTask("New plan item", "", SchedulePrecision.DAY, today, null, false)
+        val newPlanItem = repository.createTask("New plan item", "", SchedulePrecision.DAY, today, null, false)
+        repository.confirmPlan(today, listOf(newPlanItem.id))
 
         try {
             repository.executeWidgetAction(
