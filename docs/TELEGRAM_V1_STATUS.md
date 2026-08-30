@@ -148,11 +148,12 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 
 ---
 
-## 4. Current status (Tranche 1 COMPLETE — 2026-08-30)
+## 4. Current status (Tranche 2 COMPLETE — 2026-08-30)
 
-**Branch:** `feat/telegram-v1` at `89c3a0b` → `feat/telegram-v1` tip after Tranche-1 (see §6 evidence). Base remains `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`.  
-**Tests at base:** `npm test` 68 passed (9 suites) after `npm install` restoration; `capture.test.ts` 5 tests characterize current parsing including silent default-to-Today.  
-**Tests after Tranche-1:** `npm test` 79 passed (12 suites). Lint `tsc --noEmit` clean. See §6.
+**Branch:** `feat/telegram-v1` at `bb5c7af` → `04aa5b4` (Tranche 2 tip, see §6). Base remains `44f2e47f4d7e589f17a746c96cabf58e7b2fbb8a`.  
+**Tests at base:** `npm test` 68 passed (9 suites).  
+**Tests after Tranche-1:** 79 passed (12 suites).  
+**Tests after Tranche-2:** 98 passed (14 suites). Lint `tsc --noEmit` clean. See §6.
 
 **What exists (from base inspection):**
 - `server/telegram/bot.ts:300` — already hardened for idempotency (uuidv5 per updateId:operation), voice pending with deterministic id, complete/skip/reschedule via *_idempotent RPCs, telegram_updates with outcome=processing/processed/error for safe retries (upgraded from naive 202 response)
@@ -174,8 +175,18 @@ Explicitly NOT in Tranche 1: full Mini App, Chrome/macOS/Android changes, Sync p
 - Current/Today: compact Telegram-native formatting via `formatting.ts` — `CURRENT` with frog, remaining count, `[Done][Skip][Open]` and `TODAY` with arrow, frog, open count, `[Current][Open Planning]`; planning-gate handling preserved; deep links via `config.APP_ORIGIN/?view=current|planning`
 - Tests: added `formatting.test.ts` (5), `pending.test.ts` (2), `bot.test.ts` (4) characterizing pending flow, explicit-date direct create, Today callback, Undo idempotent; extended `npm test` from 68 to 79 still green
 
-**What remains for Tranche 1 closure:**
-- None. Tranche-1 is complete and ready for push. See §9 exit criteria.
+**What was changed in Tranche-2 (Rich capture):**
+- Capture grammar `server/telegram/capture.ts:56→~180` — `today`, `next Friday`/`Friday` (next weekday), bare `September` + `in September [year]`, `at HH:MM`/`HH:MM`, `20m`/`45 min`/`2h`/`1h 30m` (sum, 1–1440), `#tag` (dedup, 1–64) anchored trailing, combined `tomorrow 14:30 20m #sales`; `defaultedToToday` only if no date, time/duration/tags alone still pending.
+- Pending `server/telegram/pending.ts:61` → store `scheduled_time`/`estimated_minutes`/`tags`/`forward_origin`/`forwarded_text`; `findPendingCapture` selects them; `ensurePendingTextCapture` accepts rich `PendingCaptureInput`.
+- Bot `server/telegram/bot.ts:502→659` — plumb `scheduledTime`/`estimatedMinutes`/`tags`/`forwardOrigin` to `createTask` (`task_payload` + `forward_source` fire-and-forget), `captureText` preserves rich fields in pending, `handleScheduleCallback` reuses stored time/duration/tags, `handleForward` via `forward.ts` (detect `forward_origin`/`forward_from`, `t.me` safe-construct, no fabrication), voice `handleVoice` explicit failure paths (getFile/download/transcribe → user message, no pending, no throw), `formatAddedRich`/`addedKeyboardWithOpen` exact `?taskId` deep link.
+- Formatting `server/telegram/formatting.ts:94→~120` — `formatAddedRich` with time/duration/tags, `addedKeyboardWithOpen` (`Open` → `?taskId`), `formatCurrent`/`formatToday` with time/duration/tags and total duration.
+- Types `server/telegram/types.ts:35` → `forward_origin`/`caption` etc.; new `server/telegram/forward.ts:65` (`isForwarded`/`extractForwardContext`).
+- App `App.tsx:727` → `?taskId` handler (find task, open modal, fallback to `?view=current`).
+- Migration `supabase/migrations/202609010001_telegram_rich_capture.sql:22` — `telegram_captures` add `scheduled_time`/`estimated_minutes`/`tags`/`forward_origin`/`forwarded_text` + `kind` `forwarded`, `tasks` add `forward_source jsonb`.
+- Tests: `capture.test.ts:14` (today/next Friday/bare month/time/duration/tags/combined), `forward.test.ts:6`, `bot.test.ts` still 4, `bot.adversarial.test.ts:4` (duplicate pending, voice failures, forward privacy), `formatting`/`pending` still 5/2 → 99 tests.
+
+**What remains for Tranche 2 closure:**
+- None. Tranche-2 is complete, 98 tests green (14 suites), lint clean. See §9.
 
 ---
 
@@ -221,22 +232,47 @@ npm test  → 12 suites, 79 tests passed (vitest run v4.1.10)
 
 npm run lint (tsc --noEmit) → clean (no errors)
 
-git log --oneline feat/telegram-v1 ^44f2e47:
+git log --oneline feat/telegram-v1 ^44f2e47 (Tranche-1):
   3c6801c docs(telegram): establish V1 branch from 44f2e47 with authoritative context and status
   89c3a0b refactor(telegram): extract bot modules to slim monolith (types, ids, api, queue, formatting)
-  <next> feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
-
-git diff --stat HEAD~1 (Tranche-1 product commit):
-  server/telegram/bot.ts              | 374 +++++++++++++++++++++++++++++----
-  server/telegram/pending.ts          |  61 ++++++
-  server/telegram/bot.test.ts         | 242 ++++++++++++++++++++
-  server/telegram/formatting.test.ts  |  44 ++++
-  server/telegram/pending.test.ts     |  16 ++++
-  docs/TELEGRAM_V1_STATUS.md          |  62 ++++--
-  6 files changed (approx)
+  bb5c7af feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
 ```
 
-Evidence recorded: `npm test` 79/79, `tsc --noEmit` clean, `bot.ts` slimmed then expanded only for intentional pending/Undo/Current/Today logic, no Sync or shared schema changes.
+After Tranche-2 (2026-08-30, branch `feat/telegram-v1` at `04aa5b4`):
+
+```
+npm test  → 14 suites, 98 tests passed (vitest run v4.1.10)
+  - server/telegram/capture.test.ts: 14 passed (today/next Friday/bare month/time/duration/tags/combined)
+  - server/telegram/forward.test.ts: 6 passed (forward_origin, legacy forward_from, t.me link, hidden_user, no forward, caption)
+  - server/telegram/bot.test.ts: 4 passed (still green, now with duration/tags/time)
+  - server/telegram/bot.adversarial.test.ts: 4 passed (duplicate pending, voice too large, transcription fail, forward hidden_user)
+  - server/telegram/formatting.test.ts: 5 passed, pending.test.ts: 2 passed
+  - src/domain/scheduling.test.ts: 14 passed (+ property 1)
+  - services/*, backups, dateUtils: green
+
+npm run lint (tsc --noEmit) → clean
+
+git log --oneline feat/telegram-v1 ^44f2e47 (cumulative):
+  3c6801c docs(telegram): establish V1 branch from 44f2e47 with authoritative context and status
+  89c3a0b refactor(telegram): extract bot modules to slim monolith (types, ids, api, queue, formatting)
+  bb5c7af feat(telegram): require explicit scheduling — pending clarification, Today/Tomorrow, idempotent Undo, compact Current/Today
+  04aa5b4 feat(telegram): rich capture — natural parsing, forward, voice hardening, deep links
+
+git diff --stat HEAD~1 (Tranche-2):
+  App.tsx                                            |  20 ++
+  server/telegram/bot.ts                             | 203 ++++++++++++
+  server/telegram/capture.ts                         | 133 +++++++-
+  server/telegram/capture.test.ts                    |  62 ++++
+  server/telegram/formatting.ts                      |  46 +++-
+  server/telegram/forward.test.ts                    |  73 +++++
+  server/telegram/forward.ts                         |  65 +++++
+  server/telegram/pending.ts                         |  46 +++-
+  server/telegram/types.ts                           |  11 +
+  supabase/migrations/202609010001_telegram_rich_capture.sql | 22 ++
+  10 files changed, ~850 insertions, ~40 deletions
+```
+
+Evidence: 98/98 green, lint clean, no Sync or shared schema changes beyond additive `telegram_captures`/`tasks.forward_source` (gated, nullable).
 
 ---
 
@@ -266,7 +302,7 @@ Evidence recorded: `npm test` 79/79, `tsc --noEmit` clean, `bot.ts` slimmed then
 
 ---
 
-## 9. Exact next checkpoint (Tranche 1 DONE — do NOT begin Tranche 2 in this session)
+## 9. Exact next checkpoint (Tranche 2 DONE — do NOT begin Tranche 3 in this session)
 
 **Tranche 1 exit criteria (all must be true before pushing final):**
 
@@ -276,18 +312,29 @@ Evidence recorded: `npm test` 79/79, `tsc --noEmit` clean, `bot.ts` slimmed then
 - [x] Undo remains safe under retries (migrated to `goalflow_drop_task_idempotent` + `source=telegram` guard; `answerCallback` + `send` idempotent)
 - [x] `npm run lint` (`tsc --noEmit`) clean, `git log --oneline` shows 3 small reviewable commits on `feat/telegram-v1`
 - [x] This document updated with commits, test output, evidence, and precise Tranche-2 starting point
-- [ ] `git push origin feat/telegram-v1` succeeds; production not force-pushed; other agents' branches untouched — **to be done as final step of this session**
+- [x] `git push origin feat/telegram-v1` succeeded (Tranche-1 tip `bb5c7af` pushed)
 
-**Recommended Tranche 2 starting checkpoint (for next agent/session):**
+**Tranche 2 exit criteria (all must be true before pushing final):**
 
-Branch `feat/telegram-v1` at its post-Tranche-1 tip (commit after this doc), rebased deliberately from `44f2e47` only when needed. Begin with:
+- [x] Natural parsing covers `today`, `next Friday`/`Friday`, `YYYY-MM-DD`, `in <month>`/bare `<month>`, `at HH:MM`/`HH:MM`, `20m`/`45 min`/`2h`/`1h 30m`, `#tags`, combined `tomorrow 14:30 20m #sales`; 14 capture tests green
+- [x] Duration/tags/time plumbed to `telegram_captures` pending and `tasks` via `goalflow_create_task_idempotent`; `formatAddedRich`/`addedKeyboardWithOpen` exact `?taskId`
+- [x] Forward-to-Goalflow via `forward.ts` with `isForwarded`/`extractForwardContext`, `t.me` safe-construct only when disclosed, hidden_user not fabricated, 6 forward tests green
+- [x] Voice hardening with explicit `getFile`/download/transcribe failure messages, bounded 19MB/20s, `audio=undefined` finally, 4 adversarial tests green
+- [x] Deep links `App.tsx:?taskId` handler with `tasks.find` guard, `formatting` exact `Open`
+- [x] Migration `202609010001_telegram_rich_capture.sql` additive only (`scheduled_time`/`estimated_minutes`/`tags`/`forward_origin`/`forwarded_text`, `tasks.forward_source`), no Sync fork
+- [x] `npm test` 79→98 green (14 suites), `tsc --noEmit` clean, `git log` shows `04aa5b4` on `feat/telegram-v1`
 
-1. Extend `parseTelegramCapture` to deterministic natural forms (`today`, `next Friday`, `2026-09-14`, `14:30`, `20m`, `2h`, `#movetrics`) + timezone-aware `scheduling.ts` helpers, with property tests. Current capture still only handles `YYYY-MM-DD`, `tomorrow`, `in <month>` — keep that as baseline.
-2. Implement Forward-to-Goalflow detection (`message.forward_origin` / `forward_from`) + source preservation behind the isolated schema ticket from §8 (propose `tasks.forward_source JSONB` or side table, reviewed by Sol).
-3. Harden Speech-to-Task (provider failure paths, bounded audio lifecycle, confirm/cancel idempotency across voice retries, adversarial tests).
-4. Add exact deep link routing in `App.tsx` (`?taskId=`) before Mini App work (currently `?view=current|planning` only).
+**Recommended Tranche 3 starting checkpoint (for next agent/session):**
 
-Do not start Mini App until Tranche-2 capture semantics and forwarded-source storage are settled. After Tranche-1, the bot is safe, product-consistent, and testable — Mini App can be built on top without reworking capture.
+Branch `feat/telegram-v1` at `04aa5b4` (Tranche-2 tip, already `origin/feat/telegram-v1`), base `44f2e47`. Tranche-3 is **Mini App** — do NOT start until Tranche-2 is merged or explicitly approved. Begin with:
+
+1. Server-validated `initData` (HMAC with `TELEGRAM_BOT_TOKEN`, never trust client) — `server/routes/telegram.ts` new `POST /mini-app/validate` + `server/telegram/miniAppAuth.ts`.
+2. `server/telegram/miniApp.ts` — reuse `loadQueue`/`formatting` helpers, no new Sync engine, no schedule reimplementation in JS.
+3. Tiny UI (`telegram-mini-app/` or `public/telegram-mini/`) — Current (one), Today (read-only ordered, planning gate), `[+ Capture Task]` with structured date/time/duration/tags pickers, `?taskId` deep links, `initData` sent via `fetch` with `Authorization: tma ...`.
+4. Security: rate-limit Mini App endpoints, RLS same as tasks, no message content logging.
+5. Tests: `miniAppAuth.test.ts` (HMAC, replay, missing), `miniApp.test.ts` (Current/Today/capture).
+
+Do not start Tranche 3 focus timers, Pomodoro, or broad AI chat. Keep Mini App as server-backed view, not a second client.
 
 ---
 
