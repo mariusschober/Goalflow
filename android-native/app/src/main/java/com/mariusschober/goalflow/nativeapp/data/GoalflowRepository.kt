@@ -84,6 +84,8 @@ val NATIVE_RAW_COLLECTION_TYPES = setOf(
     "tracking", "circadian", "settings", "sync"
 )
 
+internal const val RESTORE_QUARANTINE_PREFIX = "__goalflow.restore.quarantine."
+
 class GoalflowRepository(
     private val database: GoalflowDatabase,
     private val deviceId: String = UUID.randomUUID().toString(),
@@ -3024,7 +3026,6 @@ class GoalflowRepository(
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"
         const val RESTORE_CHECKPOINT_KEY = "__goalflow.restore.checkpoint"
-        const val RESTORE_QUARANTINE_PREFIX = "__goalflow.restore.quarantine."
         const val HABIT_GENERATION_LEASE_MILLIS = 10 * 60 * 1_000L
         const val HABIT_TASK_NAMESPACE = "c3e4bcbb-9f56-4ff5-a3a8-9f7478284169"
         const val COMPLETION_UNDO_KEY = "__goalflowCompletionUndo"
