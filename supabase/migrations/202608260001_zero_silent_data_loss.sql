@@ -1373,9 +1373,9 @@ begin
       or created_task.notes <> coalesce(task_payload->>'notes', '')
       or created_task.tags <> array(select jsonb_array_elements_text(coalesce(task_payload->'tags', '[]'::jsonb)))
       or created_task.schedule_precision <> task_payload->>'schedulePrecision'
-      or created_task.scheduled_for <> case when task_payload->>'schedulePrecision' = 'month'
+      or created_task.scheduled_for <> (case when task_payload->>'schedulePrecision' = 'month'
         then to_date((task_payload->>'scheduledFor') || '-01', 'YYYY-MM-DD')
-        else (task_payload->>'scheduledFor')::date end
+        else (task_payload->>'scheduledFor')::date end)
       or created_task.source <> coalesce(task_payload->>'source', 'manual')
       or created_task.deleted_at is not null
     then
