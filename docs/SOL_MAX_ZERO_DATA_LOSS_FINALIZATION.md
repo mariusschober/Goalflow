@@ -166,6 +166,14 @@ Latest production run at preparation time:
 - PostgreSQL migrations: FAIL.
 - Native Android job: FAIL.
 
+Draft-PR run `33334480320` at documentation head
+`2fdf8e53bf56925de5b99158159d9784e3d2df7a` ended before any job steps were
+created: verify, migrations, and secrets reported failure with no steps, and
+dependent Android jobs were skipped. Treat this as CI startup/infrastructure
+state, not as evidence of a third product regression. The next agent must
+inspect it and require an actual clean-checkout run after the first substantive
+fix commit; it may not relabel unexecuted jobs as PASS.
+
 ### Blocker A — executable PostgreSQL migration
 
 Failure:
@@ -341,6 +349,11 @@ docs/PRODUCTION_FINALIZATION_PLAN.md
 
 Read both documents completely, then read every repository document they mark
 as required. Verify the live branch SHAs before editing.
+
+The latest documentation-only draft-PR run `33334480320` failed before any
+job steps started. Inspect that CI startup state, but keep it distinct from the
+two reproduced product failures. Require an executing clean-checkout CI run
+before claiming any PASS.
 
 Use a fresh isolated clone or worktree. Do not touch, clean, reset, or reuse any
 dirty shared workspace. Only this chat may write to the exclusive branch.
