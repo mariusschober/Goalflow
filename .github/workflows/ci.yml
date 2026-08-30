@@ -152,7 +152,9 @@ jobs:
         run: |
           apk="$(find "$GITHUB_WORKSPACE/android-native/app/build/outputs/apk/production/debug" -name '*.apk' -print -quit)"
           [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK was not found before diagnostic." >&2; exit 1; }
-          printf '%s\n' "$apk" > "$RUNNER_TEMP/goalflow-production-debug-apk"
+          emulator_apk="$RUNNER_TEMP/goalflow-production-debug.apk"
+          cp "$apk" "$emulator_apk"
+          printf '%s\n' "$emulator_apk" > "$RUNNER_TEMP/goalflow-production-debug-apk-path"
           android-native/scripts/diagnose-apk.sh "$apk"
       - name: Reclaim runner disk for emulator
         run: |
@@ -174,7 +176,7 @@ jobs:
           disable-animations: true
           script: |
             sleep 45
-            apk="$(cat "$RUNNER_TEMP/goalflow-production-debug-apk")"
+            apk="$(cat "$RUNNER_TEMP/goalflow-production-debug-apk-path")"
             [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }
             GOALFLOW_APK_LABEL=TEST-ONLY DIAGNOSE_APK_INSTALL=1 android-native/scripts/diagnose-apk.sh "$apk"
             ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest

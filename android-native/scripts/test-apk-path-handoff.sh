@@ -16,12 +16,14 @@ case "$found_apk" in
     *) exit 1 ;;
 esac
 [ "$found_apk" = "$apk" ]
-printf '%s\n' "$found_apk" > "$runner_temp/goalflow-production-debug-apk"
+emulator_apk="$runner_temp/goalflow-production-debug.apk"
+cp "$found_apk" "$emulator_apk"
+printf '%s\n' "$emulator_apk" > "$runner_temp/goalflow-production-debug-apk-path"
 
 (
     cd "$work_dir"
-    handed_off="$(cat "$runner_temp/goalflow-production-debug-apk")"
-    [ -n "$handed_off" ] && [ -f "$handed_off" ]
+    handed_off="$(cat "$runner_temp/goalflow-production-debug-apk-path")"
+    [ -n "$handed_off" ] && [ -f "$handed_off" ] && cmp "$handed_off" "$emulator_apk"
 )
 
 printf '%s\n' 'APK_PATH_HANDOFF=PASS'
