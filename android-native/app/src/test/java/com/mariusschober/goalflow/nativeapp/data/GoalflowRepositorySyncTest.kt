@@ -709,7 +709,7 @@ class GoalflowRepositorySyncTest {
 
     @Test
     fun `local Room data can never synchronize into a second account`() = runTest {
-        repository.createTask(
+        val task = repository.createTask(
             title = "Account A data",
             notes = "",
             schedulePrecision = SchedulePrecision.DAY,
@@ -717,6 +717,13 @@ class GoalflowRepositorySyncTest {
             scheduledTime = null,
             isFrog = false
         )
+        // A task creation durably enqueues both the task record and its creation event.
+        // Both must remain pending and bound to the first account; the count distinguishes
+        // a real data-ownership defect from an obsolete single-record expectation.
+        val pendingBeforeBind = repository.pendingSyncMutations()
+        assertEquals(2, pendingBeforeBind.size)
+        assertEquals(1, pendingBeforeBind.count { it.entityType == "tasks" && it.entityId == task.id })
+        assertEquals(1, pendingBeforeBind.count { it.entityType == "task_events" })
         repository.bindSyncAccount("00000000-0000-4000-8000-000000000001")
 
         try {
@@ -726,7 +733,13 @@ class GoalflowRepositorySyncTest {
             // Existing data and pending mutations remain untouched.
         }
 
-        assertEquals(1, repository.pendingSyncMutations().size)
+        val pendingAfterFailedBind = repository.pendingSyncMutations()
+        assertEquals(2, pendingAfterFailedBind.size)
+        assertEquals(
+            setOf("tasks" to task.id, "task_events" to pendingAfterFailedBind.first { it.entityType == "task_events" }.entityId),
+            pendingAfterFailedBind.map { it.entityType to it.entityId }.toSet()
+        )
+        assertEquals(task.title, database.taskDao().get(task.id)?.title)
         assertEquals(
             "00000000-0000-4000-8000-000000000001",
             database.localAccountDao().get()?.userId
