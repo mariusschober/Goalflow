@@ -382,6 +382,9 @@ interface LocalAccountDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(account: LocalAccountEntity)
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insertAll(accounts: List<LocalAccountEntity>)
 }
 
 @Database(
