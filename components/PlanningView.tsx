@@ -655,7 +655,19 @@ const TimelineTaskCard = React.memo<{
             </div>
         </div>
     );
-});
+}, (prev, next) => prev.task.id === next.task.id
+    && (prev.task as unknown as { status?: string }).status === (next.task as unknown as { status?: string }).status
+    && (prev.task as unknown as { lifecycleStatus?: string }).lifecycleStatus === (next.task as unknown as { lifecycleStatus?: string }).lifecycleStatus
+    && (prev.task as unknown as { completed?: boolean }).completed === (next.task as unknown as { completed?: boolean }).completed
+    && (prev.task as unknown as { isFrog?: boolean }).isFrog === (next.task as unknown as { isFrog?: boolean }).isFrog
+    && prev.task.title === next.task.title
+    && prev.task.duration === next.task.duration
+    && prev.bioContext?.isDeepWork === next.bioContext?.isDeepWork
+    && prev.bioContext?.isWorkout === next.bioContext?.isWorkout
+    && prev.bioContext?.isDip === next.bioContext?.isDip
+    && prev.startTime === next.startTime
+    && prev.endTime === next.endTime
+    && prev.isDragging === next.isDragging);
 
 export const PlanningView: React.FC<PlanningViewProps> = ({ 
     todayTasks, upcomingTasks, allTasks, goals, setFrog, openEditModal, deleteTask, reorderTodayTasks, 
@@ -718,59 +730,50 @@ export const PlanningView: React.FC<PlanningViewProps> = ({
         return { windows, sunrise, sunset };
     }, [isCircadianActive, circadianState]);
 
-    const currentTime = new Date();
-    const roundedStart = new Date(Math.ceil(currentTime.getTime() / (5 * 60 * 1000)) * (5 * 60 * 1000));
-    
-    let cumulativeTime = roundedStart.getTime();
-    let totalWorkMinutes = 0;
-
-    const timelineTasks = todayTasks.map(task => {
-        const start = new Date(cumulativeTime);
-        const duration = task.duration || 25;
-        if (!task.isBreak) totalWorkMinutes += duration;
-        
-        cumulativeTime += duration * 60 * 1000;
-        const end = new Date(cumulativeTime);
-
-        // Calculate minutes from midnight for circadian matching
-        const startMins = start.getHours() * 60 + start.getMinutes();
-        const endMins = end.getHours() * 60 + end.getMinutes();
-        const midMins = (startMins + endMins) / 2;
-
-        const format = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-        
-        let bioContext = { isDeepWork: false, isWorkout: false, isEating: false, isDip: false };
-        let markers: Array<{ type: 'sunrise' | 'sunset' | 'noon' | 'sleep', time: string }> = [];
-
-        if (circadianContext) {
-            const { windows } = circadianContext;
-            
-            // Check Overlaps
-            const check = (w: { start: number, end: number }) => (startMins < w.end && endMins > w.start);
-            
-            if (check(windows.deepWork1) || check(windows.deepWork2)) bioContext.isDeepWork = true;
-            if (check(windows.workoutMorning) || check(windows.workoutEvening)) bioContext.isWorkout = true;
-            if (check(windows.eating)) bioContext.isEating = true;
-            if (check(windows.dip)) bioContext.isDip = true;
-
-            // Markers
-            // Simple logic: if the task *covers* the specific time point
-            const checkPoint = (time: number) => (startMins <= time && endMins > time);
-            
-            if (checkPoint(circadianContext.sunrise)) markers.push({ type: 'sunrise', time: format(new Date(start.setHours(0,0,0,0) + circadianContext.sunrise * 60000)) });
-            if (checkPoint(circadianContext.windows.solarNoon.start + 60)) markers.push({ type: 'noon', time: 'Noon' });
-            if (checkPoint(circadianContext.sunset)) markers.push({ type: 'sunset', time: format(new Date(start.setHours(0,0,0,0) + circadianContext.sunset * 60000)) });
-            if (checkPoint(circadianContext.windows.sleepTarget.start)) markers.push({ type: 'sleep', time: 'Sleep' });
-        }
-
-        return {
-            ...task,
-            _startTime: format(start),
-            _endTime: format(end),
-            _bioContext: bioContext,
-            _markers: markers
-        };
-    });
+    const roundedStart = useMemo(() => new Date(Math.ceil(new Date().getTime() / (5 * 60 * 1000)) * (5 * 60 * 1000)), []);
+    const { timelineTasks, totalWorkMinutes } = useMemo(() => {
+        let cumulativeTime = roundedStart.getTime();
+        let total = 0;
+        const tasks = todayTasks.map(task => {
+            const start = new Date(cumulativeTime);
+            const duration = task.duration || 25;
+            if (!task.isBreak) total += duration;
+            cumulativeTime += duration * 60 * 1000;
+            const end = new Date(cumulativeTime);
+            const startMins = start.getHours() * 60 + start.getMinutes();
+            const endMins = end.getHours() * 60 + end.getMinutes();
+            const format = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+            // P1-6: memoize bioContext per task to avoid new object busting React.memo
+            const bioContext = (() => {
+                const ctx = { isDeepWork: false, isWorkout: false, isEating: false, isDip: false } as { isDeepWork: boolean; isWorkout: boolean; isEating: boolean; isDip: boolean };
+                if (!circadianContext) return ctx;
+                const { windows } = circadianContext;
+                const check = (w: { start: number; end: number }) => (startMins < w.end && endMins > w.start);
+                if (check(windows.deepWork1) || check(windows.deepWork2)) ctx.isDeepWork = true;
+                if (check(windows.workoutMorning) || check(windows.workoutEvening)) ctx.isWorkout = true;
+                if (check(windows.eating)) ctx.isEating = true;
+                if (check(windows.dip)) ctx.isDip = true;
+                return ctx;
+            })();
+            let markers: Array<{ type: 'sunrise' | 'sunset' | 'noon' | 'sleep', time: string }> = [];
+            if (circadianContext) {
+                const formatMarker = (d: Date) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                const checkPoint = (time: number) => (startMins <= time && endMins > time);
+                if (checkPoint(circadianContext.sunrise)) markers.push({ type: 'sunrise', time: formatMarker(new Date(start.setHours(0,0,0,0) + circadianContext.sunrise * 60000)) });
+                if (checkPoint(circadianContext.windows.solarNoon.start + 60)) markers.push({ type: 'noon', time: 'Noon' });
+                if (checkPoint(circadianContext.sunset)) markers.push({ type: 'sunset', time: formatMarker(new Date(start.setHours(0,0,0,0) + circadianContext.sunset * 60000)) });
+                if (checkPoint(circadianContext.windows.sleepTarget.start)) markers.push({ type: 'sleep', time: 'Sleep' });
+            }
+            return {
+                ...task,
+                _startTime: new Date(start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+                _endTime: new Date(end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }),
+                _bioContext: bioContext,
+                _markers: markers
+            };
+        });
+        return { timelineTasks: tasks, totalWorkMinutes: total };
+    }, [todayTasks, circadianContext, roundedStart]);
 
     // Dynamic Gradient Calculation
     const timelineGradient = useMemo(() => {

@@ -180,6 +180,12 @@ interface TaskDao {
     @Query("SELECT * FROM tasks WHERE habitId = :habitId AND deletedAt IS NULL")
     suspend fun getByHabitId(habitId: String): List<TaskEntity>
 
+    @Query("SELECT * FROM tasks WHERE habitId IN (:habitIds) AND scheduledFor = :scheduledFor AND deletedAt IS NULL")
+    suspend fun getByHabitIdsAndDate(habitIds: List<String>, scheduledFor: String): List<TaskEntity>
+
+    @Query("SELECT * FROM tasks LIMIT :limit OFFSET :offset")
+    suspend fun getAllPaged(limit: Int, offset: Int): List<TaskEntity>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(task: TaskEntity)
 
@@ -213,6 +219,9 @@ interface GoalDao {
     @Query("SELECT * FROM goals")
     suspend fun getAll(): List<GoalEntity>
 
+    @Query("SELECT * FROM goals LIMIT :limit OFFSET :offset")
+    suspend fun getAllPaged(limit: Int, offset: Int): List<GoalEntity>
+
     @Query("SELECT * FROM goals WHERE id = :id LIMIT 1")
     suspend fun get(id: String): GoalEntity?
 
@@ -240,6 +249,9 @@ interface DailyPlanDao {
     @Query("SELECT * FROM daily_plans")
     suspend fun getAll(): List<DailyPlanEntity>
 
+    @Query("SELECT * FROM daily_plans LIMIT :limit OFFSET :offset")
+    suspend fun getAllPaged(limit: Int, offset: Int): List<DailyPlanEntity>
+
     @Query("DELETE FROM daily_plans WHERE localDate = :localDate")
     suspend fun delete(localDate: String)
 
@@ -254,6 +266,9 @@ interface HabitDao {
 
     @Query("SELECT * FROM habits")
     suspend fun getAll(): List<HabitEntity>
+
+    @Query("SELECT * FROM habits LIMIT :limit OFFSET :offset")
+    suspend fun getAllPaged(limit: Int, offset: Int): List<HabitEntity>
 
     @Query("SELECT * FROM habits WHERE id = :id LIMIT 1")
     suspend fun get(id: String): HabitEntity?
@@ -275,6 +290,9 @@ interface HabitDao {
 interface TaskEventDao {
     @Query("SELECT * FROM task_events ORDER BY createdAt ASC, id ASC")
     suspend fun getAll(): List<TaskEventEntity>
+
+    @Query("SELECT * FROM task_events LIMIT :limit OFFSET :offset")
+    suspend fun getAllPaged(limit: Int, offset: Int): List<TaskEventEntity>
 
     @Query("SELECT * FROM task_events WHERE id = :id LIMIT 1")
     suspend fun get(id: String): TaskEventEntity?

@@ -7,6 +7,8 @@ import android.util.Base64
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import javax.crypto.AEADBadTagException
+import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -38,9 +40,11 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
                 else json.optString("userId").takeIf(String::isNotBlank)
         )
     }.recoverCatching { e ->
-        // KeyStore wipe (e.g., lock screen change) makes old ciphertext undecryptable.
+        // KeyStore wipe or AEAD tag failure makes old ciphertext undecryptable.
         // Clear the stale entry so the user can re-authenticate; local DB remains intact.
-        if (e is java.security.KeyStoreException || e is java.security.UnrecoverableKeyException || e.cause is java.security.KeyStoreException) {
+        val isDigestFailure = e is AEADBadTagException || e is BadPaddingException
+            || e.cause is AEADBadTagException || e.cause is BadPaddingException
+        if (e is java.security.KeyStoreException || e is java.security.UnrecoverableKeyException || e.cause is java.security.KeyStoreException || isDigestFailure) {
             try { preferences.edit().remove(KEY_SESSION).commit() } catch (_: Exception) {}
             try { KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }.deleteEntry(KEY_ALIAS) } catch (_: Exception) {}
         }

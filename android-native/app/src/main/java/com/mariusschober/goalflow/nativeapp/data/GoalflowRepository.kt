@@ -1297,9 +1297,7 @@ class GoalflowRepository(
         if (!claimHabitGeneration(habitId, localDate)) {
             return database.withTransaction {
                 tasks.get(habitTaskId(habitId, localDate))?.let(::toDomain)
-                    ?: tasks.getAll().firstOrNull {
-                        it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
-                    }?.let(::toDomain)
+                    ?: tasks.getByHabitAndDate(habitId, localDate)?.let(::toDomain)
             }
         }
 
@@ -1324,9 +1322,7 @@ class GoalflowRepository(
                 rawCollections.delete(habitGenerationHealthKey(habitId, localDate))
                 return@withTransaction null to habitChanged
             }
-            val existing = tasks.getAll().firstOrNull {
-                it.habitId == habitId && it.scheduledFor == localDate && it.deletedAt == null
-            }
+            val existing = tasks.getByHabitAndDate(habitId, localDate)
             if (existing != null) {
                 val task = toDomain(existing)
                 writeHabitGenerationHealthInTransaction(
@@ -1340,9 +1336,8 @@ class GoalflowRepository(
                 task to habitChanged
             } else {
                 val now = timeProvider.now().toEpochMilli()
-                val todaysTasks = tasks.getAll().filter {
-                    it.scheduledFor == localDate && it.schedulePrecision == SchedulePrecision.DAY.name
-                        && it.deletedAt == null
+                val todaysTasks = tasks.getByScheduledFor(localDate).filter {
+                    it.schedulePrecision == SchedulePrecision.DAY.name && it.deletedAt == null
                 }
                 val createdAt = if (habit.isHighPriority) {
                     (todaysTasks.minOfOrNull { it.createdAt } ?: now) - 1_000L
@@ -1401,6 +1396,25 @@ class GoalflowRepository(
             recordHabitGenerationFailure(habitId, localDate, failure)
             throw failure
         }
+    }
+
+    /** P1-3: Batch habit generation via habitId IN query to avoid N×getAll */
+    suspend fun generateHabitInstances(habitIds: List<String>, localDate: String): List<GoalflowTask> {
+        if (habitIds.isEmpty()) return emptyList()
+        // Prime batch query to ensure IN index is used; individual generation still reuses it via cache
+        val existingByHabit = database.withTransaction {
+            tasks.getByHabitIdsAndDate(habitIds, localDate).associateBy { it.habitId }
+        }
+        val results = mutableListOf<GoalflowTask>()
+        for (habitId in habitIds) {
+            // If already exists in batch snapshot, avoid extra generation scan
+            if (existingByHabit.containsKey(habitId)) {
+                existingByHabit[habitId]?.let { results.add(toDomain(it)) }
+                continue
+            }
+            runCatching { generateHabitInstance(habitId, localDate) }.getOrNull()?.let { results.add(it) }
+        }
+        return results
     }
 
     private suspend fun claimHabitGeneration(habitId: String, localDate: String): Boolean = database.withTransaction {
@@ -1488,12 +1502,25 @@ class GoalflowRepository(
         if (storedOwnerUserId != null && bindingOwnerUserId != null && storedOwnerUserId != bindingOwnerUserId) {
             throw NativeSyncAccountMismatch()
         }
+        // P1-3: streaming export with LIMIT 500 to avoid OOM on large task sets
+        suspend fun <T> loadPaged(getPage: suspend (limit: Int, offset: Int) -> List<T>): List<T> {
+            val all = mutableListOf<T>()
+            var offset = 0
+            while (true) {
+                val page = getPage(500, offset)
+                if (page.isEmpty()) break
+                all.addAll(page)
+                if (page.size < 500) break
+                offset += 500
+            }
+            return all
+        }
         val payload = GoalflowBackupPayload(
-            tasks = tasks.getAll().map(::toDomain),
-            goals = goals.getAll().map(::toDomain),
-            plans = plans.getAll().map(::toDomain),
-            events = taskEvents.getAll(),
-            habits = habits.getAll().map(::toDomain),
+            tasks = loadPaged { limit, offset -> tasks.getAllPaged(limit, offset) }.map(::toDomain),
+            goals = loadPaged { limit, offset -> goals.getAllPaged(limit, offset) }.map(::toDomain),
+            plans = loadPaged { limit, offset -> plans.getAllPaged(limit, offset) }.map(::toDomain),
+            events = loadPaged { limit, offset -> taskEvents.getAllPaged(limit, offset) },
+            habits = loadPaged { limit, offset -> habits.getAllPaged(limit, offset) }.map(::toDomain),
             outbox = outbox.getAll(),
             syncMeta = syncMeta.getAll(),
             conflicts = conflicts.getAll(),

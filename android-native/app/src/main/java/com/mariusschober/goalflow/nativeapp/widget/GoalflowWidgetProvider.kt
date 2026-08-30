@@ -15,9 +15,15 @@ import com.mariusschober.goalflow.nativeapp.R
 import com.mariusschober.goalflow.nativeapp.data.NativeWidgetAction
 import com.mariusschober.goalflow.nativeapp.data.NativeWidgetSnapshot
 import com.mariusschober.goalflow.nativeapp.data.NativeWidgetTarget
+import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 internal object GoalflowWidgetIntent {
@@ -164,6 +170,13 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        // P1-5: cancel scope tied to ProcessLifecycleOwner when last widget removed
+        try { widgetScope.cancel() } catch (_: Exception) {}
+        try { GoalflowWidgetUpdater.cancel() } catch (_: Exception) {}
+    }
+
     private fun readTarget(intent: Intent): NativeWidgetTarget {
         val taskId = intent.getStringExtra(GoalflowWidgetIntent.EXTRA_TASK_ID)
             ?.takeIf(String::isNotBlank)
@@ -257,17 +270,28 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
 }
 
 object GoalflowWidgetUpdater {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val exceptionHandler = CoroutineExceptionHandler { _, t -> android.util.Log.e("GoalflowWidgetUpdater", "updater error", t) }
+    private val scope: CoroutineScope
+        get() = try { ProcessLifecycleOwner.get().lifecycleScope } catch (_: Exception) { CoroutineScope(SupervisorJob() + Dispatchers.IO + exceptionHandler) }
+    private var debounceJob: Job? = null
+    @Volatile private var lastFingerprint: String? = null
+
+    fun cancel() { debounceJob?.cancel(); debounceJob = null }
 
     fun refresh(context: Context) {
-        val appContext = context.applicationContext
-        scope.launch {
+        debounceJob?.cancel()
+        debounceJob = scope.launch {
+            delay(500)
+            val appContext = context.applicationContext
             val manager = AppWidgetManager.getInstance(appContext)
             val component = ComponentName(appContext, GoalflowWidgetProvider::class.java)
             val ids = manager.getAppWidgetIds(component)
             if (ids.isEmpty()) return@launch
             val application = appContext as GoalflowApplication
             val snapshot = application.repository.widgetSnapshot()
+            // distinctUntilChanged by planFingerprint
+            if (snapshot.planFingerprint == lastFingerprint) return@launch
+            lastFingerprint = snapshot.planFingerprint
             val undoState = GoalflowWidgetState.undo(appContext)
             val undoTask = undoState?.let { application.repository.taskSnapshot(it.taskId) }
                 ?.takeIf { it.status.name == "COMPLETED" && it.updatedAt == undoState.expectedUpdatedAt }
@@ -331,4 +355,10 @@ object GoalflowWidgetUpdater {
     }
 }
 
-private val widgetScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+private val widgetExceptionHandler = CoroutineExceptionHandler { _, t -> android.util.Log.e("GoalflowWidget", "widget scope error", t) }
+private val widgetScope: CoroutineScope
+    get() = try {
+        ProcessLifecycleOwner.get().lifecycleScope
+    } catch (_: Exception) {
+        CoroutineScope(SupervisorJob() + Dispatchers.IO + widgetExceptionHandler)
+    }

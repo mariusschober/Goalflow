@@ -66,5 +66,18 @@ export default defineConfig({
       devOptions: { enabled: false }
     })
   ],
-  resolve: { alias: { '@': path.resolve(__dirname, '.') } }
+  resolve: { alias: { '@': path.resolve(__dirname, '.') } },
+  test: {
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      '**/tests/e2e/**',
+      '**/e2e/**',
+      '**/chrome-extension/**',
+      '**/.idea/**',
+      '**/.git/**',
+      '**/android/**',
+      '**/android-native/**'
+    ]
+  }
 });
