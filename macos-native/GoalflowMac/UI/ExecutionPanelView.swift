@@ -31,6 +31,8 @@ final class ExecutionViewModel: ObservableObject {
     @Published var breakdownError: String?
     @Published var showSignIn: Bool = false
     @Published var isAuthenticated: Bool = KeychainSessionStore().isAuthenticated
+    @Published var conflicts: [LocalConflict] = []
+    @Published var showConflicts: Bool = false
     private let provider: DemoCurrentTaskProvider
     private let store: any FocusSessionStore
     private let clock: any Clock
@@ -47,23 +49,30 @@ final class ExecutionViewModel: ObservableObject {
     private let localBreakdown: LocalBreakdownService
     private let gateEnabled: Bool
     private let appOrigin: String
+    private let syncMetaStore: SyncMetaStore
+    private let syncEngine: SyncEngine
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
     private var holdController: CompletionHoldController?
     private var holdTimer: AnyCancellable?
     private var pendingCompletedId: String?
-    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), calendarService: any CalendarCollisionService = NoopCalendarService(), breakdownGateway: any BreakdownGateway = StubBreakdownGateway(), gateEnabled: Bool = false, appOrigin: String = "https://app.goalflow.com") {
+    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), calendarService: any CalendarCollisionService = NoopCalendarService(), breakdownGateway: any BreakdownGateway = StubBreakdownGateway(), gateEnabled: Bool = false, appOrigin: String = "https://app.goalflow.com", syncMetaStore: SyncMetaStore? = nil, syncEngine: SyncEngine? = nil) {
         self.provider = provider; self.store = store; self.clock = clock; self.sound = sound; self.breakStore = breakStore
         self.dailyPlanStore = dailyPlanStore; self.goalStore = goalStore; self.trueNorthStore = trueNorthStore; self.amalgamStore = amalgamStore
         self.calendarService = calendarService; self.breakdownGateway = breakdownGateway
         self.localBreakdown = LocalBreakdownService(taskStore: provider.taskStore, clock: clock, dailyPlanStore: dailyPlanStore)
         self.gateEnabled = gateEnabled; self.appOrigin = appOrigin
+        let syncFile = provider.taskStore is LocalTaskStore ? (provider.taskStore as! LocalTaskStore).fileURL.deletingLastPathComponent().appendingPathComponent("sync.json") : nil
+        self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncFile)
+        self.syncEngine = syncEngine ?? SyncEngine(metaStore: self.syncMetaStore)
         setupTimerBindings(); restore(); restoreBreak()
         isAuthenticated = KeychainSessionStore().isAuthenticated
         NotificationCenter.default.publisher(for: .authDidChange).receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.isAuthenticated = KeychainSessionStore().isAuthenticated
             self?.restore()
         }.store(in: &cancellables)
+        // Periodic sync every 5min when authenticated
+        Timer.publish(every: 300, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.triggerSyncIfNeeded() }.store(in: &cancellables)
     }
     private func setupTimerBindings() {
         timer.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.remainingSeconds = v }.store(in: &cancellables)
@@ -86,6 +95,7 @@ final class ExecutionViewModel: ObservableObject {
         goals = goalStore.loadAll()
         amalgam = amalgamStore.load()
         trueNorth = trueNorthStore.loadAll()
+        conflicts = syncMetaStore.load().conflicts
         completedTodayCount = provider.completedCount(today: todayString())
         queueCount = provider.queueCount(today: todayString())
         // Gate
@@ -134,6 +144,66 @@ final class ExecutionViewModel: ObservableObject {
     func goal(for task: GoalflowTask) -> Goal? {
         guard let gid = task.goalId else { return nil }
         return goals.first { $0.id == gid }
+    }
+
+    // MARK: - Sync
+
+    func triggerSyncIfNeeded() {
+        guard isAuthenticated else { return }
+        Task { @MainActor in
+            do { try await syncEngine.synchronize(); self.restore() } catch { print("[Sync] failed \(error)") }
+        }
+    }
+
+    func resolveConflict(id: String, useLocal: Bool) {
+        var meta = syncMetaStore.load()
+        guard let idx = meta.conflicts.firstIndex(where: { $0.id == id }) else { return }
+        let conflict = meta.conflicts[idx]
+        if useLocal {
+            // Create retry mutation with base = serverVersion, version = max+1
+            let key = syncEntityKey(conflict.entityType, conflict.entityId)
+            let cur = meta.versions[key] ?? VersionPair(local: 0, server: conflict.serverVersion)
+            let historyMax = conflict.localHistory.compactMap { ($0.value as? [String: Any])?["version"] as? Int }.max() ?? cur.local
+            let version = max(historyMax, cur.local) + 1
+            let retry = SyncMutation(
+                mutationId: UUID().uuidString,
+                deviceId: DeviceIdStore().deviceId,
+                entityType: conflict.entityType,
+                entityId: conflict.entityId,
+                baseServerVersion: conflict.serverVersion,
+                version: version,
+                payload: conflict.localPayload,
+                updatedAt: ISO8601DateFormatter().string(from: Date()),
+                deletedAt: conflict.localDeletedAt,
+                dependsOnMutationId: nil,
+                resolvesConflictId: conflict.id,
+                attemptedAt: nil
+            )
+            meta.versions[key] = VersionPair(local: version, server: conflict.serverVersion)
+            meta.outbox.append(retry)
+            meta.conflicts[idx].status = "resolving-local"
+        } else {
+            // Use cloud: apply server payload to local store
+            if conflict.entityType == "tasks", let dict = conflict.serverPayload.value as? [String: Any] {
+                var tasks = provider.taskStore.loadAll()
+                if let del = conflict.serverDeletedAt, !del.isEmpty {
+                    tasks.removeAll { $0.id == conflict.entityId }
+                } else {
+                    // Decode task from dict
+                    if let data = try? JSONSerialization.data(withJSONObject: dict),
+                       let task = try? JSONDecoder().decode(GoalflowTask.self, from: data) {
+                        if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i] = task } else { tasks.append(task) }
+                    }
+                }
+                try? provider.taskStore.saveAll(tasks)
+            }
+            meta.conflicts.remove(at: idx)
+            // Remove any outbox for that entity
+            meta.outbox.removeAll { $0.entityType == conflict.entityType && $0.entityId == conflict.entityId }
+        }
+        try? syncMetaStore.save(meta)
+        conflicts = meta.conflicts
+        restore()
     }
 
     // MARK: - Breakdown
@@ -383,6 +453,7 @@ struct ExecutionPanelView: View {
             if !vm.trueNorth.isEmpty { trueNorthFooter }
         }.sheet(isPresented: $vm.showBreakdown) { BreakdownSheet(vm: vm) }
          .sheet(isPresented: $vm.showSignIn) { SignInView(onClose: { vm.showSignIn = false }) }
+         .sheet(isPresented: $vm.showConflicts) { ConflictsSheet(vm: vm) }
         .frame(width: 380)
         .background(panelBackground)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
@@ -415,7 +486,15 @@ struct ExecutionPanelView: View {
                 Image(systemName: "checkmark.shield.fill").font(.system(size: 10)).foregroundStyle(.green).help("Signed in")
             } else {
                 Button("Sign in") { vm.showSignIn = true }
-                    .font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(.blue)
+                    .font(.system(size: 10, weight: .semibold, design: .rounded)).foregroundStyle(Color.blue)
+            }
+            if !vm.conflicts.isEmpty {
+                Button(action: { vm.showConflicts = true }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.system(size: 10))
+                        Text("\(vm.conflicts.count)").font(.system(size: 10, weight: .bold, design: .rounded)).foregroundStyle(.orange)
+                    }
+                }.buttonStyle(.plain).help("\(vm.conflicts.count) sync conflict(s)")
             }
             if let task = vm.task, task.isFrog { FrogBadge(compact: true) }
             Menu {

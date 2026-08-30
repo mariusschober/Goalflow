@@ -46,6 +46,14 @@ extension GoalflowTask {
     var isOpen: Bool { status == .open }
     var isCompleted: Bool { status == .completed }
     var plannedDurationSeconds: Int { durationMinutes * 60 }
+    func toDictionary() -> [String: Any] {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .iso8601
+        enc.outputFormatting = [.sortedKeys]
+        guard let data = try? enc.encode(self),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        return obj
+    }
 }
 private func groupRank(_ task: GoalflowTask) -> Int {
     if task.beforeFrog, task.habitId != nil { return 0 }

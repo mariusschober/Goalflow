@@ -8,7 +8,10 @@ protocol TaskStore: Sendable {
 final class LocalTaskStore: TaskStore, @unchecked Sendable {
     let fileURL: URL; private let walKey: String; let defaults: UserDefaults
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
-    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.demo.tasks.v1") {
+    private let syncMetaStore: SyncMetaStore
+    private let deviceIdStore: DeviceIdStore
+    private let userKey = "localUser"
+    init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.demo.tasks.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             let dir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
@@ -17,6 +20,13 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         self.defaults = defaults; self.walKey = walKey
         self.encoder = JSONEncoder(); self.encoder.dateEncodingStrategy = .iso8601; self.encoder.outputFormatting = [.sortedKeys]
         self.decoder = JSONDecoder(); self.decoder.dateDecodingStrategy = .iso8601
+        if let s = syncMetaStore { self.syncMetaStore = s }
+        else {
+            let dir = self.fileURL.deletingLastPathComponent()
+            let syncURL = dir.appendingPathComponent("sync.json")
+            self.syncMetaStore = SyncMetaStore(fileURL: syncURL, defaults: defaults)
+        }
+        self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
     private func ensureDirectory() throws {
         let dir = fileURL.deletingLastPathComponent()
@@ -33,6 +43,27 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
     }
     func saveAll(_ tasks: [GoalflowTask]) throws {
         let sorted = tasks.sorted(by: goalflowTaskComparator)
+        // Stage for sync before durable write (best-effort, never throw)
+        do {
+            let prevData: [GoalflowTask]
+            if FileManager.default.fileExists(atPath: fileURL.path),
+               let d = try? Data(contentsOf: fileURL),
+               let decoded = try? decoder.decode([GoalflowTask].self, from: d) {
+                prevData = decoded
+            } else if let d = defaults.data(forKey: walKey), let decoded = try? decoder.decode([GoalflowTask].self, from: d) {
+                prevData = decoded
+            } else {
+                prevData = []
+            }
+            let previousValue: Any? = prevData.map { $0.toDictionary() }
+            let nextValue: Any? = sorted.map { $0.toDictionary() }
+            if let tx = try? buildStagedLocalTransaction(storeName: "tasks", userKey: userKey, previousValue: previousValue, nextValue: nextValue, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
+                var meta = syncMetaStore.load()
+                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) {
+                    try? syncMetaStore.save(newMeta)
+                }
+            }
+        } catch { /* staging is best-effort, never block durable write */ }
         let data = try encoder.encode(sorted)
         try ensureDirectory()
         do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
@@ -42,6 +73,13 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         guard let walRead = defaults.data(forKey: walKey), walRead == data else {
             print("[TaskStore] WAL mirror mismatch (file authoritative)"); return
         }
+    }
+
+    private func nextOrder() -> Int {
+        // Simple order: Date.now *1000 + counter
+        struct C { static var counter = 0 }
+        C.counter = (C.counter + 1) % 1000
+        return Int(Date().timeIntervalSince1970 * 1000) * 1000 + C.counter
     }
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
         var tasks = loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == id }) else { throw TaskStoreError.notFound }

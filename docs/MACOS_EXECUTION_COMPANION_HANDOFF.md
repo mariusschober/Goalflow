@@ -2,17 +2,17 @@
 
 **Branch:** `feature/macos-execution-companion`  
 **Base SHA:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30)  
-**Latest commit at handoff:** `eb047e6fcc23d0e6fdd2a09642f43b863037af0b` (Session F — Server Capabilities)  
-**Previous slice commit:** `6e836812f7dccafe2672dcefa233eb40eb172a43` (Session E — Quick Capture)  
+**Latest commit at handoff:** `70fa935e687938166ceb879c9c0616a7fcf1a37d` (Session G — Final Sync)  
+**Previous slice commit:** `daef4d079ff339c64efa101a9bf635bbd3021e3e` (Session F — Server Capabilities)  
 **Base:** `f93684ac50562c03c99328d98e57eb67f862eb3b` (origin/goalflow-production 2026-08-30, verified via `git merge-base`)  
 **Xcode / SDK at build:** Xcode 26.6 (17F113), macOS SDK 26.5, Swift 6.3.3, Target: arm64-apple-macosx26.0, DeploymentTarget 15.0 (Tahoe target per context is 26 — built against 26.5 SDK; plan deploys to 15.0 for broader beta, tighten to 26 at hardening)  
-**Status:** Session F complete — server capabilities DONE, ready for Session G
+**Status:** Session G complete — final sync DONE, ready for Session H
 
 ---
 
 ## Current milestone
 
-**Session F — Server Capabilities: DONE** (predecessors A, B, C, D, E remain DONE)
+**Session G — Final Sync: DONE** (predecessors A, B, C, D, E, F remain DONE)
 
 **Session A scope (traceability):** native shell + Current → ACTION → Active Timer via deterministic local/demo data.
 
@@ -24,7 +24,9 @@
 
 **Session E scope (traceability):** Global `⌘⇧G` hotkey, centered Spotlight-like `NSPanel` `level=.floating` ultraThin, schedule-first `Select date` invariant via `assertSchedule`, `ADD` vs `ACTION`, parsing `@25m/#tag/2026-09-01/YYYY-MM/14:30/*f/@quick/https://`, `TagRoutingService` + `PrivacyGateway`.
 
-**Session F scope:** Browser PKCE `goalflow://auth/callback` Keychain JWT, real `CurrentTaskProvider` gate `getPlanningGate` `monthly/daily/ready/empty`, read-only `Goal`/`TrueNorth`/`amalgam` + `goalId` dot, shared `ACTION` prep, server `POST /api/v1/ai/breakdown` + local `broken_down` children `parentTaskId` `plannedOrder` tail, `EventKit` read-only overlap `14:30`.
+**Session F scope (traceability):** Browser PKCE `goalflow://auth/callback` Keychain JWT, real `CurrentTaskProvider` gate `getPlanningGate` `monthly/daily/ready/empty`, read-only `Goal`/`TrueNorth`/`amalgam` + `goalId` dot, shared `ACTION` prep, server `POST /api/v1/ai/breakdown` + local `broken_down` children `parentTaskId` `plannedOrder` tail, `EventKit` read-only overlap `14:30`.
+
+**Session G scope:** Swift Sync parity `SyncMeta cursor/versions/outbox/conflicts` `stableJson` `RECORD_LEVEL_STORES` `tasks/goals/habits/truenorth/daily_plans`, `buildStagedLocalTransaction` per-entity, `readyOutbox` dependency+one-per-entity limit 50, `applyPushResults` exact proof, `applyRemotePage` cursor monotonicity `nextCursor==max(serverVersion)`, `sync.json` file txn `storeBridge`, `POST /sync/push` + `GET /sync/pull` loops `Bearer` `Keychain`, resurrection guard, conflict ledger explicit
 
 **Implemented in Session D:**
 - `BreakState` (`Domain/BreakState.swift:1`) `durationSeconds: Int? (nil=Open)`, `startedAt`, `startedAtMonotonic`, `sourcePhase`, `taskId`, `elapsed/remaining/isExpired/isOpenEnded`, `max(60, duration)` clamp.
@@ -72,7 +74,23 @@
 - `CalendarCollisionService` (`Services/CalendarCollisionService.swift:1`) `CalendarCollision {eventTitle,start,end}` `CalendarCollisionService` `collision(for:today)` `requestAccessIfNeeded`, `NoopCalendarService` nil/false, `EKCalendarCollisionService` `EKEventStore` `requestFullAccessToEvents` else `requestAccess(to:.event)`, collision parses `today 14:30` via `DateFormatter YYYY-MM-dd HH:mm current` `start+duration 25` `dayStart/end` `predicateForEvents` filter `!isAllDay && start < taskEnd && end > taskStart` first match.
 - Tests: SessionF added 20 tests (PlanningGate 8, LocalBreakdown 6, Calendar 6) → total 98 tests across 16 suites, all passing (3 runs clean)
 
-**Still deferred (per plan):** final Sync (G), signing/hardening (H). No Web/Android/server changes.
+**Implemented in Session G:**
+- `StableJson` (`Sync/StableJson.swift:1`) `stableJson(Any?)` `JSONSerialization .sortedKeys` recursive, `sameInstant`, `finiteVersion/nullableVersion`.
+- `SyncMeta` (`Sync/SyncMeta.swift:1`) `SyncMeta {schemaVersion:2,cursor,versions:[local,server],outbox:[SyncMutation],conflicts:[LocalConflict],lastSuccessfulSync}`, `VersionPair`, `SyncMutation {mutationId,deviceId,entityType,entityId,baseServerVersion,version,payload AnyCodable,updatedAt,deletedAt,dependsOnMutationId,resolvesConflictId,attemptedAt}`, `LocalConflict`, `AnyCodable`, `PushResult`, `RemoteRecord`, `StagedEntityChange/Transaction`, `RECORD_LEVEL_STORES {tasks,goals,habits,truenorth,daily_plans}`, `LEGACY_MUTATION_NAMESPACE 384d2580...`, `syncEntityKey`, `emptySyncMeta`.
+- `DeviceIdStore` (`Sync/DeviceIdStore.swift:1`) `UserDefaults goalflow-device-id` UUID lazy.
+- `MetaStore` (`Sync/MetaStore.swift:1`) `SyncMetaStore(fileURL: sync.json, defaults, walKey: goalflow.sync.meta.v2)` `load()` file `normalizeSyncMeta` else WAL else `emptySyncMeta`, `save()` `normalize` validates `schemaVersion==2 cursor>=0 versions local>=0 server>=0` duplicate `mutationId/conflict id` cross `was not changed`, legacy singleton array explosion via `deterministicUuid` `SHA1` `UUIDv5`, `Data.write(.atomic)` + read-back + `UserDefaults` WAL, `CryptoKit` `Insecure.SHA1`.
+- `BuildStaging` (`Sync/BuildStaging.swift:1`) `buildStagedLocalTransaction(storeName,userKey,prev,next,order,now,randomUuid) -> StagedTransaction?` `stableJson equal→nil` else per-record `recordMap` validates `id:String` unique, ids sorted, per-id `stableJson` skip else `StagedEntityChange` `deletedAt now` when deleted, singleton `entityId=singleton`. `appendStagedTransactions` clones, sorts `order→id`, per `change` `key`, if `conflict unresolved` appends to `localHistory` not outbox, else `version = max(currentLocal, latestForEntity.version ??0)+1` `versions[key]={local:version}`, `mutation baseServerVersion: latest?nil:server version dependsOn:latest?.mutationId`. `readyOutbox` `pendingIds Set` `selectedEntities Set` sort `version→mutationId` skip `dependsOn && pendingIds.contains` and `selectedEntities.contains(key)` one-per-entity limit 50. `markMutationsAttempted`.
+- `ApplyPushResults` (`Sync/ApplyPushResults.swift:1`) `applyPushResults(input,batch,results)` validates duplicate `mutationId` batch, `results.count==batch.count`, `resultIds == batchIds` exact ack, per-result `accepted` requires `serverVersion>0 && !replayMismatch && !serverMissing && conflictId==nil && record.entityType==mutation.entityType && stableJson(record.payload)==stableJson(mutation.payload) && sameInstant` else `did not prove`, `!accepted && serverMissing!=true` requires `record.payload` else `did not preserve`, commit: `accepted` removes from outbox, patches successors `dependsOn=nil base=serverVersion`, `versions[key]={local:max, server:serverVersion}`, clears `resolvesConflictId`; `rejected` collects `affected = outbox.filter(entityType,entityId, version>=mut.version)` builds `history` sorted, creates `LocalConflict id=conflictId ?? push:mid:sv localPayload/mutation.payload serverPayload` removes affected outbox, bumps `versions`, releases dependents `dependsOn in removedIds → nil`.
+- `ApplyRemotePage` (`Sync/ApplyRemotePage.swift:1`) `applyRemotePage(input,currentValues,records,nextCursor,ownDeviceId,now)` validates `nextCursor>=meta.cursor` else `moved backwards`, per-record `entityType in supportedStores, entityId non-empty, version>=0, serverVersion>cursor, duplicate serverVersion` else `invalid, stale, or duplicate` `highest==max(serverVersion)` else `skip or discard`, sort `serverVersion` asc, per-record if `hasPending` → create `pull:entityType:entityId:serverVersion` conflict `localHistory` + remove pending chain + `releaseDependents`, else if existing conflict `retainNewestRemoteSide` update server side, else if `serverVersion > versions[key].server` `upsert` record-level `deletedAt? filter id` else `payload id` upsert else singleton `values[store]=deleted?undefined:payload`, bump `versions` and `changedStores`, finally `meta.cursor=nextCursor`.
+- `SyncTransport` (`Sync/SyncTransport.swift:1`) `protocol SyncTransport request(path:method:headers:body) async throws -> (Data, HTTPURLResponse)` `URLSessionSyncTransport(baseURL, keychain, supabaseUrl, anonKey)` builds `Bearer` via `keychain.currentAccessToken` fallback `local-demo`, `baseURL https://app.goalflow.com` `INFO API_ORIGIN`, `Authorization Bearer token` `Content-Type json` `Cache-Control no-store` timeout 20 throws `AuthenticationExpiredDuringSync` on 401/403, `MockSyncTransport` for tests `pushHandler/pullHandler`.
+- `SyncEngine` (`Sync/SyncEngine.swift:1`) `shared` `MetaStore/DeviceIdStore/transport/storeBridge: FileSyncStoreBridge` `synchronize()` `synchronizeOnce` push loop `while true { batch=readyOutbox(meta,50); if empty break; wire=batch.map{mutationId,deviceId,entityType,entityId,baseServerVersion,version,payload,updatedAt,deletedAt, resolvesConflictId filtered UUID regex} markMutationsAttempted now POST /api/v1/sync/push {"mutations":wire} results validate `results.count==batch.count && Set==batchIds` else incomplete acknowledgement `applyPushResults` + metaStore.save } pull loop `cursorBefore=meta.cursor GET /api/v1/sync/pull?cursor&limit=100` validate `nextCursor is Int safeInt && hasMore is Bool` else invalid cursor envelope, `nextCursor < cursorBefore || hasMore && nextCursor==cursorBefore → did not make safe progress`, `records` validate `entityType,entityId,version,serverVersion,deviceId String?`, `highest==nextCursor` else would skip or discard, `applyRemotePage` with `storeBridge.loadValues()` `ownDeviceId` now → `storeBridge.saveValues` + `metaStore.save`, `hasMore` loop, finally `lastSuccessfulSync = now`.
+- `StoreBridge` (`Sync/StoreBridge.swift:1`) `FileSyncStoreBridge(baseDir: ApplicationSupport/com.mariusschober.GoalflowMac)` `loadValues() -> [String:Any]` reads `goalflow.tasks.json` → `tasks`, `dailyPlans.json` → `daily_plans`, `goals.json` → `goals`, `amalgam.json` → `amalgam`, `saveValues(_:)` writes `Data.write(.atomic)` `sortedKeys` + `UserDefaults` WAL mirror `goalflow.tasks.v1` etc. Bypass staging when applying remote (direct file write without `buildStaged`).
+- `TaskStore` staging `Providers/CurrentTaskProvider.swift:34` `LocalTaskStore.saveAll` now stages `previousValue = prev.map(toDictionary())`, `nextValue = sorted.map(toDictionary())`, `buildStagedLocalTransaction("tasks", userKey, prev, next, order: nextOrder(), now, randomUuid:UUID)` `appendStagedTransactions` + `syncMetaStore.save` best-effort before durable file write `Data.write(.atomic)` + read-back + `UserDefaults` WAL, `toDictionary()` via `JSONEncoder sortedKeys` + `JSONSerialization`. `GoalflowTask.toDictionary()`.
+- `ExecutionViewModel` now `syncMetaStore: SyncMetaStore` `syncEngine: SyncEngine` `conflicts: [LocalConflict] showConflicts` `isAuthenticated` publisher `authDidChange`, `init(..., syncMetaStore, syncEngine)` `conflicts = syncMetaStore.load().conflicts`, `Timer.publish(every:300)` `triggerSyncIfNeeded()` when `isAuthenticated` → `Task { try await syncEngine.synchronize(); restore() }`, `resolveConflict(id:useLocal:)` if `useLocal` creates retry `mutationId UUID baseServerVersion=conflict.serverVersion version=max(historyMax,cur.local)+1 resolvesConflictId=id status resolving-local` appends to outbox else `serverPayload` dict decode to `GoalflowTask` upsert via `taskStore.saveAll` removes conflict + outbox chain, saves meta, `restore()`.
+- `ConflictsSheet` (`UI/ConflictsSheet.swift:1`) 480pt `ForEach conflicts` `entityType:entityId` `Local vs Server` `title` via `stableJson` `Keep local` `borderedProminent` vs `Use cloud` `bordered` + `v serverVersion`.
+- `ExecutionPanelView` header adds `if !vm.conflicts.isEmpty { Button exclamationmark.triangle.fill orange 10 + count }` `showConflicts` sheet, `body` `.sheet showConflicts` `ConflictsSheet`, `.sheet breakdown` + `.sheet signIn`.
+
+**Still deferred (per plan):** hardening (H). No Web/Android/server changes.
 
 ---
 
@@ -210,6 +228,23 @@ xcodebuild test ... -destination 'platform=macOS'
     LocalBreakdownTests: 6 passed (closes parent+2 children plannedOrder 0/1, empty fails, >50 fails, preserves plan, parent not open fails, stub suggest empty)
     CalendarTests: 6 passed (no time nil, month nil, mock overlap 14:30, no collision, interval 14:30-14:55, requestAccess false)
     CaptureViewModelTests: 7 passed
+
+# Session G (verified 2026-08-30 on Xcode 26.6 / SDK 26.5 / Swift 6.3.3 / arm64)
+xcodegen generate --spec macos-native/project.yml --project macos-native
+  => Created project at macos-native/GoalflowMac.xcodeproj
+xcodebuild -project ... -configuration Debug build => BUILD SUCCEEDED
+xcodebuild -project ... -configuration Release build => BUILD SUCCEEDED
+xcodebuild test ... -destination 'platform=macOS'
+  => Executed 127 tests, 0 failures (3 runs clean)
+  Suites:
+    StableJsonTests: 3 passed (sorts keys, nested, nil/array)
+    SyncMetaTests: 3 passed (empty meta 2/0, duplicate mutation throws was not changed, schema mismatch throws)
+    BuildStagingTests: 5 passed (noop when equal, per-record diff 1, added, deleted deletedAt now, singleton)
+    ReadyOutboxTests: 3 passed (dependency gate m1->m2 only m1 ready, one-per-entity limit 1, sort version→id)
+    ApplyPushResultsTests: 6 passed (accepted proves and clears, stableJson mismatch throws, serverVersion 0 when accepted throws, replayMismatch true throws, duplicate ack throws exactly, exact ack required throws)
+    ApplyRemotePageTests: 6 passed (cursor moved backwards throws, stale serverVersion 3 <=5 throws, duplicate serverVersion 1 throws, skip 10!=5 throws, pull creates conflict when pending + cursor advances, upsert when no pending values tasks)
+    ChaosTests: 1 passed (20 sequences build→append→ready→push accept)
+    TwoDeviceTests: 2 passed (completed never resurrects pull:tasks:t1:1 conflict + cursor 1, conflict keep local vs cloud baseServerVersion 1)
     CaptureServiceTests: 6 passed
     CaptureParserTests: 13 passed
     SchedulingBridgeTests: 7 passed
@@ -234,12 +269,12 @@ xcodebuild test ... -destination 'platform=macOS'
 
 ---
 
-## Known defects / limitations (A+B+C+D+E remain) + F updates
+## Known defects / limitations (A+B+C+D+E+F remain) + G updates
 
-- Deployment target still 15.0 not 26.0 — intentional (see plan §21).
+- Deployment target still 15.0 not 26.0 — intentional (see plan §22).
 - `xcodegen` still required to regenerate `.xcodeproj` after `project.yml` edits.
-- Timer via Combine (B); hold `CompletionHoldController` 50 Hz; break `BreakTimer` 1 s; capture `CaptureViewModel` + `CarbonHotkey` `RegisterEventHotKey`; gate `getPlanningGate` + `DailyPlanStore` + `Keychain` `SecItem`; breakdown `Server+Local` + `Calendar` `EKEventStore`.
-- Persistence 7 files: `execution.json` (Composite WAL) + `goalflow.tasks.json` (LocalTaskStore) + `break.json` (FileBreakSessionStore) + `dailyPlans.json`/`goals.json`/`truenorth.json`/`amalgam.json` each atomic+WAL. Capture reuses `plannedOrder` tail. All verified.
+- Timer via Combine (B); hold 50 Hz; break 1 s; capture Carbon hotkey; gate `getPlanningGate` + `DailyPlanStore` + `Keychain SecItem`; breakdown Server+Local + `Calendar EKEventStore`; sync `SyncEngine` `stableJson` `SyncMeta` `BuildStaging` `readyOutbox` `applyPushResults` `applyRemotePage` `SyncTransport` `Bearer` `StoreBridge`.
+- Persistence 8 files: `execution.json` + `goalflow.tasks.json` (+ sync staging) + `break.json` + `dailyPlans.json`/`goals.json`/`truenorth.json`/`amalgam.json` + `sync.json` (+ `sync WAL` `UserDefaults`) each atomic+WAL+read-back. All verified.
 - Overtime distinct `+mm:ss` orange; completion via hold 3 s/5 s Frog; flow picker blocks next until `1-4`/`Esc`.
 - Break: `Take Break` teal capsule when active/paused; picker `5/10/15/20/Open`; cover per-screen `level=.screenSaver` `.canJoinAllSpaces` `.stationary` `.fullScreenAuxiliary`, `frame=screen.frame` (covers menu bar), `orderFrontRegardless`, `NSApp.activate`. Alarm `alarm(loop:true)` 6-beep 880 Hz square, loops 2×; `stopAlarm` on early end. Sleep during break counts for break but not focus (paused freeze).
 - Capture: `⌘⇧G` Carbon `RegisterEventHotKey` `kVK_ANSI_G cmd+shift` summons centered `NSPanel` `level=.floating` `canJoinAllSpaces` `ultraThin` `520pt` `<200ms` `CACurrentMediaTime`; `Esc` hides, break suppresses capture. `Select date` factory until `Enter` → inline `DatePicker.graphical` / month `Picker 12` `>currentMonth`. Chips preview `25m/#tag/date/14:30/🔗`. `ADD` accent `ACTION` green deferred if active or future month. Notes `⌘↵` reveals `TextEditor` merged with `https://`. `TagRoutingService` `UserDefaults goalflow.hashtag.routes.v1` → `NSWorkspace.open` lowercased. `PrivacyGateway` blanks `••••` when `CGWindowListCopyWindowInfo` finds sharing.
@@ -247,8 +282,9 @@ xcodebuild test ... -destination 'platform=macOS'
 - Breakdown: `Break down into next actions` indigo capsule → sheet `AI suggestions` `ProgressView` 429/503 orange, staged `trash`, `Confirm` closes `broken_down` `parentTaskId` `plannedOrder` tail, preserves plan when `taskIds==queueIds` else deletes; `ACTION` while gated does not preempt.
 - Calendar: `Check calendar` button when `scheduledTime` but `notDetermined`; amber `Overlaps calendar` capsule when `requestFullAccessToEvents` authorized and `!isAllDay && start < taskEnd && end > taskStart`; denied shows nothing.
 - Auth: `Sign in` vs `checkmark.shield` header, `Menu Sign in…/Sign out` `KeychainSessionStore.clear`, `ASWebAuthenticationSession` `goalflow://auth/callback` `code_verifier` `PKCE` vs `#access_token` fragment fallback, `local-demo` Bearer when `ENABLE_LOCAL_DEMO` and no Keychain.
+- Sync: `SyncEngine` push loop `readyOutbox 50` `POST /sync/push` `applyPushResults` exact proof `stableJson` `replayMismatch` `exactly`, pull loop `GET /sync/pull?cursor&limit=100` `nextCursor==max(serverVersion)` `moved backwards`/`stale`/`duplicate`/`skip` throws, `sync.json` `SyncMetaStore` `DeviceId` `UserDefaults`, `FileSyncStoreBridge` `goalflow.tasks.json` etc `Data.write(.atomic)` bypass staging on remote apply, `TaskStore.saveAll` stages `buildStagedLocalTransaction` per-record `appendStagedTransactions` best-effort before file write, conflicts sheet `Keep local` retry `resolvesConflictId` vs `Use cloud` `serverPayload` upsert, periodic `Timer 300s` `triggerSyncIfNeeded` when `isAuthenticated`, 401/403 → `AuthenticationExpiredDuringSync` preserves outbox.
 - No `undo` after completion; no break stats `trackBreak` local-only (not in `STORES.STATS`).
-- No sync — still deferred (G). No idle/away reconciliation dialog yet (stretch for D, B observers already recompute).
+- No idle/away reconciliation dialog yet (stretch for D, B observers already recompute).
 - AppIcon still deferred to H.
 
 ---
@@ -282,29 +318,29 @@ xcodebuild test ... -destination 'platform=macOS'
 
 ---
 
-## Exact recommended scope for Session F — DONE
+## Exact recommended scope for Session G — DONE
 
-**Completed 2026-08-30 — verified above (98 tests, BUILD SUCCEEDED, DoD met).**
+**Completed 2026-08-30 — verified above (127 tests, BUILD SUCCEEDED, DoD met).**
 
-Next scope moves to **Session G — Final Sync (last integration)** (bounded, do not bleed into H):
+Next scope moves to **Session H — Hardening (ship quality)** (bounded, final):
 
-1. Swift Sync adapter parity with `syncProtocol.ts` — `SyncMeta {cursor, versions, outbox, conflicts}` per-entity `version` chain, `dependsOnMutationId`, `stableJson` sorted keys, `buildStagedLocalTransaction` splitting `STORES.TASKS/GOALS/DAILY_PLANS` into per-entity mutations, `readyOutbox` ordering, `applyPushResults` + `applyRemotePage` cursor monotonicity + `LocalConflict` ledger.
-2. Durable `sync_meta` + `sync_outbox` file txn `~/Library/Application Support/com.mariusschober.GoalflowMac/sync.json` atomic+WAL+read-back, plus `raw_collections` mirror for replay validation (never cherry-pick push result, never advance cursor over unapplied page).
-3. Offline `completed`/`broken_down` convergence — local `completedAt` before celebration remains pending in outbox until ack'd, resurrection guard (`completed` never reappears as `open` after reload/sync), two-device property test: device A completes while B edits title → conflict explicit choice, no auto-merge.
-4. `GET /api/v1/sync/pull?cursor&limit=100` + `POST /api/v1/sync/push` loops `authenticatedFetch` `Bearer` `keychain.currentAccessToken`, handle 401 refresh + `mfa_required` 403 → `authDidChange` sign out, `navigator.locks` equivalent via `NSLock` `queueMutation` serialization.
-5. Tests: adversarial replay (duplicate id rejection, cursor regress, stableJson mismatch), chaos 400 sequences, convergence after offline, `verify:server` still green.
+1. `LoginItem` `SMAppService` `launchAtLogin` toggle in `Settings` + `MenuBarController` `checkForUpdates` `Sparkle` feed `appcast.xml`.
+2. Hardened Runtime entitlements `com.apple.security.app-sandbox` `com.apple.security.personal-information.calendars` `keychain-access-groups` `com.mariusschober.goalflow.mac` + `com.apple.security.network.client` for sync, `CODE_SIGN_IDENTITY` `Apple Development` + `notarization` `xcrun notarytool` `stapler`.
+3. Privacy: `ScreenCaptureKit` `CGWindowListCopyWindowInfo` replaced with `SCShareableContent` `includesCurrentDisplay` for `PrivacyGateway` when sharing, `NSPrivacyAccessedAPICategory` `NSPrivacyCollectedDataTypes` `PrivacyInfo.xcprivacy`.
+4. Multi-display/Spaces polish: `BreakCover` `NSScreen.screens` `didChangeScreenParameters` already, `Capture` `NSScreen.main` centering already, `a11y` `VoiceOver` `accessibilityLabel` for `Current`/`Timer`/`Break`/`Gate`/`Conflicts`, `AX` roles, `NSAccessibility` `accessibilityPerformPress` for hold.
+5. Performance: `ExecutionTimer` 1s not 250ms, `SyncEngine` `Timer 300s` not busy, `stableJson` cached, release packaging `DMG` `create-dmg` + `final merge to production` `git merge --no-ff feature/macos-execution-companion` `origin/goalflow-production`.
 
-**Session G definition of done:** `POST /sync/push` + `GET /sync/pull` loops converge, local `completed`/`broken_down` survives offline and never resurrects, conflict ledger explicit, cursor never regresses over unapplied page, `stableJson` parity, adversarial + two-device property tests green, `npm test` still green, no silent data loss.
+**Session H definition of done:** `LoginItem` enabled, `Sparkle` updates, `HardenedRuntime` `notarized` `spctl -a -vv` passes, `PrivacyInfo` present, `a11y` `VoiceOver` reads `Current` + `Break` + `Gate`, `performance` <50ms panel open, `DMG` `GoalflowMac.dmg` `codesign -vv` passes, merge to `goalflow-production` green, no silent data loss.
 
 ---
 
-## Handoff checklist for next agent (Session G)
+## Handoff checklist for next agent (Session H)
 
 - [ ] Verify branch `feature/macos-execution-companion` tip (check `git merge-base` equals `f93684ac50562c03c99328d98e57eb67f862eb3b`); record `git rev-parse HEAD`.
 - [ ] Run `xcodegen generate --spec macos-native/project.yml --project macos-native/` if `project.yml` changed.
-- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 98 passing.
-- [ ] Do not modify `android-native/`, `services/syncProtocol.ts`, `services/cloudSync.ts`, `supabase/migrations/*`, `server/routes/sync/*` — Sync implementation is next (G) with strict parity.
-- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session G) and §21 before coding; respect `LSUIElement` + `goalflow://auth/callback` Keychain + `getPlanningGate` wall + `EventKit` read-only.
+- [ ] Run `xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination 'platform=macOS'` and expect 127 passing.
+- [ ] Do not modify `android-native/` (read-only) but `services/syncProtocol.ts` parity already mirrored — hardening is next (H) with `LoginItem`/`Sparkle`/`HardenedRuntime`.
+- [ ] Read `docs/MACOS_EXECUTION_COMPANION_PLAN.md` §10 (Session H) and §22 before coding; respect `LSUIElement` + sync `SyncMeta` `stableJson` `cursor` monotonicity + `Keychain` + `EventKit`.
 
 ---
 
