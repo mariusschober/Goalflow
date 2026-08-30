@@ -207,6 +207,12 @@ object GoalflowBackup {
             syncBinding = syncBinding
         )
         requireUnique(payload.tasks.map { it.id }, "task")
+        requireUnique(
+            payload.tasks
+                .filter { it.habitId != null && it.deletedAt == null }
+                .map { "${it.habitId}|${it.scheduledFor}" },
+            "active habit day"
+        )
         requireUnique(payload.goals.map { it.id }, "goal")
         requireUnique(payload.habits.map { it.id }, "habit")
         requireUnique(payload.plans.map { it.localDate }, "planning decision")

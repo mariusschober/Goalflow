@@ -10,7 +10,9 @@ data class NativeWidgetTarget(
     val taskId: String,
     val expectedUpdatedAt: Long,
     val localDate: String,
-    val planFingerprint: String
+    val planFingerprint: String,
+    /** The open-task version before completion, used to verify widget Undo. */
+    val expectedPriorUpdatedAt: Long? = null
 )
 
 enum class NativeWidgetAction { COMPLETE, SKIP, UNDO }

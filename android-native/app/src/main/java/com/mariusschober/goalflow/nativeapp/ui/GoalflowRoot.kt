@@ -318,7 +318,8 @@ fun GoalflowRoot(
     }
 
     BackHandler(enabled = destination != RootDestination.CURRENT && !captureOpen && editTask == null &&
-        datePickerForTask == null && breakdownTask == null && backupAction == null && !signInOpen && focusTask == null) {
+        datePickerForTask == null && breakdownTask == null && backupAction == null && restorePreview == null &&
+        !replaceRestoreConfirmation && !signInOpen && focusTask == null) {
         destination = if (destination == RootDestination.INSIGHTS) RootDestination.GOALS else RootDestination.CURRENT
     }
 
@@ -360,6 +361,7 @@ fun GoalflowRoot(
         restorePreview = null
         pendingRestoreContents = null
         pendingRestorePassword = null
+        backupError = null
         replaceRestoreConfirmation = false
         restoreInProgress = false
     }
@@ -862,6 +864,7 @@ fun GoalflowRoot(
         RestorePreviewDialog(
             preview = preview,
             busy = restoreInProgress,
+            error = backupError,
             onDismiss = ::clearRestorePreview,
             onMerge = { restoreWithMode(BackupRestoreMode.MERGE) },
             onReplace = { replaceRestoreConfirmation = true }
@@ -2014,6 +2017,7 @@ private fun BackupPasswordDialog(
 private fun RestorePreviewDialog(
     preview: NativeBackupPreview,
     busy: Boolean,
+    error: String?,
     onDismiss: () -> Unit,
     onMerge: () -> Unit,
     onReplace: () -> Unit
@@ -2043,6 +2047,7 @@ private fun RestorePreviewDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {

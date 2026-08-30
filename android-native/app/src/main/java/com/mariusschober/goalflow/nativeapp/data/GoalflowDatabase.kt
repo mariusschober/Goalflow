@@ -396,6 +396,60 @@ abstract class GoalflowDatabase : RoomDatabase() {
     abstract fun taskEventDao(): TaskEventDao
 
     companion object {
+        private val integrityCallback = object : RoomDatabase.Callback() {
+            override fun onCreate(database: SupportSQLiteDatabase) {
+                installActiveHabitDayUniqueness(database)
+            }
+
+            override fun onOpen(database: SupportSQLiteDatabase) {
+                // Existing v6 files did not have these triggers. Installing
+                // them on every open closes the invariant for upgrades too,
+                // without changing the persisted Room schema version.
+                installActiveHabitDayUniqueness(database)
+            }
+        }
+
+        /** Storage-level guard for one non-deleted habit instance per day. */
+        internal fun installActiveHabitDayUniqueness(database: SupportSQLiteDatabase) {
+            database.execSQL(
+                """
+                CREATE TRIGGER IF NOT EXISTS goalflow_unique_active_habit_day_insert
+                BEFORE INSERT ON tasks
+                WHEN NEW.habitId IS NOT NULL
+                    AND NEW.scheduledFor IS NOT NULL
+                    AND NEW.deletedAt IS NULL
+                    AND EXISTS (
+                        SELECT 1 FROM tasks
+                        WHERE habitId = NEW.habitId
+                            AND scheduledFor = NEW.scheduledFor
+                            AND deletedAt IS NULL
+                    )
+                BEGIN
+                    SELECT RAISE(ABORT, 'active habit day already exists');
+                END
+                """.trimIndent()
+            )
+            database.execSQL(
+                """
+                CREATE TRIGGER IF NOT EXISTS goalflow_unique_active_habit_day_update
+                BEFORE UPDATE OF habitId, scheduledFor, deletedAt ON tasks
+                WHEN NEW.habitId IS NOT NULL
+                    AND NEW.scheduledFor IS NOT NULL
+                    AND NEW.deletedAt IS NULL
+                    AND EXISTS (
+                        SELECT 1 FROM tasks
+                        WHERE id != NEW.id
+                            AND habitId = NEW.habitId
+                            AND scheduledFor = NEW.scheduledFor
+                            AND deletedAt IS NULL
+                    )
+                BEGIN
+                    SELECT RAISE(ABORT, 'active habit day already exists');
+                END
+                """.trimIndent()
+            )
+        }
+
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL("CREATE TABLE IF NOT EXISTS habits (id TEXT NOT NULL PRIMARY KEY, title TEXT NOT NULL, frequency TEXT NOT NULL, specificDays TEXT NOT NULL, streak INTEGER NOT NULL, bestStreak INTEGER NOT NULL, lastCompletedDate TEXT, isHighPriority INTEGER NOT NULL, beforeFrog INTEGER NOT NULL, duration INTEGER, goalId TEXT, createdAt INTEGER NOT NULL)")
@@ -454,6 +508,6 @@ abstract class GoalflowDatabase : RoomDatabase() {
             context,
             GoalflowDatabase::class.java,
             "goalflow-native.db"
-        ).addMigrations(*migrations()).build()
+        ).addMigrations(*migrations()).addCallback(integrityCallback).build()
     }
 }

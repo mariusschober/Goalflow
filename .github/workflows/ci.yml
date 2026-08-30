@@ -97,13 +97,13 @@ jobs:
       - name: Upload production debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: goalflow-production-debug-apk
+          name: goalflow-production-debug-apk-TEST-ONLY
           path: android/app/build/outputs/apk/production/debug/app-production-debug.apk
           if-no-files-found: error
       - name: Upload isolated test APK
         uses: actions/upload-artifact@v4
         with:
-          name: goalflow-test-debug-apk
+          name: goalflow-test-debug-apk-TEST-ONLY
           path: android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk
           if-no-files-found: error
 
@@ -126,7 +126,7 @@ jobs:
           key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-native-
-      - run: chmod +x android-native/gradlew
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh
       - run: ./android-native/gradlew -p android-native test
       - name: Compile native instrumentation tests
         run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
@@ -136,6 +136,18 @@ jobs:
       - run: ./android-native/gradlew -p android-native assembleProductionDebug
       - run: ./android-native/gradlew -p android-native assembleProductionRelease
       - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Upload native Room schemas
+        uses: actions/upload-artifact@v4
+        with:
+          name: goalflow-native-room-schemas
+          path: android-native/app/schemas
+          if-no-files-found: error
+      - name: Diagnose native production debug APK bytes (TEST-ONLY)
+        env:
+          GOALFLOW_APK_LABEL: TEST-ONLY
+        run: |
+          apk=$(find android-native/app/build/outputs/apk/production/debug -name '*.apk' -print -quit)
+          android-native/scripts/diagnose-apk.sh "$apk"
       - name: Reclaim runner disk for emulator
         run: |
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
@@ -156,16 +168,18 @@ jobs:
           disable-animations: true
           script: |
             sleep 45
+            apk=$(find android-native/app/build/outputs/apk/production/debug -name '*.apk' -print -quit)
+            GOALFLOW_APK_LABEL=TEST-ONLY DIAGNOSE_APK_INSTALL=1 android-native/scripts/diagnose-apk.sh "$apk"
             ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
       - name: Upload native production debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: goalflow-native-production-debug-apk
+          name: goalflow-native-production-debug-apk-TEST-ONLY
           path: android-native/app/build/outputs/apk/production/debug/*.apk
           if-no-files-found: error
       - name: Upload native sandbox debug APK
         uses: actions/upload-artifact@v4
         with:
-          name: goalflow-native-sandbox-debug-apk
+          name: goalflow-native-sandbox-debug-apk-TEST-ONLY
           path: android-native/app/build/outputs/apk/sandbox/debug/*.apk
           if-no-files-found: error

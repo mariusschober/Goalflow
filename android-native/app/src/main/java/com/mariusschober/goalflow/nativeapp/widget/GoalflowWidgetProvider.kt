@@ -25,6 +25,7 @@ internal object GoalflowWidgetIntent {
     const val EXTRA_ACTION = "goalflow_widget_action"
     const val EXTRA_TASK_ID = "goalflow_widget_task_id"
     const val EXTRA_EXPECTED_UPDATED_AT = "goalflow_widget_expected_updated_at"
+    const val EXTRA_EXPECTED_PRIOR_UPDATED_AT = "goalflow_widget_expected_prior_updated_at"
     const val EXTRA_LOCAL_DATE = "goalflow_widget_local_date"
     const val EXTRA_PLAN_FINGERPRINT = "goalflow_widget_plan_fingerprint"
     const val ACTION_COMPLETE = "complete"
@@ -33,13 +34,22 @@ internal object GoalflowWidgetIntent {
     const val ACTION_ADD = "add"
 }
 
-private data class WidgetUndoState(val taskId: String, val expectedUpdatedAt: Long)
+private data class WidgetUndoState(
+    val taskId: String,
+    val expectedUpdatedAt: Long,
+    val localDate: String,
+    val planFingerprint: String,
+    val expectedPriorUpdatedAt: Long
+)
 
 private object GoalflowWidgetState {
     private const val PREFS = "goalflow-widget-state"
     private const val KEY_ERROR = "error"
     private const val KEY_UNDO_TASK_ID = "undoTaskId"
     private const val KEY_UNDO_UPDATED_AT = "undoUpdatedAt"
+    private const val KEY_UNDO_LOCAL_DATE = "undoLocalDate"
+    private const val KEY_UNDO_PLAN_FINGERPRINT = "undoPlanFingerprint"
+    private const val KEY_UNDO_PRIOR_UPDATED_AT = "undoPriorUpdatedAt"
 
     private fun preferences(context: Context) =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -54,24 +64,47 @@ private object GoalflowWidgetState {
         preferences(context).edit().remove(KEY_ERROR).apply()
     }
 
-    fun setUndo(context: Context, taskId: String, expectedUpdatedAt: Long) {
+    fun setUndo(
+        context: Context,
+        taskId: String,
+        expectedUpdatedAt: Long,
+        localDate: String,
+        planFingerprint: String,
+        expectedPriorUpdatedAt: Long
+    ) {
         preferences(context).edit()
             .putString(KEY_UNDO_TASK_ID, taskId)
             .putLong(KEY_UNDO_UPDATED_AT, expectedUpdatedAt)
+            .putString(KEY_UNDO_LOCAL_DATE, localDate)
+            .putString(KEY_UNDO_PLAN_FINGERPRINT, planFingerprint)
+            .putLong(KEY_UNDO_PRIOR_UPDATED_AT, expectedPriorUpdatedAt)
             .apply()
     }
 
     fun undo(context: Context): WidgetUndoState? {
         val prefs = preferences(context)
         val taskId = prefs.getString(KEY_UNDO_TASK_ID, null)?.takeIf(String::isNotBlank) ?: return null
-        if (!prefs.contains(KEY_UNDO_UPDATED_AT)) return null
-        return WidgetUndoState(taskId, prefs.getLong(KEY_UNDO_UPDATED_AT, 0L))
+        if (!prefs.contains(KEY_UNDO_UPDATED_AT) || !prefs.contains(KEY_UNDO_LOCAL_DATE) ||
+            !prefs.contains(KEY_UNDO_PLAN_FINGERPRINT) || !prefs.contains(KEY_UNDO_PRIOR_UPDATED_AT)
+        ) return null
+        val localDate = prefs.getString(KEY_UNDO_LOCAL_DATE, null)?.takeIf(String::isNotBlank) ?: return null
+        val fingerprint = prefs.getString(KEY_UNDO_PLAN_FINGERPRINT, null)?.takeIf(String::isNotBlank) ?: return null
+        return WidgetUndoState(
+            taskId = taskId,
+            expectedUpdatedAt = prefs.getLong(KEY_UNDO_UPDATED_AT, 0L),
+            localDate = localDate,
+            planFingerprint = fingerprint,
+            expectedPriorUpdatedAt = prefs.getLong(KEY_UNDO_PRIOR_UPDATED_AT, Long.MIN_VALUE)
+        )
     }
 
     fun clearUndo(context: Context) {
         preferences(context).edit()
             .remove(KEY_UNDO_TASK_ID)
             .remove(KEY_UNDO_UPDATED_AT)
+            .remove(KEY_UNDO_LOCAL_DATE)
+            .remove(KEY_UNDO_PLAN_FINGERPRINT)
+            .remove(KEY_UNDO_PRIOR_UPDATED_AT)
             .apply()
     }
 }
@@ -96,31 +129,21 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
                         application.repository.executeWidgetAction(NativeWidgetAction.COMPLETE, target)
                         val completed = application.repository.taskSnapshot(target.taskId)
                             ?: error("The completed task could not be re-read safely.")
-                        GoalflowWidgetState.setUndo(appContext, completed.id, completed.updatedAt)
+                        GoalflowWidgetState.setUndo(
+                            context = appContext,
+                            taskId = completed.id,
+                            expectedUpdatedAt = completed.updatedAt,
+                            localDate = target.localDate,
+                            planFingerprint = target.planFingerprint,
+                            expectedPriorUpdatedAt = target.expectedUpdatedAt
+                        )
                         application.soundController.playCompletion(completed.isFrog)
                     }
                     GoalflowWidgetIntent.ACTION_SKIP -> {
                         application.repository.executeWidgetAction(NativeWidgetAction.SKIP, readTarget(intent))
                     }
                     GoalflowWidgetIntent.ACTION_UNDO -> {
-                        val taskId = intent.getStringExtra(GoalflowWidgetIntent.EXTRA_TASK_ID)
-                            ?.takeIf(String::isNotBlank)
-                            ?: error("The undo action has no task identity.")
-                        if (!intent.hasExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_UPDATED_AT)) {
-                            error("The undo action has no task version.")
-                        }
-                        application.repository.executeWidgetAction(
-                            NativeWidgetAction.UNDO,
-                            NativeWidgetTarget(
-                                taskId = taskId,
-                                expectedUpdatedAt = intent.getLongExtra(
-                                    GoalflowWidgetIntent.EXTRA_EXPECTED_UPDATED_AT,
-                                    Long.MIN_VALUE
-                                ),
-                                localDate = "",
-                                planFingerprint = ""
-                            )
-                        )
+                        application.repository.executeWidgetAction(NativeWidgetAction.UNDO, readTarget(intent))
                         GoalflowWidgetState.clearUndo(appContext)
                     }
                     else -> error("This widget action is no longer supported. Refresh the widget.")
@@ -154,6 +177,9 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
         if (!intent.hasExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_UPDATED_AT)) {
             error("The widget action has no task version.")
         }
+        val expectedPriorUpdatedAt = if (intent.hasExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_PRIOR_UPDATED_AT)) {
+            intent.getLongExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_PRIOR_UPDATED_AT, Long.MIN_VALUE)
+        } else null
         return NativeWidgetTarget(
             taskId = taskId,
             expectedUpdatedAt = intent.getLongExtra(
@@ -161,7 +187,8 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
                 Long.MIN_VALUE
             ),
             localDate = localDate,
-            planFingerprint = fingerprint
+            planFingerprint = fingerprint,
+            expectedPriorUpdatedAt = expectedPriorUpdatedAt
         )
     }
 
@@ -191,7 +218,10 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
         internal fun undoPendingIntent(
             context: Context,
             taskId: String,
-            expectedUpdatedAt: Long
+            expectedUpdatedAt: Long,
+            localDate: String,
+            planFingerprint: String,
+            expectedPriorUpdatedAt: Long
         ): PendingIntent {
             val intent = Intent(context, GoalflowWidgetProvider::class.java)
                 .setPackage(context.packageName)
@@ -199,9 +229,12 @@ class GoalflowWidgetProvider : AppWidgetProvider() {
                 .putExtra(GoalflowWidgetIntent.EXTRA_ACTION, GoalflowWidgetIntent.ACTION_UNDO)
                 .putExtra(GoalflowWidgetIntent.EXTRA_TASK_ID, taskId)
                 .putExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_UPDATED_AT, expectedUpdatedAt)
+                .putExtra(GoalflowWidgetIntent.EXTRA_LOCAL_DATE, localDate)
+                .putExtra(GoalflowWidgetIntent.EXTRA_PLAN_FINGERPRINT, planFingerprint)
+                .putExtra(GoalflowWidgetIntent.EXTRA_EXPECTED_PRIOR_UPDATED_AT, expectedPriorUpdatedAt)
             return PendingIntent.getBroadcast(
                 context,
-                "undo|$taskId|$expectedUpdatedAt".hashCode(),
+                "undo|$taskId|$expectedUpdatedAt|$planFingerprint".hashCode(),
                 intent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
@@ -275,12 +308,19 @@ object GoalflowWidgetUpdater {
             GoalflowWidgetProvider.actionPendingIntent(context, GoalflowWidgetIntent.ACTION_SKIP, snapshot)
         )
         views.setViewVisibility(R.id.widget_undo, if (undoTask != null) View.VISIBLE else View.GONE)
-        undoTask?.let {
-            views.setOnClickPendingIntent(
-                R.id.widget_undo,
-                GoalflowWidgetProvider.undoPendingIntent(context, it.id, it.updatedAt)
-            )
-        }
+            undoTask?.let {
+                views.setOnClickPendingIntent(
+                    R.id.widget_undo,
+                    GoalflowWidgetProvider.undoPendingIntent(
+                        context = context,
+                        taskId = it.id,
+                        expectedUpdatedAt = undoState!!.expectedUpdatedAt,
+                        localDate = undoState.localDate,
+                        planFingerprint = undoState.planFingerprint,
+                        expectedPriorUpdatedAt = undoState.expectedPriorUpdatedAt
+                    )
+                )
+            }
         views.setOnClickPendingIntent(R.id.widget_add, GoalflowWidgetProvider.addPendingIntent(context))
         views.setViewVisibility(R.id.widget_status, if (error.isNullOrBlank()) View.GONE else View.VISIBLE)
         error?.let { views.setTextViewText(R.id.widget_status, it) }

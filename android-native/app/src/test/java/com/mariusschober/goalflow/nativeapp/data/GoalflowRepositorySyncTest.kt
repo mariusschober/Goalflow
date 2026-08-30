@@ -148,6 +148,24 @@ class GoalflowRepositorySyncTest {
     }
 
     @Test
+    fun `database rejects duplicate active habit days at the storage boundary`() = runTest {
+        GoalflowDatabase.installActiveHabitDayUniqueness(database.openHelper.writableDatabase)
+        val habit = repository.createHabit("Storage guarded habit")
+        val today = LocalDate.now().toString()
+        val first = repository.generateHabitInstance(habit.id, today)
+            ?: error("A daily habit should generate an instance")
+        val duplicate = database.taskDao().get(first.id)!!.copy(id = "duplicate-habit-instance")
+
+        try {
+            database.taskDao().insert(duplicate)
+            fail("The database trigger must reject a duplicate active habit day")
+        } catch (_: Exception) {
+            // SQLite aborts the insert before a second active instance exists.
+        }
+        assertEquals(1, database.taskDao().getAll().count { it.habitId == habit.id && it.deletedAt == null })
+    }
+
+    @Test
     fun `habit generation failure is durable and retryable`() = runTest {
         val habit = repository.createHabit("Collision habit")
         val today = LocalDate.now().toString()
@@ -818,6 +836,39 @@ class GoalflowRepositorySyncTest {
             assertTrue(expected.message.orEmpty().contains("changed"))
         }
         assertEquals(TaskStatus.OPEN.name, database.taskDao().get(task.id)?.status)
+    }
+
+    @Test
+    fun `widget undo carries and verifies the original plan proof`() = runTest {
+        val today = LocalDate.now().toString()
+        val task = repository.createTask("Undo proof", "", SchedulePrecision.DAY, today, null, false)
+        repository.confirmPlan(today, listOf(task.id))
+        val snapshot = repository.widgetSnapshot(today)
+        val original = snapshot.currentTask ?: error("A confirmed plan should expose its first task")
+        val completionTarget = NativeWidgetTarget(
+            taskId = original.id,
+            expectedUpdatedAt = original.updatedAt,
+            localDate = snapshot.localDate,
+            planFingerprint = snapshot.planFingerprint
+        )
+
+        repository.executeWidgetAction(NativeWidgetAction.COMPLETE, completionTarget)
+        val completed = repository.taskSnapshot(task.id) ?: error("Completed task should remain readable")
+        repository.createTask("New plan item", "", SchedulePrecision.DAY, today, null, false)
+
+        try {
+            repository.executeWidgetAction(
+                NativeWidgetAction.UNDO,
+                completionTarget.copy(
+                    expectedUpdatedAt = completed.updatedAt,
+                    expectedPriorUpdatedAt = completionTarget.expectedUpdatedAt
+                )
+            )
+            fail("Expected Undo to reject a changed plan")
+        } catch (expected: StaleWidgetActionException) {
+            assertTrue(expected.message.orEmpty().contains("plan"))
+        }
+        assertEquals(TaskStatus.COMPLETED.name, database.taskDao().get(task.id)?.status)
     }
 
     private fun accepted(mutation: SyncOutboxEntity, serverVersion: Long): NativePushResult =
