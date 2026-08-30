@@ -1,6 +1,6 @@
 # Goalflow web production — 24-hour handover
 
-Updated: 2026-08-30 UTC
+Updated: 2026-08-30 UTC (post-merge 600616d)
 
 ## Objective and exclusions
 
@@ -12,15 +12,15 @@ Excluded unless a direct web production blocker requires otherwise: native Andro
 
 - Repository: `mariusschober/Goalflow`
 - Authoritative integration branch: `goalflow-production` (read-only for this mission)
-- Fetched production tip: `3b510ca254641281088675117dc76b2ef3926ebc`
+- Fetched production tip: `5243bcdaa3179b85838d21e67eca3674a6220d3d` (docs: master handover 1cca7ac P0-1 + Tranche3)
 - User orientation production tip: `7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8` (superseded)
 - Isolated branch: `sol/web-production-24h`
-- Isolated branch base: `3b510ca254641281088675117dc76b2ef3926ebc`
-- Draft integrity PR: #1, `codex/zero-data-loss-finalization` -> `goalflow-production`
-- Fetched PR #1 head: `678c90302d4d87e4a3ca9c756c67b91140d67f6d`
-- PR #1 base SHA: `7a502cd6908b4ce5dfaad3216bd7a804aa4a1fd8`
-- PR #1 state: open, draft, mergeable at fetch time; do not merge blindly
-- Latest production Actions run: `33335119616` at `3b510ca`
+- Isolated branch base (original): `3b510ca254641281088675117dc76b2ef3926ebc`
+- Isolated branch HEAD (pre-merge, verified): `a30401a409d4db263668c5a5531a9ae8b29b35cb` (4 docs commits on 3b510ca)
+- Isolated branch HEAD (post-merge, current): `600616d` (merge 5243bcd into sol, 9 commits ahead, 36 files, 2235+)
+- Draft integrity PR: #1, `codex/zero-data-loss-finalization` -> `goalflow-production` (now deleted ref, predecessor 552e8f4; entire delta vs 3b510ca was docs only, no web code — reviewed and not merged)
+- Latest production Actions runs: `33338775290` at `5243bcd` (verify SUCCESS, secrets SUCCESS, migrations SUCCESS, android SUCCESS, native-android in_progress), `33338446599` at `1cca7ac` (verify/secrets/migrations/android SUCCESS, native-android FAILED at `assembleProductionRelease` signing)
+- Previous stale run `33335119616` at `3b510ca` failed before steps due to billing — superseded by recent successes
 
 ## Current plan
 
@@ -40,62 +40,81 @@ Excluded unless a direct web production blocker requires otherwise: native Andro
 
 ## Completed work
 
-- Fetched live GitHub repository, branch, PR, commit, and Actions state through the connected GitHub integration.
-- Confirmed `goalflow-production` advanced from the orientation SHA to `3b510ca`.
-- Confirmed PR #1 remains open/draft and targets an older production base.
-- Confirmed the latest production run `33335119616` failed before executable job steps were exposed:
-  - `verify`: failure, `steps=null`
-  - `secrets`: failure, `steps=null`
-  - `migrations`: failure, `steps=null`
-  - `native-android`: skipped
-  - `android`: skipped
-- Created isolated branch `sol/web-production-24h` from exact fetched production tip.
-- Materialized the exact branch text tree through the connected GitHub integration after direct shell Git authentication proved unavailable. The local web mirror contains 137 web/server/migration/test/documentation files. Remote binary asset SHAs remain unchanged and were not copied into the local mirror.
-- Installed the locked dependency graph with Node `v24.19.0` / npm `11.9.0`: 676 packages installed.
-- Executed the complete sequential release script at the isolated head: TypeScript, 102 tests, client/server builds, production health startup, client bundle secret scan, and dependency audit all passed.
-- Installed and executed PostgreSQL `16.15` in a disposable local cluster. The static migration verifier, empty-database migration path, seeded current-schema upgrade path, integrity assertions, and malformed-CASE regression all passed.
-- Reviewed PR #1 against current production with the GitHub compare API. It is diverged: 4 commits ahead and 4 behind, merge base `7a502cd`. Relative to `3b510ca`, its entire delta is documentation only: `docs/AI_CONTEXT_HANDOVER.md`, `docs/PRODUCTION_FINALIZATION_PLAN.md`, `docs/SOL_MAX_ZERO_DATA_LOSS_FINALIZATION.md`, and `docs/TRANCHE_2_HANDOVER.md` (459 additions, 82 deletions). No web code was admitted.
-- No production branch, production database, or production deployment was modified.
+- Fetched every live branch and PR ref (`git fetch origin --prune`, `gh run list`, `gh run view`, `gh api`).
+- Located newest branch containing `docs/WEB_PRODUCTION_24H_HANDOVER.md`: `sol/web-production-24h` at `a30401a` (4 commits ahead of 3b510ca).
+- Read `docs/WEB_PRODUCTION_24H_HANDOVER.md` completely, then `docs/PRODUCTION_FINALIZATION_PLAN.md`, `docs/PRODUCTION_READINESS.md`, `DATA_INTEGRITY_REPORT.md`, `DEPLOYMENT.md`, `.github/workflows/ci.yml`, `supabase/migrations/*`, `package.json` scripts, `scripts/*`.
+- Inspected every commit and diff since handover's recorded base `3b510ca`:
+  - `sol/web-production-24h`: 4 docs-only commits (7c4b7c3, 2d282d8, 6b47a11, a30401a)
+  - `goalflow-production`: 9 commits ahead (b1b9d42, 9729bca, c6f9acd, e5fc227, 02e7280, 763460a, b230e65, 1cca7ac, 5243bcd) — 36 files, 2235 insertions, web-relevant fixes present
+- Compared handover claims with GitHub CI/logs and reran smallest decisive local gate on `a30401a`:
+  - `npm run lint` PASS (`tsc --noEmit`)
+  - `npm test` PASS 10 files 102/102
+  - `npm run verify:migrations` PASS 6 migrations
+  - `npm run build:client` PASS Vite 6.4.3 18 precache entries
+  - `bash scripts/test-postgres-migrations.sh` PASS 9/9
+  - Confirmed hosted CI for `3b510ca` run `33335119616` failure-before-steps is stale; recent prod runs at `5243bcd`/`1cca7ac` show web gates SUCCESS
+- Merged `origin/goalflow-production` (5243bcd) into `sol/web-production-24h` as `600616d` (fast-forward-safe, no history rewrite, no force-push, no prod mutation) to cure 9-commit stale divergence. Brings web zero-data-loss fixes missing from sol:
+  - `hooks/useGoalflow.ts` `prevHabitGenRef` guard (P0-3 infinite loop)
+  - `server/routes/sync.ts` `Promise.all` batch c5 (P0-7 sequential RTT)
+  - `services/storage.ts` fallback cursor advance via `localStorage` when IndexedDB null (prevents sync stall)
+  - `server/routes/telegram.ts` `crypto.timingSafeEqual` (secure webhook)
+  - `services/authService.ts` PKCE `generateState`/`generateCodeVerifier`/`pkceChallenge` + `S256` + `sessionStorage` quarantine on `SIGNED_OUT` (Tranche 2 A+B)
+  - `supabase/migrations/202608310001_telegram_auth_state_pkce.sql` 7th migration
+  - `package.json` `0.3.0-tranche3`
+- Re-proved gates at merged HEAD `600616d` (Node 24.19.0 / npm 11.9.0):
+  - `npm run lint` PASS
+  - `npm test` PASS 13 files 110/110 (adds `telegramAuth.secure` 3, `authService.secure` 2, `authService.session` 3)
+  - `npm run verify:migrations` PASS 7 migrations
+  - `npm run build` PASS client 18 entries 1364 KiB + server 97.7kb
+  - `npm run verify:server` PASS health `status=ok` `version=0.3.0-tranche3`
+  - `npm run verify:client-secrets` PASS 27 files
+  - `npm audit --audit-level=high` PASS 0 vuln
+  - `bash scripts/test-postgres-migrations.sh` PASS 9/9 (empty, upgrade, idempotency, conflict, cursor, restore, native task events, unknown)
+- No production branch, production database, or production deployment was modified. Android `native-android` `assembleProductionRelease` failure at `33338446599` is signing-related, not web-blocking; web verify/secrets/migrations/android remain SUCCESS.
 
 ## Test and command evidence
 
-Evidence generated in this mission:
+Evidence generated in this mission (pre-merge `a30401a` and post-merge `600616d`):
 
 | Gate | Command/evidence | Result |
 | --- | --- | --- |
-| Live production ref | GitHub branch API | `3b510ca254641281088675117dc76b2ef3926ebc` |
-| PR #1 identity | GitHub PR API | head `678c9030`, base `7a502cd6`, open/draft |
-| Latest hosted CI | Actions run `33335119616` | Infrastructure/account-style failure before steps; not code evidence |
-| Direct clean clone | `git clone --no-tags https://github.com/mariusschober/Goalflow.git goalflow-web-24h` | BLOCKED: shell has no GitHub credential; connector access is healthy |
-| Locked install | `npm ci` | PASS; 676 packages installed |
-| Complete web release gate | `npm run verify:release` | PASS |
-| TypeScript | `npm run lint` | PASS; `tsc --noEmit` |
-| Unit/property/server tests | `npm test` | PASS; 10 files, 102/102 tests |
-| Production client build | `npm run build:client` | PASS; Vite 6.4.3, 321 modules; PWA service worker generated with 14 precache entries |
-| Production server build | `npm run build:server` | PASS; `dist/server/index.mjs` generated |
-| Production startup/health | `npm run verify:server` | PASS; HTTP 200, `status=ok`, version `0.1.0`; local test intentionally had no cloud credentials |
-| Client secret scan | `npm run verify:client-secrets` after build | PASS across 23 built files |
-| Dependency audit | `npm audit --audit-level=high` | PASS; 0 vulnerabilities |
-| Migration static verification | `npm run verify:migrations` | PASS; 6 migrations, empty order and additive safety |
-| PostgreSQL identity | `select version(); select current_user;` | PASS; PostgreSQL 16.15, superuser `postgres` |
-| Empty + seeded migration harness | `bash scripts/test-postgres-migrations.sh` | PASS; empty database, current-schema upgrade, idempotency, conflict preservation, cursor rebase, atomic restore, native task events, unknown payload preservation |
-| PostgreSQL CASE regression | `bash scripts/test-postgres-migration-case-regression.sh` | PASS; malformed CASE rejected and full corrected harness accepted |
+| Live production ref (pre-merge) | GitHub branch API `3b510ca` | Superseded |
+| Live production ref (current) | `git rev-parse origin/goalflow-production` | `5243bcdaa3179b85838d21e67eca3674a6220d3d` |
+| Isolated branch pre-merge | `git rev-parse HEAD` on `sol/web-production-24h` | `a30401a409d4db263668c5a5531a9ae8b29b35cb` |
+| Isolated branch post-merge | `git rev-parse HEAD` after merge | `600616d` (merge 5243bcd) |
+| PR #1 identity | GitHub PR API (deleted ref, predecessor 552e8f4) | base `7a502cd`, head `678c903`, open/draft, docs-only delta vs 3b510ca |
+| Hosted CI (stale claim) | Actions run `33335119616` at `3b510ca` | Superseded (billing failure before steps) |
+| Hosted CI (current prod) | `gh run view 33338775290` at `5243bcd` | verify SUCCESS, secrets SUCCESS, migrations SUCCESS, android SUCCESS, native-android in_progress |
+| Hosted CI (previous prod) | `gh run view 33338446599` at `1cca7ac` | verify SUCCESS, secrets SUCCESS, migrations SUCCESS, android SUCCESS, native-android FAILED at `assembleProductionRelease` (signing) |
+| Locked install (pre-merge) | `npm ci` | PASS 676 packages |
+| TypeScript (pre-merge) | `npm run lint` | PASS `tsc --noEmit` |
+| Unit tests (pre-merge) | `npm test` | PASS 10 files 102/102 |
+| Migration static (pre-merge) | `npm run verify:migrations` | PASS 6 migrations |
+| Production client build (pre-merge) | `npm run build:client` | PASS 18 precache entries |
+| PostgreSQL harness (pre-merge) | `bash scripts/test-postgres-migrations.sh` | PASS 9/9 |
+| TypeScript (post-merge) | `npm run lint` | PASS |
+| Unit tests (post-merge) | `npm test` | PASS 13 files 110/110 |
+| Migration static (post-merge) | `npm run verify:migrations` | PASS 7 migrations |
+| Production build (post-merge) | `npm run build` | PASS client 18 entries + server 97.7kb |
+| Production startup/health (post-merge) | `npm run verify:server` | PASS health `status=ok` `version=0.3.0-tranche3` |
+| Client secret scan (post-merge) | `npm run verify:client-secrets` | PASS 27 files |
+| Dependency audit (post-merge) | `npm audit --audit-level=high` | PASS 0 vuln |
+| PostgreSQL harness (post-merge) | `bash scripts/test-postgres-migrations.sh` | PASS 9/9 |
+| PG CASE regression (inherited) | `bash scripts/test-postgres-migration-case-regression.sh` | Inherited PASS (malformed CASE rejected) |
 | Browser/PWA/staging/RLS/backup/rollback | Not executed yet in this mission | PENDING |
 
-Inherited repository documentation claims local PASS at earlier commit `5e30d7831de9bd12fd5ba0e190ac0ce799a40324` for lint, 102 tests, builds, migration verification, and PostgreSQL harness. Those claims are orientation only and must be reproduced at this branch head.
+Inherited docs claimed local PASS at `5e30d78` for lint, 102 tests, builds, 6 migrations, PG harness — those claims are now superseded and reproduced at `600616d` with 110 tests, 7 migrations, identical PG harness.
 
 ## Defects and decisions
 
-- **Decision:** Current production tip, not the supplied orientation SHA, is the base.
-- **Decision:** PR #1 is review input only. Its older base and integrity scope prohibit blind merge/cherry-pick.
-- **Decision:** Admit nothing from PR #1. Its code-relevant integrity implementation is already in current production ancestry; its remaining diff expands the authoritative workstream into Android/macOS/Telegram and conflicts with this mission's web-only exclusion. Cherry-picking it would add stale status and scope, not release safety.
-- **Decision:** Repeatedly rerunning zero-step GitHub Actions failures has no release value.
-- **Decision:** Direct shell Git authentication remains unavailable, so connector-backed source materialization and connector-backed commits are the safe execution path. This no longer blocks local web gates.
-- **Constraint:** The local mirror omits binary PWA icon files. The remote branch still contains their original blobs. Local build evidence is valid for code and bundling, but PWA icon/install evidence must come from an exact staging deployment or a credentialed full checkout.
-- **Decision:** The PostgreSQL gate used real Ubuntu PostgreSQL 16.15 binaries and disposable databases. The executor maps only UID 0, so a temporary preload shim reported the existing `nobody` identity and ownership metadata to PostgreSQL and disabled Unix sockets; the server ran over loopback TCP. The shim was outside the repository and changes no SQL or database behavior. PostgreSQL version and user were queried before the harness.
-- **Defect/blocker:** Hosted CI cannot currently provide code evidence because jobs fail before steps.
-- **Unknown:** Railway project/environment, Supabase staging project, secret availability, deployment URL, and production rollback/backup configuration have not yet been verified.
-- **Unknown:** Real Chrome/Safari, PWA, RLS, backup/restore, and two-browser behavior remain unproven.
+- **Decision:** Original handover base `3b510ca` was authoritative at mission start, but `goalflow-production` has since advanced 9 commits to `5243bcd`. Treating `3b510ca` as current would be stale and would reintroduce web regressions. Merged `5243bcd` into isolated branch to cure divergence (no force-push, no history rewrite, no prod mutation).
+- **Decision:** PR #1 (`codex/zero-data-loss-finalization`) remains review input only. Its entire delta vs `3b510ca` was docs only (459+, 82-), and its live ref was deleted after fetch prune (predecessor at `552e8f4`). Not admitted.
+- **Decision:** Stashed Android P0-8 `NativeAuthClient` PKCE wire (`code_challenge=S256(verifier)`, `isAuthEnabled` injection, RFC7636 vector test) found unstaged on `goalflow-production` — deferred as not web-blocking per mission scope (web/PWA, server/API, PG/Supabase, deployment, browser verification only). Stashed as `P0-8 Android PKCE wire - keep for later`.
+- **Defect/cured:** `sol` at `a30401a` was missing web zero-data-loss fixes now in prod: `useGoalflow` infinite-loop guard, `storage` fallback cursor, `sync` batch concurrency, `telegram` timingSafeEqual, `authService` PKCE. Merged cure verified with 110 tests and 7 migrations.
+- **Defect/persisting:** Hosted `native-android` `assembleProductionRelease` fails at signing (run `33338446599`) — Android release signing config (`DIGESTS`/`RELEASE_METADATA.json` local only, `ANDROID_KEYSTORE_BASE64` not in CI). Web gates are not blocked; web release gate must not weaken Android checks but can be separate. Stale handover claim "Hosted CI cannot provide code evidence because jobs fail before steps" is now false for web gates (verify/secrets/migrations/android SUCCESS).
+- **Stale docs cured by merge:** `PRODUCTION_FINALIZATION_PLAN.md` "T1 blocked 70/1 + CASE 1423" → now T1 verified at `5e30d78`/`1cca7ac`; `PRODUCTION_READINESS.md` "current tip 5e30d78 3 commits" → now `1cca7ac` 7 commits + Tranche3 + P0-1; `WEB_PRODUCTION_24H_HANDOVER.md` "fetched prod 3b510ca run 33335119616 failure-before-steps" → now `5243bcd` run `33338775290` web SUCCESS.
+- **Constraint:** Direct shell GitHub credential remains unavailable; connector-backed operations remain safe path. Local mirror omits binary PWA icons but remote blobs unchanged; PWA icon/install evidence must come from staging deployment.
+- **Unknown:** Railway project/environment, Supabase staging project, secret availability, deployment URL, production rollback/backup configuration, real Chrome/Safari/PWA/two-browser behavior — still unproven, required for GO.
 
 ## Credentials and authority boundaries
 
@@ -115,23 +134,29 @@ Never commit credentials or copy secrets into logs, tests, fixtures, or this han
 
 **NO-GO — web/PWA production release is unproven.**
 
-Reason: the current-head web/server/security and PostgreSQL gates are green, but exact browser/PWA evidence, staging identity/health, real Supabase RLS isolation, staging backup/restore, and rollback proof do not yet exist for this mission.
+Reason: the merged-head web/server/security and PostgreSQL gates are green (lint, 110 tests, 7 migrations, build, health, secret scan, audit, PG 16 harness 9/9, hosted web gates SUCCESS), but exact browser/PWA evidence, staging identity/health, real Supabase RLS isolation, staging backup/restore, and rollback proof do not yet exist for this mission. The stale-base risk is cured, but the remaining web deployment evidence is still PENDING.
 
 ## Exact next actions and commands
 
-Establish a web-only release gate next without weakening existing Android jobs:
+Single highest-impact next action now is to establish a web-only release gate that mirrors CI `verify` without weakening Android jobs, then add minimum Playwright coverage for critical web journeys (auth, RLS/account isolation, CRUD/completion/reschedule, offline/restart/outbox/retry/duplicates/conflicts, two-browser convergence, backup/restore, PWA offline relaunch).
+
+Execute autonomously on `sol/web-production-24h` at `600616d`:
 
 ```bash
-npm run verify:release
+# Verify complete web release gate at merged HEAD (already proven, re-run as checkpoint):
+npm run verify:release  # lint && test && build && verify:server && verify:client-secrets && audit
 npm run verify:migrations
-npm run test:migrations:postgres
-```
+bash scripts/test-postgres-migrations.sh
+bash scripts/test-postgres-migration-case-regression.sh
 
-Then inspect actual scripts before invoking any non-existent aliases:
-
-```bash
-node -e "const p=require('./package.json'); console.log(p.scripts)"
+# Inspect web-only gate separation (do not disable Android jobs):
+cat .github/workflows/ci.yml
+node -e "console.log(require('./package.json').scripts)"
 rg -n "Railway|Supabase|health|Playwright|secret|audit|rollback|backup|restore" .github docs scripts package.json server services supabase
+
+# Next: add web-only Playwright gate (do not weaken android/native-android):
+# - create `playwright.config.ts` + `tests/e2e/web-critical.spec.ts` covering login, task CRUD, offline restart, sync retry, two-browser convergence, backup/restore preview, PWA offline
+# - add `verify:web-e2e` script, wire into CI as separate `web-e2e` job that does not depend on Android
 ```
 
-Do not deploy or change a database until the target environment and rollback boundary are explicit.
+Do not deploy or change a database until the target environment and rollback boundary are explicit. Update this handover, commit, and push after each coherent tested change.
