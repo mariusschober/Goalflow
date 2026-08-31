@@ -33,7 +33,8 @@ psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/
 for migration in \
   "${repository_root}/supabase/migrations/202608260001_zero_silent_data_loss.sql" \
   "${repository_root}/supabase/migrations/202608290001_native_task_events.sql" \
-  "${repository_root}/supabase/migrations/202608300001_complete_native_sync_transport.sql"; do
+  "${repository_root}/supabase/migrations/202608300001_complete_native_sync_transport.sql" \
+  "${repository_root}/supabase/migrations/202608310001_telegram_auth_state_pkce.sql"; do
   psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null

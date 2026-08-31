@@ -1,3 +1,7 @@
+> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+
+
+
 # Goalflow production readiness — Pre-Tranche3 checkpoint (P1 + Tranche2 C-E simulated)
 
 **Status: PRE-TRANCHE3 GREEN (local-only) — P0-8 + P1-1..P1-6 + Tranche2 C-E simulated, Tranche3 hosted matrix pending**

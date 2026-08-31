@@ -17,9 +17,14 @@
     "verify:client-secrets": "node scripts/scan-client-secrets.mjs",
     "verify:test-build": "npm run build:client:test && node scripts/verify-test-build.mjs",
     "verify:migrations": "node scripts/verify-data-integrity-migrations.mjs",
+    "verify:migration-hashes": "node scripts/verify-migration-hashes.mjs",
+    "verify:room-hashes": "node scripts/verify-room-schema-hashes.mjs",
+    "verify:identifiers": "node scripts/check-durable-identifiers.mjs",
     "test:migrations:postgres": "bash scripts/test-postgres-migrations.sh",
     "restore:backup": "tsx scripts/restore-production-backup.ts",
     "verify:release": "npm run lint && npm test && npm run build && npm run verify:server && npm run verify:client-secrets && npm audit --audit-level=high",
+    "test:e2e": "playwright test",
+    "verify:web-e2e": "playwright test --reporter=list",
     "android:sync": "npm run build:client && cap sync android",
     "build:client:test": "vite build --mode test",
     "android:sync:test": "npm run build:client:test && cap sync android",
@@ -53,6 +58,7 @@
     "zod": "^3.25.76"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/express": "^5.0.6",
     "@types/node": "^22.14.0",
     "@vitejs/plugin-react": "^5.0.0",

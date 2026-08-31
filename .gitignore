@@ -29,3 +29,6 @@ coverage
 *.sw?
 *.keystore
 *.jks
+test-results
+test-results/
+android-native/benchmark/build/

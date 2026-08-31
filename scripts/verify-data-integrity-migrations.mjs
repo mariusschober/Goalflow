@@ -9,9 +9,11 @@ const migrations = files.map(file => ({ file, sql: fs.readFileSync(path.join(dir
 const latest = migrations.find(item => item.file === '202608260001_zero_silent_data_loss.sql');
 const nativeEvents = migrations.find(item => item.file === '202608290001_native_task_events.sql');
 const transportCompletion = migrations.find(item => item.file === '202608300001_complete_native_sync_transport.sql');
+const telegramAuth = migrations.find(item => item.file === '202608310001_telegram_auth_state_pkce.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
+assert(telegramAuth, 'Telegram auth state PKCE migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;

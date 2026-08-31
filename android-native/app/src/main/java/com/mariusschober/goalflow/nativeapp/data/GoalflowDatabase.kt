@@ -587,5 +587,12 @@ abstract class GoalflowDatabase : RoomDatabase() {
             GoalflowDatabase::class.java,
             "goalflow-native.db"
         ).addMigrations(*migrations()).addCallback(integrityCallback).build()
+
+        // Test helper: create database with custom name for migration matrix tests
+        fun createForTest(context: Context, name: String): GoalflowDatabase = Room.databaseBuilder(
+            context,
+            GoalflowDatabase::class.java,
+            name
+        ).addMigrations(*migrations()).addCallback(integrityCallback).build()
     }
 }

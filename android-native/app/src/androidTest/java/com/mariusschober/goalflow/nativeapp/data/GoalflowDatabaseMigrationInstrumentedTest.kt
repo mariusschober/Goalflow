@@ -25,7 +25,7 @@ class GoalflowDatabaseMigrationInstrumentedTest {
 
     @Test
     fun migrateEverySupportedVersionWithoutDestructiveFallback() = runBlocking {
-        for (startVersion in 1..6) {
+        for (startVersion in 1..7) {
             val databaseName = "goalflow-migration-$startVersion.db"
             context.deleteDatabase(databaseName)
             migrationHelper.createDatabase(databaseName, startVersion).apply {
@@ -54,6 +54,10 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                 if (startVersion >= 5) {
                     execSQL("INSERT INTO raw_collections (entityType,payload,updatedAt,deletedAt) VALUES ('stats','{}','2026-08-27T00:00:00Z',NULL)")
                 }
+                if (startVersion >= 6) {
+                    execSQL("INSERT INTO task_events (id,taskId,eventType,localDate,metadata,createdAt) VALUES ('event-$startVersion','task-$startVersion','completed','2026-08-27','{}',1000)")
+                    execSQL("INSERT INTO local_account (bindingKey,userId) VALUES ('singleton','00000000-0000-4000-8000-0000000000$startVersion')")
+                }
                 version = startVersion
                 close()
             }
@@ -63,15 +67,54 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                 .build()
             try {
                 migrated.openHelper.writableDatabase
+                // Valuable rows
                 assertEquals("Keep this task", migrated.taskDao().get("task-$startVersion")?.title)
                 assertNotNull(migrated.dailyPlanDao().get("2026-08-27"))
+                // Outbox
                 if (startVersion >= 2) {
-                    assertEquals(1, migrated.syncOutboxDao().getAll().size)
-                    assertEquals(1, migrated.syncConflictDao().getAll().size)
+                    val outbox = migrated.syncOutboxDao().getAll()
+                    assertEquals(1, outbox.size)
+                    assertEquals("00000000-0000-4000-8000-0000000000$startVersion", outbox.single().mutationId)
+                } else {
+                    assertEquals(0, migrated.syncOutboxDao().getAll().size)
+                }
+                // Conflicts
+                if (startVersion >= 2) {
+                    val conflicts = migrated.syncConflictDao().getAll()
+                    assertEquals(1, conflicts.size)
+                    assertEquals("task-$startVersion", conflicts.single().entityId)
+                    assertEquals("unresolved", conflicts.single().status)
+                } else {
+                    assertEquals(0, migrated.syncConflictDao().getAll().size)
+                }
+                // Events
+                if (startVersion >= 6) {
+                    assertEquals(1, migrated.taskEventDao().getAll().size)
+                    assertEquals("event-$startVersion", migrated.taskEventDao().getAll().single().id)
+                } else {
+                    assertEquals(0, migrated.taskEventDao().getAll().size)
+                    // Verify table is writable post-migration
+                    migrated.taskEventDao().insert(
+                        TaskEventEntity("event-$startVersion-new", "task-$startVersion", "completed", "2026-08-27", "{}", 2000)
+                    )
+                    assertEquals(1, migrated.taskEventDao().getAll().size)
+                }
+                // Account binding
+                if (startVersion >= 6) {
+                    val account = migrated.localAccountDao().get()
+                    assertNotNull(account)
+                    assertEquals("00000000-0000-4000-8000-0000000000$startVersion", account!!.userId)
+                } else {
+                    assertEquals(null, migrated.localAccountDao().get())
+                    migrated.localAccountDao().insert(LocalAccountEntity(userId = "00000000-0000-4000-8000-000000000001"))
+                    assertEquals("00000000-0000-4000-8000-000000000001", migrated.localAccountDao().get()?.userId)
+                    migrated.localAccountDao().clear()
                 }
                 if (startVersion >= 5) assertEquals("{}", migrated.rawCollectionDao().get("stats")?.payload)
-                assertEquals(0, migrated.taskEventDao().getAll().size)
-                assertEquals(null, migrated.localAccountDao().get())
+                // Verify 7->8 indices exist
+                migrated.openHelper.readableDatabase.query("SELECT name FROM sqlite_master WHERE type='index' AND name='index_tasks_scheduledFor_schedulePrecision_status_deletedAt'").use { c ->
+                    assertEquals(true, c.count > 0)
+                }
             } finally {
                 migrated.close()
                 context.deleteDatabase(databaseName)

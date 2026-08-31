@@ -1,0 +1,72 @@
+{
+  "schemaVersion": 4,
+  "exportedAt": "2026-08-31T11:30:00.000Z",
+  "ownerKey": "22222222-2222-4222-8222-222222222222",
+  "checksum": "placeholder will be computed by native but we set dummy for golden check",
+  "collections": {
+    "tasks": [
+      {
+        "id": "task-native-1",
+        "title": "Native golden task",
+        "extraJson": "{}"
+      }
+    ],
+    "goals": [],
+    "habits": [],
+    "plans": [
+      {
+        "localDate": "2026-08-27",
+        "confirmedAt": 1,
+        "taskIds": "task-native-1"
+      }
+    ],
+    "events": [
+      {
+        "id": "event-1",
+        "taskId": "task-native-1",
+        "eventType": "completed",
+        "localDate": "2026-08-27",
+        "metadata": "{}",
+        "createdAt": 1000
+      }
+    ],
+    "outbox": [
+      {
+        "mutationId": "00000000-0000-4000-8000-000000000001",
+        "deviceId": "device-a",
+        "entityType": "tasks",
+        "entityId": "task-native-1",
+        "payload": "{}"
+      }
+    ],
+    "conflicts": [
+      {
+        "id": "conflict-1",
+        "entityType": "tasks",
+        "entityId": "task-native-1",
+        "localPayload": "{}",
+        "serverPayload": "{}",
+        "serverVersion": 2,
+        "createdAt": "2026-08-27T00:00:00Z",
+        "status": "unresolved",
+        "localHistory": "[]"
+      }
+    ],
+    "syncMeta": [
+      {
+        "entityType": "tasks:task-native-1",
+        "cursor": 0,
+        "localVersion": 1
+      }
+    ],
+    "rawCollections": {
+      "stats": "{}"
+    },
+    "ownerUserId": "22222222-2222-4222-8222-222222222222",
+    "syncBinding": {
+      "backendOrigin": "https://example.supabase.co",
+      "protocolVersion": 3,
+      "accountSubject": "22222222-2222-4222-8222-222222222222"
+    }
+  }
+}

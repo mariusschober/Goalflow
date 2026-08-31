@@ -1,3 +1,7 @@
+> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+
+
+
 # Goalflow — Starter Prompt for Next Chat (Post-P0-7, Pre-P1)
 
 Copy the block below verbatim into a new chat. Ensure `origin/goalflow-production` is fetched and `T807D_EEA` `ZXKRS4VKGQ8PWGEQ` is `adb devices -l` `device`.

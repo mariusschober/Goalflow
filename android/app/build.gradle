@@ -5,28 +5,51 @@ android {
     compileSdk rootProject.ext.compileSdkVersion
     signingConfigs {
         release {
+            def skipSigning = findProperty("goalflowSkipSigning") == "true"
             def b64 = System.getenv("ANDROID_KEYSTORE_BASE64")
-            if (b64) {
+            def storePass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: findProperty("goalflowStorePassword") ?: ""
+            def alias = System.getenv("ANDROID_KEY_ALIAS") ?: findProperty("goalflowKeyAlias") ?: ""
+            def keyPass = System.getenv("ANDROID_KEY_PASSWORD") ?: findProperty("goalflowKeyPassword") ?: ""
+            def hasB64 = b64?.trim()
+            def hasStorePass = storePass?.toString()?.trim()
+            def hasAlias = alias?.toString()?.trim()
+            def hasKeyPass = keyPass?.toString()?.trim()
+            if (!skipSigning && (hasB64 || hasStorePass || hasAlias || hasKeyPass)) {
+                if (!hasB64 || !hasStorePass || !hasAlias || !hasKeyPass) {
+                    throw new GradleException("Partial signing configuration — all of ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD must be present together. Failing closed. Use -PgoalflowSkipSigning=true for unsigned local builds.")
+                }
+            }
+            if (hasB64 && hasStorePass && hasAlias && hasKeyPass) {
                 def decoded = new File("/tmp/goalflow.keystore")
                 if (!decoded.exists()) {
                     decoded.bytes = java.util.Base64.getDecoder().decode(b64)
                 }
                 storeFile decoded
-                storePassword System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: findProperty("goalflowStorePassword") ?: ""
-                keyAlias System.getenv("ANDROID_KEY_ALIAS") ?: findProperty("goalflowKeyAlias") ?: "goalflow"
-                keyPassword System.getenv("ANDROID_KEY_PASSWORD") ?: findProperty("goalflowKeyPassword") ?: ""
+                storePassword hasStorePass
+                keyAlias hasAlias
+                keyPassword hasKeyPass
                 enableV1Signing true
                 enableV2Signing true
             } else {
                 def keystorePath = findProperty("goalflowKeystore") ?: ""
                 def keystoreFile = keystorePath ? file(keystorePath) : null
                 if (keystoreFile?.exists()) {
-                    storeFile keystoreFile
-                    storePassword findProperty("goalflowStorePassword") ?: ""
-                    keyAlias findProperty("goalflowKeyAlias") ?: "goalflow"
-                    keyPassword findProperty("goalflowKeyPassword") ?: ""
-                    enableV1Signing true
-                    enableV2Signing true
+                    def fileStorePass = findProperty("goalflowStorePassword") ?: ""
+                    def fileAlias = findProperty("goalflowKeyAlias") ?: ""
+                    def fileKeyPass = findProperty("goalflowKeyPassword") ?: ""
+                    if (!skipSigning && (fileStorePass || fileAlias || fileKeyPass)) {
+                        if (!fileStorePass || !fileAlias || !fileKeyPass) {
+                            throw new GradleException("Partial signing configuration via gradle properties — all of goalflowKeystore, goalflowStorePassword, goalflowKeyAlias, goalflowKeyPassword must be present. Failing closed.")
+                        }
+                    }
+                    if (fileStorePass && fileAlias && fileKeyPass) {
+                        storeFile keystoreFile
+                        storePassword fileStorePass
+                        keyAlias fileAlias
+                        keyPassword fileKeyPass
+                        enableV1Signing true
+                        enableV2Signing true
+                    }
                 }
             }
         }

@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 4,
+  "exportedAt": "2026-08-31T11:30:37.361Z",
+  "ownerKey": "22222222-2222-4222-8222-222222222222",
+  "checksum": "477a65f6d41d1d88737cfd82cc3f6b5c239d243a5f21899d148dd9b44bdc2590",
+  "collections": {
+    "tasks": [
+      {
+        "id": "task-wrong-owner",
+        "title": "Wrong owner task",
+        "notes": "",
+        "tags": [],
+        "schedulePrecision": "day",
+        "scheduledFor": "2026-08-27",
+        "scheduledTime": null,
+        "plannedOrder": 0,
+        "isFrog": false,
+        "beforeFrog": false,
+        "frogFailures": 0,
+        "source": "manual",
+        "goalId": null,
+        "parentTaskId": null,
+        "habitId": null,
+        "createdAt": 1,
+        "updatedAt": 1,
+        "completedAt": null,
+        "deletedAt": null,
+        "extraJson": "{}"
+      }
+    ],
+    "sync": {
+      "schemaVersion": 2,
+      "cursor": 0,
+      "versions": {
+        "tasks:task-wrong-owner": {
+          "local": 1,
+          "server": null
+        }
+      },
+      "outbox": [
+        {
+          "mutationId": "78ee2c04-5ebc-4dbc-a41d-d048efc7c0e2",
+          "deviceId": "2828b92d-6acc-478b-aa64-a68be2b581aa",
+          "entityType": "tasks",
+          "entityId": "task-wrong-owner",
+          "baseServerVersion": null,
+          "version": 1,
+          "payload": {
+            "id": "task-wrong-owner",
+            "title": "Wrong owner task",
+            "notes": "",
+            "tags": [],
+            "schedulePrecision": "day",
+            "scheduledFor": "2026-08-27",
+            "scheduledTime": null,
+            "plannedOrder": 0,
+            "isFrog": false,
+            "beforeFrog": false,
+            "frogFailures": 0,
+            "source": "manual",
+            "goalId": null,
+            "parentTaskId": null,
+            "habitId": null,
+            "createdAt": 1,
+            "updatedAt": 1,
+            "completedAt": null,
+            "deletedAt": null,
+            "extraJson": "{}"
+          },
+          "updatedAt": "2026-08-31T11:30:37.360Z",
+          "deletedAt": null
+        }
+      ],
+      "conflicts": []
+    }
+  }
+}
