@@ -18,6 +18,7 @@ export const HabitForm: React.FC<HabitFormProps> = ({ onSubmit, initialData, goa
   const [frequency, setFrequency] = useState<Habit['frequency']>(initialData?.frequency || 'daily');
   const [specificDays, setSpecificDays] = useState<number[]>(initialData?.specificDays || []);
   const [isHighPriority, setIsHighPriority] = useState(initialData?.isHighPriority || false);
+  const [beforeFrog, setBeforeFrog] = useState(initialData?.beforeFrog || false);
   const [goalId, setGoalId] = useState(initialData?.goalId || '');
   
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -52,6 +53,7 @@ export const HabitForm: React.FC<HabitFormProps> = ({ onSubmit, initialData, goa
         frequency,
         specificDays: frequency === 'specific_days' ? specificDays : undefined,
         isHighPriority,
+        beforeFrog,
         goalId: goalId || undefined
     });
     onClose();
@@ -92,7 +94,7 @@ export const HabitForm: React.FC<HabitFormProps> = ({ onSubmit, initialData, goa
                     onChange={(e) => setTitle(e.target.value)}
                     onKeyDown={handleKeyDown}
                     rows={1}
-                    placeholder="New habit loop..."
+                    placeholder="Name this habit..."
                     className="w-full text-2xl md:text-3xl font-bold text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600 border-none focus:ring-0 p-0 bg-transparent leading-tight tracking-tight resize-none overflow-hidden"
                     autoFocus
                 />
@@ -160,7 +162,22 @@ export const HabitForm: React.FC<HabitFormProps> = ({ onSubmit, initialData, goa
                     <FlameIcon className="w-5 h-5 mr-2" />
                     <span className="text-sm font-bold">High Priority</span>
                 </button>
+
+                <button
+                    type="button"
+                    aria-pressed={beforeFrog}
+                    onClick={() => setBeforeFrog(!beforeFrog)}
+                    className={`flex items-center px-4 py-3 rounded-xl border transition-all ${beforeFrog ? 'bg-indigo-50 dark:bg-indigo-900/30 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300' : 'bg-gray-50 dark:bg-slate-700/50 border-transparent hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400'}`}
+                >
+                    <span className="text-sm font-bold">Before frogs</span>
+                </button>
               </div>
+
+              {beforeFrog && (
+                  <p className="text-sm text-gray-500 dark:text-gray-400">
+                      This habit will be placed before frog tasks. Reserve this for anchor habits such as a morning run.
+                  </p>
+              )}
 
               {frequency === 'specific_days' && (
                   <div className="animate-fadeIn p-5 bg-gray-50 dark:bg-slate-700/30 rounded-2xl border border-gray-100 dark:border-slate-700">
@@ -191,7 +208,7 @@ export const HabitForm: React.FC<HabitFormProps> = ({ onSubmit, initialData, goa
                 className={`w-full py-4 bg-gray-900 dark:bg-indigo-600 text-white font-bold rounded-2xl hover:bg-gray-800 dark:hover:bg-indigo-700 transition shadow-lg active:scale-[0.98] flex items-center justify-center gap-3 text-lg ${!title.trim() ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
                 <RepeatIcon className="w-5 h-5" />
-                {initialData ? 'Update Habit' : 'Start Habit Loop'}
+                {initialData ? 'Update Habit' : 'Create Habit'}
             </button>
         </div>
     </div>

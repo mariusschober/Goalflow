@@ -1,0 +1,322 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop, goalflow-production, "reconcile/**"]
+  pull_request:
+    branches: [main, develop, goalflow-production, "reconcile/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npm run verify:migrations
+      - run: node scripts/verify-migration-hashes.mjs
+      - run: node scripts/verify-room-schema-hashes.mjs
+      - run: node scripts/check-durable-identifiers.mjs
+      - run: npm audit --audit-level=high
+      - name: Verify production startup
+        run: |
+          npm start &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID' EXIT
+          for attempt in {1..20}; do
+            curl --fail --silent http://127.0.0.1:3000/api/v1/health && exit 0
+            sleep 1
+          done
+          exit 1
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Scan event commit range for secrets
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_CONFIG: .gitleaks.toml
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_ENABLE_COMMENTS: false
+      - name: Scan complete history and candidate tree
+        run: |
+          echo "Scanning complete Git history and candidate HEAD $(git rev-parse HEAD)"
+          gitleaks git --config .gitleaks.toml --redact --verbose --log-opts="--all" .
+          gitleaks dir --config .gitleaks.toml --redact --verbose .
+
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PGHOST: 127.0.0.1
+      PGPORT: 5432
+      PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run verify:migrations
+      - run: node scripts/verify-migration-hashes.mjs
+      - run: npm run test:migrations:postgres
+
+  android:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm run android:sync
+      - run: npm run android:test
+      - run: npm run android:lint
+      - run: npm run android:assembleDebug
+      - run: npm run android:sync:test
+      - run: npm run android:assembleTestDebug
+      # Ordinary PR CI must compile production release WITHOUT requiring signing secrets,
+      # but must not publish an artifact that can be mistaken for an authorized release.
+      - name: Compile production release (unsigned, no secrets required)
+        run: |
+          cd android
+          ./gradlew assembleProductionRelease -PgoalflowSkipSigning=true
+          apk="$(find app/build/outputs/apk/production/release -name '*-unsigned.apk' -print -quit)"
+          [ -n "$apk" ] && [ -f "$apk" ] || { echo "Unsigned production release APK was not produced." >&2; exit 1; }
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          [ -n "$apksigner" ] && [ -x "$apksigner" ] || { echo "apksigner was not found." >&2; exit 1; }
+          if "$apksigner" verify "$apk" >/dev/null 2>&1; then
+            echo "Ordinary CI produced a signed release artifact; refusing to continue." >&2
+            exit 1
+          fi
+          echo "Unsigned production release compiled and verified: $apk"
+      - name: Upload production debug APK (TEST-ONLY, not a release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: goalflow-production-debug-apk-TEST-ONLY
+          path: android/app/build/outputs/apk/production/debug/app-production-debug.apk
+          if-no-files-found: error
+
+  native-android:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Cache native Gradle
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-native-
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-signing-strict.sh
+      - name: Run APK diagnostic regression test
+        run: bash android-native/scripts/test-diagnose-apk.sh
+      - name: Run APK path handoff regression test
+        run: sh android-native/scripts/test-apk-path-handoff.sh
+      - name: Run Room schema asset regression test
+        run: sh android-native/scripts/test-room-schema-assets.sh
+      - name: Verify Room schema hashes
+        run: node scripts/verify-room-schema-hashes.mjs
+      - name: Verify migration hashes
+        run: node scripts/verify-migration-hashes.mjs
+      - name: Verify durable identifiers
+        run: node scripts/check-durable-identifiers.mjs
+      - run: ./android-native/gradlew -p android-native test --stacktrace --info
+      - name: Compile native instrumentation tests
+        run: ./android-native/gradlew -p android-native assembleProductionDebugAndroidTest
+      - name: Compile native startup benchmark
+        run: ./android-native/gradlew -p android-native :benchmark:assemble
+      - run: ./android-native/gradlew -p android-native lint
+      - run: ./android-native/gradlew -p android-native assembleProductionDebug
+      # Compile production release unsigned; ordinary CI must not require signing secrets
+      - name: Compile native production release (unsigned, no secrets)
+        run: |
+          ./android-native/gradlew -p android-native assembleProductionRelease -PgoalflowSkipSigning=true
+          apk="$(find android-native/app/build/outputs/apk/production/release -name '*-unsigned.apk' -print -quit)"
+          [ -n "$apk" ] && [ -f "$apk" ] || { echo "Unsigned native production release APK was not produced." >&2; exit 1; }
+          apksigner="$(find "$ANDROID_HOME/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          [ -n "$apksigner" ] && [ -x "$apksigner" ] || { echo "apksigner was not found." >&2; exit 1; }
+          if "$apksigner" verify "$apk" >/dev/null 2>&1; then
+            echo "Ordinary CI produced a signed native release artifact; refusing to continue." >&2
+            exit 1
+          fi
+          echo "Unsigned native production release compiled and verified: $apk"
+      - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Upload native Room schemas
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: goalflow-native-room-schemas
+          path: android-native/app/schemas
+          if-no-files-found: error
+      - name: Diagnose native production debug APK bytes (TEST-ONLY)
+        env:
+          GOALFLOW_APK_LABEL: TEST-ONLY
+        run: |
+          apk="$(find "$GITHUB_WORKSPACE/android-native/app/build/outputs/apk/production/debug" -name '*.apk' -print -quit)"
+          [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK was not found before diagnostic." >&2; exit 1; }
+          android-native/scripts/diagnose-apk.sh "$apk"
+      - name: Reclaim runner disk for emulator
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
+          sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/cmake
+          sudo rm -rf /usr/local/lib/android/sdk/system-images/*
+          df -h /
+      - name: Run native emulator journey
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2
+        with:
+          api-level: 30
+          target: aosp_atd
+          arch: x86
+          profile: pixel_2
+          disk-size: 2048M
+          cores: 4
+          ram-size: 2048M
+          heap-size: 512M
+          disable-animations: true
+          working-directory: ${{ github.workspace }}
+          script: |
+            sleep 45
+            apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"; [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }; GOALFLOW_APK_LABEL=TEST-ONLY DIAGNOSE_APK_INSTALL=1 android-native/scripts/diagnose-apk.sh "$apk" && ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
+      - name: Upload native production debug APK (TEST-ONLY, not a release)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: goalflow-native-production-debug-apk-TEST-ONLY
+          path: android-native/app/build/outputs/apk/production/debug/*.apk
+          if-no-files-found: error
+      - name: Upload native sandbox debug APK
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: goalflow-native-sandbox-debug-apk-TEST-ONLY
+          path: android-native/app/build/outputs/apk/sandbox/debug/*.apk
+          if-no-files-found: error
+
+  web-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [verify, migrations]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run verify:migrations
+      - run: node scripts/verify-migration-hashes.mjs
+      - run: npm run build:client
+      - run: npm run build:server
+      - name: Verify production startup
+        run: |
+          npm start &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID' EXIT
+          for attempt in {1..20}; do
+            curl --fail --silent http://127.0.0.1:3000/api/v1/health && exit 0
+            sleep 1
+          done
+          exit 1
+      - run: npm run verify:client-secrets
+      - run: npm run verify:client-artifacts
+      - run: npm audit --audit-level=high
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium webkit
+      - name: Run Playwright web-critical journeys (chromium + webkit)
+        run: npx playwright test --reporter=list
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          if-no-files-found: ignore
+      - name: Upload Playwright traces
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-traces
+          path: test-results
+          if-no-files-found: ignore
+      - name: Upload Playwright screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: playwright-screenshots
+          path: test-results
+          if-no-files-found: ignore
+
+  canonical-gate:
+    needs: [verify, secrets, migrations, android, native-android, web-release]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Check all required jobs succeeded
+        run: |
+          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }}"
+          if [ "${{ needs.verify.result }}" != "success" ]; then echo "verify failed: ${{ needs.verify.result }}" >&2; exit 1; fi
+          if [ "${{ needs.secrets.result }}" != "success" ]; then echo "secrets failed: ${{ needs.secrets.result }}" >&2; exit 1; fi
+          if [ "${{ needs.migrations.result }}" != "success" ]; then echo "migrations failed: ${{ needs.migrations.result }}" >&2; exit 1; fi
+          if [ "${{ needs.android.result }}" != "success" ]; then echo "android failed: ${{ needs.android.result }}" >&2; exit 1; fi
+          if [ "${{ needs.native-android.result }}" != "success" ]; then echo "native-android failed: ${{ needs.native-android.result }}" >&2; exit 1; fi
+          if [ "${{ needs.web-release.result }}" != "success" ]; then echo "web-release failed: ${{ needs.web-release.result }}" >&2; exit 1; fi
+          echo "canonical-gate PASS — all required jobs succeeded"

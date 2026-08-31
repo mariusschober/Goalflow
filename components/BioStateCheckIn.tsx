@@ -17,6 +17,8 @@ interface BioStateCheckInProps {
 export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onClose }) => {
     const [stepIndex, setStepIndex] = useState(0);
     const [geoError, setGeoError] = useState(false);
+    const [locationRequested, setLocationRequested] = useState(false);
+    const [locationLoading, setLocationLoading] = useState(false);
     
     // Data State
     const [wakeTime, setWakeTime] = useState("07:00");
@@ -36,12 +38,11 @@ export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onCl
     const [solarTimes, setSolarTimes] = useState<{ sunrise?: string, sunset?: string, solarNoon?: string }>({});
     const [scanText, setScanText] = useState("Aligning Solar Rhythm...");
 
-    // Initial Geo Check
-    useEffect(() => {
-        let isCurrent = true;
+    const requestLocation = useCallback(() => {
+        setLocationRequested(true);
+        setLocationLoading(true);
         resolveUserLocation(5000)
             .then((coords) => {
-                if (!isCurrent) return;
                 setLocationMeta({
                     source: coords.source,
                     cityName: coords.cityName,
@@ -59,15 +60,10 @@ export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onCl
                 }
             })
             .catch((e) => {
-                console.error("Failed to resolve location automatically:", e);
-                if (isCurrent) {
-                    setGeoError(true);
-                }
-            });
-
-        return () => {
-            isCurrent = false;
-        };
+                console.error("Failed to resolve approved location:", e);
+                setGeoError(true);
+            })
+            .finally(() => setLocationLoading(false));
     }, []);
 
     const next = () => setStepIndex(prev => prev + 1);
@@ -226,6 +222,13 @@ export const BioStateCheckIn: React.FC<BioStateCheckInProps> = ({ onSubmit, onCl
                         <ClockIcon className="w-12 h-12 text-amber-400 mx-auto mb-4" />
                         <h3 className="text-2xl font-bold uppercase mb-2">Wake Time</h3>
                         <p className="text-slate-400 mb-6 text-sm">Your biological anchor point.</p>
+                        {!locationRequested && (
+                            <div className="mb-5 rounded-xl border border-slate-700 bg-slate-800/70 p-4 text-left">
+                                <p className="text-sm text-slate-300">Optional: use your precise location to calculate sunrise and solar noon. It stays on this device and no IP-location service is used.</p>
+                                <button type="button" onClick={requestLocation} className="mt-3 rounded-lg border border-slate-600 px-3 py-2 text-sm font-bold text-white">Use my location</button>
+                            </div>
+                        )}
+                        {locationLoading && <p className="mb-4 text-sm text-slate-400">Requesting location...</p>}
                         <input 
                             type="time" 
                             value={wakeTime}

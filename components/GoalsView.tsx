@@ -424,11 +424,15 @@ const GoalCard: React.FC<{ goal: Goal; onEdit: () => void; onDelete: () => void 
     if (goal.deadline) {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
-        const end = new Date(goal.deadline);
+        const [year, month, day] = goal.deadline.split('-').map(Number);
+        const end = new Date(year, month - 1, day);
         end.setHours(0, 0, 0, 0);
         const diff = end.getTime() - today.getTime();
         daysLeft = Math.ceil(diff / (1000 * 60 * 60 * 24));
     }
+    const created = new Date(goal.createdAt);
+    const totalDays = goal.deadline ? Math.max(1, Math.ceil((new Date(`${goal.deadline}T12:00:00`).getTime() - created.getTime()) / 86_400_000)) : 1;
+    const remainingPercent = Math.max(0, Math.min(100, (Math.max(0, daysLeft) / totalDays) * 100));
 
     return (
     <div className="bg-white dark:bg-slate-800 p-6 rounded-2xl shadow-sm hover:shadow-md transition-shadow border border-gray-100 dark:border-slate-700 relative group flex flex-col h-full">
@@ -436,11 +440,11 @@ const GoalCard: React.FC<{ goal: Goal; onEdit: () => void; onDelete: () => void 
         <div className="pl-4 flex-grow">
             <div className="flex justify-between items-start mb-3">
                 <h3 className="text-xl font-bold text-gray-800 dark:text-white">{goal.name}</h3>
-                <div className="flex space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={onEdit} className="p-1.5 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-full transition-colors">
+                <div className="flex space-x-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100 transition-opacity">
+                    <button onClick={onEdit} aria-label={`Edit ${goal.name}`} className="p-1.5 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-50 dark:hover:bg-slate-700 rounded-full transition-colors">
                         <PencilIcon className="w-4 h-4" />
                     </button>
-                    <button onClick={onDelete} className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors">
+                    <button onClick={onDelete} aria-label={`Delete ${goal.name}`} className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors">
                          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
                     </button>
                 </div>
@@ -456,7 +460,7 @@ const GoalCard: React.FC<{ goal: Goal; onEdit: () => void; onDelete: () => void 
                         <span className="text-xs font-bold uppercase text-gray-400 mb-1.5">Days Left</span>
                      </div>
                      <div className="w-full bg-gray-100 dark:bg-slate-700 h-1.5 rounded-full overflow-hidden">
-                         <div className={`h-full rounded-full ${daysLeft < 7 ? 'bg-amber-400 animate-pulse' : 'bg-indigo-500'}`} style={{ width: '100%' }}></div>
+                         <div className={`h-full rounded-full ${daysLeft < 7 ? 'bg-amber-400 animate-pulse' : 'bg-indigo-500'}`} style={{ width: `${remainingPercent}%` }}></div>
                      </div>
                      {daysLeft < 0 && <p className="text-xs text-red-500 font-bold mt-1">Deadline Passed</p>}
                 </div>

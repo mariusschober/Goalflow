@@ -8,7 +8,6 @@ import { Modal } from './Modal';
 import { breakdownTaskWithGemini, getVisualizationPrompt, AiSubtask } from '../services/geminiService';
 import { playAlarmSound, playSelectSound } from '../utils/audioUtils';
 import { YellowPad } from './YellowPad';
-import { getTomorrowYYYYMMDD } from '../utils/dateUtils';
 
 interface CurrentViewProps {
   currentTask: Task | null;
@@ -16,7 +15,6 @@ interface CurrentViewProps {
   allTasks: Task[];
   completeTask: (id: string, duration?: number, flowState?: FlowState, finalDescription?: string) => void;
   addSubtasks: (subtasks: {title: string, duration: number}[], parent: Task) => void;
-  addTask: (task: { title: string; description?: string; dateAssigned: string, goalId?: string, isFrog?: boolean, isRepetitive?: boolean }) => void;
   onFrogEaten: () => void;
   deprioritizeTask: (id: string) => void;
   openEditModal: (task: Task) => void;
@@ -25,7 +23,6 @@ interface CurrentViewProps {
   onSelectHashtag: (tag: string) => void;
   amalgam?: string;
   trackBreakTime: (minutes: number) => void;
-  onRescheduleTask: (id: string, date: string) => boolean;
   onAwardXp: (amount: number, message: string, type?: 'reward' | 'milestone') => void;
   isAiEnabled?: boolean;
   circadianState?: CircadianState;
@@ -263,12 +260,11 @@ const BreakOverlay: React.FC<{ duration: number, onEnd: (elapsedMinutes: number)
     );
 };
 
-export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, allTasks, completeTask, addSubtasks, addTask, onFrogEaten, deprioritizeTask, openEditModal, updateTask, hashtagConfigs, onSelectHashtag, amalgam, trackBreakTime, onRescheduleTask, onAwardXp, isAiEnabled = false }) => {
+export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, allTasks, completeTask, addSubtasks, onFrogEaten, deprioritizeTask, openEditModal, updateTask, hashtagConfigs, onSelectHashtag, amalgam, trackBreakTime, onAwardXp, isAiEnabled = false }) => {
     
     const [isExpiryModalOpen, setIsExpiryModalOpen] = useState(false);
     const [isFlowModalOpen, setIsFlowModalOpen] = useState(false);
     const [isBreakSetupOpen, setIsBreakSetupOpen] = useState(false);
-    const [isRescheduleModalOpen, setIsRescheduleModalOpen] = useState(false);
     const [isBreakdownModalOpen, setIsBreakdownModalOpen] = useState(false);
     const [showYellowPad, setShowYellowPad] = useState(false);
     const [padContent, setPadContent] = useState('');
@@ -285,11 +281,6 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
     const [tickingVolume, setTickingVolume] = useState(1.0);
     const lastTickSecondsRef = useRef<number | null>(null);
     
-    const [customRescheduleDate, setCustomRescheduleDate] = useState('');
-    const [isCustomDateInputVisible, setIsCustomDateInputVisible] = useState(false);
-    
-    const [tempFlowState, setTempFlowState] = useState<FlowState | undefined>(undefined);
-    const [loopTaskToReschedule, setLoopTaskToReschedule] = useState<Task | null>(null);
 
     const [breakMode, setBreakMode] = useState<{active: boolean, duration: number}>({ active: false, duration: 5 });
     const [defaultBreakDuration, setDefaultBreakDuration] = useState(5);
@@ -489,24 +480,10 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
         }
     }, [isActive, currentTask, isAiEnabled]);
 
-    useEffect(() => {
-        if (isRescheduleModalOpen) {
-            setIsCustomDateInputVisible(false);
-            setCustomRescheduleDate(getTomorrowYYYYMMDD());
-        }
-    }, [isRescheduleModalOpen]);
-    
     const confirmCompletion = useCallback((flow: FlowState) => {
         setIsFlowModalOpen(false);
-        setTempFlowState(flow);
         
         if (currentTask?.isFrog) onFrogEaten();
-        
-        if (currentTask?.isRepetitive) {
-             setLoopTaskToReschedule(currentTask);
-             setIsRescheduleModalOpen(true);
-             return;
-        }
 
         if (currentTask) {
             const durationInMinutes = Math.ceil(elapsedSeconds / 60);
@@ -618,46 +595,6 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isFlowModalOpen, isBreakSetupOpen, confirmCompletion, startImmediateBreak]);
 
-    const handleReschedule = (date: string, finishForever: boolean = false) => {
-         const taskToProcess = loopTaskToReschedule || currentTask;
-         if (!taskToProcess) return;
-
-         // If rescheduling an active task (Later button), use the specialized hook
-         if (!loopTaskToReschedule) {
-             const success = onRescheduleTask(taskToProcess.id, date);
-             if (!success) {
-                 alert("This Frog cannot be postponed. You must break it down.");
-                 handleOpenBreakdown();
-                 return;
-             }
-             savePadContent();
-             setFlowOffset(0);
-             lastCheckpointRef.current = 0;
-             return;
-         }
-
-         // Loop completion logic
-         const durationInMinutes = Math.ceil(elapsedSeconds / 60);
-         const finalDuration = durationInMinutes > 0 ? durationInMinutes : 1;
-         
-         completeTask(taskToProcess.id, finalDuration, tempFlowState || 'good', padContent);
-         
-         if (!finishForever) {
-             addTask({
-                 title: taskToProcess.title,
-                 description: padContent, 
-                 dateAssigned: date,
-                 goalId: taskToProcess.goalId,
-                 isRepetitive: true,
-                 isFrog: false
-             });
-         }
-
-         setLoopTaskToReschedule(null);
-         setIsRescheduleModalOpen(false);
-         setIsBreakSetupOpen(true);
-    };
-
     const handleBreakComplete = (takenMinutes: number) => {
         setBreakMode({active: false, duration: 5});
         trackBreakTime(takenMinutes);
@@ -668,13 +605,12 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
     
     const handleSkip = () => {
         if (currentTask) {
-            const success = onRescheduleTask(currentTask.id, getTomorrowYYYYMMDD());
-            if (!success) {
-                 alert("This Frog cannot be postponed. You must break it down.");
+            if (currentTask.isFrog) {
                  handleOpenBreakdown();
                  return;
             }
             savePadContent();
+            deprioritizeTask(currentTask.id);
             setFlowOffset(0);
             lastCheckpointRef.current = 0;
         }
@@ -728,10 +664,7 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
     const confirmBreakdown = () => {
         if (!currentTask) return;
         
-        // 1. Mark Original as Complete/Broken Down
-        completeTask(currentTask.id, 0, 'good', 'Broken down into subtasks: ' + stagedSubtasks.map(s => s.title).join(', '));
-        
-        // 2. Create Subtasks
+        // Breakdown closes the parent without completion statistics or XP.
         addSubtasks(stagedSubtasks, currentTask);
         
         setIsBreakdownModalOpen(false);
@@ -945,12 +878,15 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
                                         </button>
                                     ) : (
                                         <>
-                                            <button onClick={handleSkip} className="flex flex-col items-center gap-3 group w-20">
+                                            {currentTask.isFrog ? <button onClick={handleOpenBreakdown} className="flex flex-col items-center gap-3 group w-20" title="Frogs cannot be skipped">
+                                                <div className="w-14 h-14 rounded-2xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 flex items-center justify-center text-red-600 dark:text-red-400 transition shadow-sm transform group-active:scale-95"><AxeIcon className="w-6 h-6" /></div>
+                                                <span className="text-xs font-bold text-red-600 dark:text-red-400 uppercase tracking-widest">Break down</span>
+                                            </button> : <button onClick={handleSkip} className="flex flex-col items-center gap-3 group w-20">
                                                 <div className="w-14 h-14 rounded-2xl bg-white dark:bg-slate-700 border border-gray-200 dark:border-slate-600 flex items-center justify-center text-gray-400 dark:text-gray-500 group-hover:border-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition shadow-sm transform group-active:scale-95">
                                                     <SkipIcon className="w-6 h-6" />
                                                 </div>
                                                 <span className="text-xs font-bold text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 uppercase tracking-widest">Later</span>
-                                            </button>
+                                            </button>}
 
                                             <button 
                                                 onClick={toggleTimer} 
@@ -1226,78 +1162,6 @@ export const CurrentView: React.FC<CurrentViewProps> = ({ currentTask, goals, al
                 </div>
             </Modal>
             
-            <Modal isOpen={isRescheduleModalOpen} onClose={() => setIsRescheduleModalOpen(false)} title="Loop Complete">
-               {/* ... same as previous ... */}
-                <div className="p-1">
-                    <div className="text-center mb-6">
-                        <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-full flex items-center justify-center mx-auto mb-3">
-                            <InfinityIcon className="w-8 h-8" />
-                        </div>
-                        <p className="text-lg font-bold text-gray-800 dark:text-white">Loop Complete!</p>
-                        <p className="text-sm text-gray-500 dark:text-gray-400">Schedule the next iteration.</p>
-                    </div>
-
-                    <div className="grid grid-cols-2 gap-3 mb-6">
-                        <button onClick={() => handleReschedule(getTomorrowYYYYMMDD())} className="p-4 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl font-bold text-gray-700 dark:text-gray-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 dark:hover:border-indigo-800 transition text-sm">
-                            Tomorrow
-                        </button>
-                         <button onClick={() => {
-                             const d = new Date(); d.setDate(d.getDate() + 2);
-                             handleReschedule(d.toISOString().split('T')[0]);
-                         }} className="p-4 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl font-bold text-gray-700 dark:text-gray-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 dark:hover:border-indigo-800 transition text-sm">
-                            In 2 Days
-                        </button>
-                         <button onClick={() => {
-                             const d = new Date(); d.setDate(d.getDate() + 7);
-                             handleReschedule(d.toISOString().split('T')[0]);
-                         }} className="p-4 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl font-bold text-gray-700 dark:text-gray-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 dark:hover:border-indigo-800 transition text-sm">
-                            Next Week
-                        </button>
-                        
-                         {isCustomDateInputVisible ? (
-                             <form 
-                                onSubmit={(e) => { e.preventDefault(); handleReschedule(customRescheduleDate); }}
-                                className="flex gap-1"
-                            >
-                                <input 
-                                    type="date" 
-                                    value={customRescheduleDate} 
-                                    onChange={(e) => setCustomRescheduleDate(e.target.value)}
-                                    className="flex-grow bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-l-xl px-2 text-sm text-gray-800 dark:text-white focus:ring-2 focus:ring-indigo-500 outline-none"
-                                    autoFocus
-                                />
-                                <button 
-                                    type="submit"
-                                    className="bg-indigo-600 text-white rounded-r-xl px-3 font-bold text-sm hover:bg-indigo-700 transition"
-                                >
-                                    <CheckIcon className="w-4 h-4" />
-                                </button>
-                             </form>
-                         ) : (
-                            <button onClick={() => setIsCustomDateInputVisible(true)} className="p-4 bg-gray-50 dark:bg-slate-700 border border-gray-200 dark:border-slate-600 rounded-xl font-bold text-gray-700 dark:text-gray-200 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 hover:border-indigo-200 dark:hover:border-indigo-800 transition text-sm">
-                                Custom Date
-                            </button>
-                         )}
-                    </div>
-
-                    <div className="mb-6">
-                        <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Notes for next time</p>
-                        <div className="h-32 border border-yellow-200 dark:border-yellow-900/30 rounded-xl overflow-hidden">
-                            <YellowPad 
-                                content={padContent}
-                                onChange={setPadContent}
-                                placeholder="What should you remember for next time? (Comments, ideas, links...)"
-                                className="h-full"
-                            />
-                        </div>
-                    </div>
-                    
-                    <button onClick={() => handleReschedule("", true)} className="w-full py-3 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg font-bold transition text-sm">
-                        Mark as Fully Done (End Loop)
-                    </button>
-                </div>
-            </Modal>
-
             <Modal isOpen={isBreakSetupOpen} onClose={() => setIsBreakSetupOpen(false)} title="Session Complete">
                 <div className="p-6 text-center">
                      <div className={`w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6 animate-scaleIn ${breakRecommendation.type === 'flow' ? 'bg-indigo-100 dark:bg-indigo-900/30' : 'bg-green-100 dark:bg-green-900/30'}`}>

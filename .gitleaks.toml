@@ -1,0 +1,14 @@
+title = "Goalflow secret scanning"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Frozen SHA-256 checksums in integrity manifests are not credentials"
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^[a-f0-9]{64}$''']
+paths = [
+  '''^supabase/migrations/MIGRATION_SHA256_MANIFEST\.json$''',
+  '''^android-native/app/schemas/.+/ROOM_SCHEMA_SHA256_MANIFEST\.json$'''
+]

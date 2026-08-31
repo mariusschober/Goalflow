@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "web": {
+    "databaseName": "GoalflowDB",
+    "activeDatabaseKey": "goalflow_active_database_v2",
+    "walPrefix": "goalflow_wal_v2_",
+    "deviceIdKey": "goalflow-device-id"
+  },
+  "android": {
+    "capacitorApplicationId": "com.mariusschober.goalflow",
+    "legacyNamespace": "com.mariusschober.goalflow",
+    "nativeNamespace": "com.mariusschober.goalflow.nativeapp",
+    "nativeApplicationId": "com.mariusschober.goalflow",
+    "nativeDatabaseName": "goalflow-native.db",
+    "urlScheme": "goalflow",
+    "authRedirectUri": "goalflow://auth/callback",
+    "securePreferences": "goalflow-secure-session",
+    "keystoreAlias": "goalflow_native_session"
+  },
+  "backup": {
+    "magic": "GFB1",
+    "storageBucket": "goalflow-backups",
+    "encryptedSuffix": ".goalflow-backup.enc"
+  },
+  "postgresMigrationFiles": [
+    "202607170001_foundation.sql",
+    "202607180001_scheduled_execution.sql",
+    "202608250001_reliability_hardening.sql",
+    "202608260001_zero_silent_data_loss.sql",
+    "202608290001_native_task_events.sql",
+    "202608300001_complete_native_sync_transport.sql",
+    "202608310001_telegram_auth_state_pkce.sql"
+  ],
+  "roomSchemaFiles": [
+    "1.json",
+    "2.json",
+    "3.json",
+    "4.json",
+    "5.json",
+    "6.json",
+    "7.json",
+    "8.json"
+  ]
+}

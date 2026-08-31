@@ -1,6 +1,6 @@
 
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
-import { PlusIcon, BrainCircuit, TrophyIcon, InfinityIcon, AxeIcon, TrashIcon, ShieldIcon, CalendarIcon } from './Icons';
+import { PlusIcon, BrainCircuit, TrophyIcon, AxeIcon, TrashIcon, ShieldIcon, CalendarIcon } from './Icons';
 import { breakdownTaskWithGemini, AiSubtask, validateTaskActionability } from '../services/geminiService';
 import { Task, Goal } from '../types';
 import { getTodayYYYYMMDD } from '../utils/dateUtils';
@@ -8,22 +8,35 @@ import { YellowPad } from './YellowPad';
 import { DatePicker } from './DatePicker';
 
 interface TaskFormProps {
-  onSubmit: (data: { title: string; description: string; dateAssigned: string, goalId?: string, isFrog: boolean, isRepetitive: boolean }) => void;
+  onSubmit: (data: { title: string; description: string; dateAssigned: string, goalId?: string, isFrog: boolean, isRepetitive: boolean, schedulePrecision: 'day' | 'month', scheduledFor: string }) => void;
   initialData?: Task | null;
   goals: Goal[];
   onClose: () => void;
   existingTasks?: Task[];
-  initialOverrides?: { session?: any, dateAssigned?: string };
+  initialOverrides?: { session?: any, dateAssigned?: string, title?: string };
   isAiEnabled?: boolean;
+  onBreakdown?: (subtasks: { title: string; duration: number; dateAssigned?: string; schedulePrecision?: 'day' | 'month'; scheduledFor?: string }[], parent: Task) => void;
 }
 
-export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals, onClose, existingTasks = [], initialOverrides, isAiEnabled = false }) => {
-  const [title, setTitle] = useState(initialData?.title || '');
+export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals, onClose, existingTasks = [], initialOverrides, isAiEnabled = false, onBreakdown }) => {
+  const today = getTodayYYYYMMDD();
+  const [todayYear, todayMonth] = today.split('-').map(Number);
+  const nextMonth = todayMonth === 12
+      ? `${todayYear + 1}-01`
+      : `${todayYear}-${String(todayMonth + 1).padStart(2, '0')}`;
+  const tomorrow = (() => {
+      const value = new Date(todayYear, todayMonth - 1, Number(today.slice(8, 10)) + 1);
+      return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`;
+  })();
+  const [title, setTitle] = useState(initialData?.title || initialOverrides?.title || '');
   const [description, setDescription] = useState(initialData?.description || '');
   const [dateAssigned, setDateAssigned] = useState(initialData?.dateAssigned || initialOverrides?.dateAssigned || getTodayYYYYMMDD());
+  const [schedulePrecision, setSchedulePrecision] = useState<'day' | 'month'>(initialData?.schedulePrecision || 'day');
+  const [scheduledMonth, setScheduledMonth] = useState(initialData?.schedulePrecision === 'month' ? initialData.scheduledFor?.slice(0, 7) || nextMonth : nextMonth);
   const [goalId, setGoalId] = useState(initialData?.goalId || '');
   const [isFrog, setIsFrog] = useState(initialData?.isFrog || false);
-  const [isRepetitive, setIsRepetitive] = useState(initialData?.isRepetitive || false);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(Boolean(initialData));
   
   // Breakdown State
   const [isAiBreakdownLoading, setIsAiBreakdownLoading] = useState(false);
@@ -143,7 +156,25 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
     e.preventDefault();
     if (!title.trim()) return;
 
+    const targetSchedule = schedulePrecision === 'day' ? dateAssigned : scheduledMonth;
+    const originalSchedule = initialData?.scheduledFor || initialData?.dateAssigned;
+    if (initialData?.isFrog && originalSchedule && targetSchedule > originalSchedule) {
+        setSubmissionError('A frog cannot be moved forward. Complete it, break it down, or explicitly drop it from Plan.');
+        return;
+    }
+    setSubmissionError(null);
+
     if (stagedSubtasks.length > 0) {
+        if (initialData && onBreakdown) {
+            onBreakdown(stagedSubtasks.map(subtask => ({
+                ...subtask,
+                dateAssigned: schedulePrecision === 'day' ? dateAssigned : `${scheduledMonth}-01`,
+                schedulePrecision,
+                scheduledFor: targetSchedule
+            })), initialData);
+            onClose();
+            return;
+        }
         stagedSubtasks.forEach(st => {
             const titleWithDuration = `${st.title} @${st.duration}m`;
             const hashtags = title.match(/#[a-zA-Z0-9_]+/g);
@@ -154,10 +185,12 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
             onSubmit({ 
                 title: finalTitle, 
                 description: description,
-                dateAssigned, 
+                dateAssigned: schedulePrecision === 'day' ? dateAssigned : `${scheduledMonth}-01`,
                 goalId, 
                 isFrog: false, 
-                isRepetitive: false 
+                isRepetitive: false,
+                schedulePrecision,
+                scheduledFor: schedulePrecision === 'day' ? dateAssigned : scheduledMonth
             });
         });
         onClose();
@@ -173,13 +206,19 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
     }
 
     if (title.trim()) {
-      onSubmit({ title, description, dateAssigned, goalId, isFrog, isRepetitive });
+      onSubmit({ title, description, dateAssigned: schedulePrecision === 'day' ? dateAssigned : `${scheduledMonth}-01`, goalId, isFrog: Boolean(initialData?.isFrog || isFrog), isRepetitive: false, schedulePrecision, scheduledFor: targetSchedule });
       onClose();
     }
   };
 
   const handleForceSubmit = () => {
-      onSubmit({ title, description, dateAssigned, goalId, isFrog, isRepetitive });
+      const targetSchedule = schedulePrecision === 'day' ? dateAssigned : scheduledMonth;
+      const originalSchedule = initialData?.scheduledFor || initialData?.dateAssigned;
+      if (initialData?.isFrog && originalSchedule && targetSchedule > originalSchedule) {
+          setSubmissionError('A frog cannot be moved forward. Complete it, break it down, or explicitly drop it from Plan.');
+          return;
+      }
+      onSubmit({ title, description, dateAssigned: schedulePrecision === 'day' ? dateAssigned : `${scheduledMonth}-01`, goalId, isFrog: Boolean(initialData?.isFrog || isFrog), isRepetitive: false, schedulePrecision, scheduledFor: targetSchedule });
       onClose();
   };
 
@@ -256,7 +295,7 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
                     onChange={handleTitleChange}
                     onKeyDown={handleKeyDown}
                     rows={1}
-                    placeholder="What's your next win?"
+                    placeholder="What is the next action?"
                     className={`w-full text-2xl md:text-3xl font-bold text-gray-900 dark:text-white placeholder-gray-300 dark:placeholder-slate-600 border-none focus:ring-0 p-0 bg-transparent leading-tight tracking-tight resize-none overflow-hidden ${validationStatus === 'rejected' ? 'text-red-500 dark:text-red-400' : ''}`}
                     autoFocus
                 />
@@ -271,7 +310,7 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
             </div>
 
             {/* QUICK SUGGESTIONS */}
-            {validationStatus !== 'rejected' && (
+            {showDetails && validationStatus !== 'rejected' && (
                 <div className="flex items-center gap-2 overflow-x-auto pb-2 custom-scrollbar no-scrollbar">
                     {topDurations.map(min => (
                         <button 
@@ -299,7 +338,7 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
             {/* CONTROLS ROW - UNIFIED STYLE */}
             <div className="flex flex-wrap gap-3 items-center">
                 {/* Goal Selector Pill */}
-                <div className="relative group">
+                {showDetails && <div className="relative group">
                      <div className={`flex items-center rounded-xl px-4 py-3 transition-all cursor-pointer border ${goalId ? 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800' : 'bg-gray-50 dark:bg-slate-700/50 border-transparent hover:bg-gray-100 dark:hover:bg-slate-700'}`}>
                          <TrophyIcon className={`w-5 h-5 mr-2 ${goalId ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400'}`} />
                          <select
@@ -314,10 +353,16 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
                          </select>
                          {selectedGoal && <div className="w-2 h-2 rounded-full absolute right-3 top-1/2 -translate-y-1/2" style={{ backgroundColor: selectedGoal.color }}></div>}
                     </div>
+                </div>}
+
+                <div className="flex rounded-xl bg-gray-50 dark:bg-slate-700/50 p-1" aria-label="Task schedule">
+                    <button type="button" onClick={() => { setSchedulePrecision('day'); setDateAssigned(today); }} className={`px-3 py-2 rounded-lg text-sm font-bold ${schedulePrecision === 'day' && dateAssigned === today ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-700 dark:text-indigo-200' : 'text-gray-500 dark:text-gray-400'}`}>Today</button>
+                    <button type="button" onClick={() => { setSchedulePrecision('day'); setDateAssigned(tomorrow); }} className={`px-3 py-2 rounded-lg text-sm font-bold ${schedulePrecision === 'day' && dateAssigned === tomorrow ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-700 dark:text-indigo-200' : 'text-gray-500 dark:text-gray-400'}`}>Tomorrow</button>
+                    <button type="button" onClick={() => setSchedulePrecision('month')} className={`px-3 py-2 rounded-lg text-sm font-bold ${schedulePrecision === 'month' ? 'bg-white dark:bg-slate-600 shadow-sm text-indigo-700 dark:text-indigo-200' : 'text-gray-500 dark:text-gray-400'}`}>Month</button>
                 </div>
 
-                {/* Date Picker Pill */}
-                <div className="w-40">
+                {/* Date or future-month schedule */}
+                {schedulePrecision === 'day' ? <div className="w-40">
                     <DatePicker 
                         date={dateAssigned}
                         onChange={setDateAssigned}
@@ -332,27 +377,36 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
                             </button>
                         )}
                     />
-                </div>
+                </div> : (
+                    <label className="flex items-center gap-2 px-4 py-3 rounded-xl bg-gray-50 dark:bg-slate-700/50 text-sm font-bold text-gray-700 dark:text-gray-200">
+                        <CalendarIcon className="w-5 h-5 text-gray-400" />
+                        <input
+                            type="month"
+                            min={nextMonth}
+                            value={scheduledMonth}
+                            onChange={(event) => setScheduledMonth(event.target.value)}
+                            className="bg-transparent border-0 p-0 focus:ring-0"
+                            required
+                        />
+                    </label>
+                )}
 
                 {/* Toggles */}
-                <button
+                {showDetails && <button
                     type="button"
-                    onClick={() => { setIsFrog(!isFrog); if(!isFrog) setIsRepetitive(false); }}
+                    onClick={() => { if (!initialData?.isFrog) setIsFrog(!isFrog); }}
+                    disabled={Boolean(initialData?.isFrog)}
                     className={`flex items-center px-4 py-3 rounded-xl border transition-all ${isFrog ? 'bg-green-50 dark:bg-green-900/30 border-green-200 dark:border-green-800 text-green-700 dark:text-green-400' : 'bg-gray-50 dark:bg-slate-700/50 border-transparent hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400'}`}
                 >
-                    <span className="mr-2 font-emoji">🐸</span>
-                    <span className="text-sm font-bold">Eat The Frog</span>
-                </button>
+                    <AxeIcon className="mr-2 h-4 w-4" />
+                    <span className="text-sm font-bold">{initialData?.isFrog ? 'Frog locked' : 'Mark as frog'}</span>
+                </button>}
 
-                 <button
-                    type="button"
-                    onClick={() => { setIsRepetitive(!isRepetitive); if(!isRepetitive) setIsFrog(false); }}
-                    className={`flex items-center px-4 py-3 rounded-xl border transition-all ${isRepetitive ? 'bg-blue-50 dark:bg-blue-900/30 border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400' : 'bg-gray-50 dark:bg-slate-700/50 border-transparent hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-500 dark:text-gray-400'}`}
-                >
-                    <InfinityIcon className="w-5 h-5 mr-2" />
-                    <span className="text-sm font-bold">Loop</span>
-                </button>
             </div>
+            <button type="button" aria-expanded={showDetails} onClick={() => setShowDetails(value => !value)} className="w-fit rounded-lg px-2 py-1 text-sm font-bold text-indigo-700 hover:bg-indigo-50 dark:text-indigo-300 dark:hover:bg-indigo-900/30">
+                {showDetails ? 'Fewer options' : 'More options'}
+            </button>
+            {submissionError && <p role="alert" className="text-sm font-medium text-red-600 dark:text-red-400">{submissionError}</p>}
 
             {/* BREAKDOWN & AI AREA */}
             {(isBreakdownMode || stagedSubtasks.length > 0) && (
@@ -427,7 +481,7 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
 
             {/* ACTION BAR */}
             <div className="flex items-center justify-between pt-4 mt-auto">
-                 {isAiEnabled && !isBreakdownMode && stagedSubtasks.length === 0 && (
+                 {showDetails && isAiEnabled && !isBreakdownMode && stagedSubtasks.length === 0 && (
                      <button
                         type="button"
                         onClick={handleAiBreakdown}
@@ -456,23 +510,23 @@ export const TaskForm: React.FC<TaskFormProps> = ({ onSubmit, initialData, goals
       </div>
 
       {/* NOTES PAD */}
-      <div className="hidden lg:block lg:w-[45%] xl:w-[40%] border-l border-gray-100 dark:border-slate-700 shadow-[inset_10px_0_20px_-10px_rgba(0,0,0,0.05)] z-10">
+      {showDetails && <div className="hidden lg:block lg:w-[45%] xl:w-[40%] border-l border-gray-100 dark:border-slate-700 shadow-[inset_10px_0_20px_-10px_rgba(0,0,0,0.05)] z-10">
           <YellowPad 
             content={description} 
             onChange={setDescription} 
             placeholder="Notes, ideas, links..." 
             className="h-full"
           />
-      </div>
+      </div>}
       
-       <div className="lg:hidden h-48 border-t border-gray-200 dark:border-slate-700 shrink-0 shadow-inner">
+       {showDetails && <div className="lg:hidden h-48 border-t border-gray-200 dark:border-slate-700 shrink-0 shadow-inner">
            <YellowPad 
             content={description} 
             onChange={setDescription} 
             placeholder="Tap to add notes..." 
             className="h-full"
           />
-       </div>
+       </div>}
     </div>
   );
 };

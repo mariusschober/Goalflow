@@ -1,118 +1,18 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Goalflow</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          fontFamily: {
-            sans: ['Inter', 'sans-serif'],
-            heading: ['Teko', 'sans-serif'],
-            handwriting: ['Kalam', 'cursive'],
-          },
-          animation: {
-            'spin-slow': 'spin 3s linear infinite',
-            'fadeIn': 'fadeIn 0.3s ease-out forwards',
-            'slideIn': 'slideIn 0.3s ease-out forwards',
-            'scaleIn': 'scaleIn 0.2s ease-out forwards',
-            'breathe': 'breathe 6s ease-in-out infinite',
-            'float': 'float 3s ease-in-out infinite',
-          },
-          keyframes: {
-            fadeIn: {
-              '0%': { opacity: '0' },
-              '100%': { opacity: '1' },
-            },
-            slideIn: {
-              '0%': { transform: 'translateX(20px)', opacity: '0' },
-              '100%': { transform: 'translateX(0)', opacity: '1' },
-            },
-            scaleIn: {
-              '0%': { transform: 'scale(0.95)', opacity: '0' },
-              '100%': { transform: 'scale(1)', opacity: '1' },
-            },
-            breathe: {
-              '0%, 100%': { opacity: '0.4', transform: 'scale(0.98)' },
-              '50%': { opacity: '1', transform: 'scale(1.02)' },
-            },
-            float: {
-              '0%, 100%': { transform: 'translateY(0)' },
-              '50%': { transform: 'translateY(-10px)' },
-            }
-          }
-        }
-      }
-    }
-  </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Teko:wght@400;500;600&family=Inter:wght@300;400;500;600;700&family=Kalam:wght@300;400;700&display=swap" rel="stylesheet">
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><path d='M20 50 L50 80 L90 20' stroke='%234F46E5' stroke-width='10' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>">
-  <style>
-    body { 
-      font-family: 'Inter', sans-serif; 
-      -webkit-font-smoothing: antialiased;
-      -moz-osx-font-smoothing: grayscale;
-    }
-    h1, h2, h3, .font-heading { font-family: 'Teko', sans-serif; }
-    .font-handwriting { font-family: 'Kalam', cursive; }
-    
-    .custom-scrollbar::-webkit-scrollbar {
-      width: 6px;
-      height: 6px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-track {
-      background: transparent;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb {
-      background-color: rgba(156, 163, 175, 0.3);
-      border-radius: 20px;
-    }
-    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-      background-color: rgba(107, 114, 128, 0.6);
-    }
-    
-    /* Hide scrollbar for specific elements */
-    .no-scrollbar::-webkit-scrollbar {
-        display: none;
-    }
-    .no-scrollbar {
-        -ms-overflow-style: none;
-        scrollbar-width: none;
-    }
-    
-    /* Dash animation for gamification path */
-    @keyframes dash {
-      to {
-        stroke-dashoffset: -100;
-      }
-    }
-  </style>
-<link rel="stylesheet" href="/index.css">
-</head>
-<body class="bg-gray-50 dark:bg-[#0f172a] transition-colors duration-300 selection:bg-indigo-500 selection:text-white">
-  <div id="root"></div>
-  <script type="importmap">
-{
-  "imports": {
-    "react": "https://aistudiocdn.com/react@^18.2.0",
-    "react-dom/": "https://aistudiocdn.com/react-dom@^18.2.0/",
-    "react/": "https://aistudiocdn.com/react@^18.2.0/",
-    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.25.0",
-    "uuid": "https://aistudiocdn.com/uuid@^13.0.0",
-    "@hello-pangea/dnd": "https://esm.sh/@hello-pangea/dnd?external=react,react-dom",
-    "react-markdown": "https://esm.sh/react-markdown@9?external=react,react-dom&bundle",
-    "react-dom": "https://aistudiocdn.com/react-dom@^18.2.0",
-    "idb": "https://esm.sh/idb@8"
-  }
-}
-</script>
-  <script type="module" src="/index.tsx"></script>
-</body>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#4F46E5" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="description" content="Goalflow helps you plan deliberately and execute exactly one task." />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <link rel="icon" href="/icons/icon.svg" />
+    <title>Goalflow</title>
+  </head>
+  <body class="bg-[#F7F8FA] text-[#111827] selection:bg-indigo-600 selection:text-white">
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
 </html>

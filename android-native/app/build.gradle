@@ -1,0 +1,199 @@
+plugins {
+    id "com.android.application"
+    id "org.jetbrains.kotlin.android"
+    id "org.jetbrains.kotlin.kapt"
+    id "org.jetbrains.kotlin.plugin.compose"
+}
+
+kotlin {
+    jvmToolchain(21)
+}
+
+def goalflowBuildConfig = { propertyName ->
+    (project.findProperty(propertyName) ?: "").toString()
+        .replace('\\', '\\\\')
+        .replace('"', '\\"')
+}
+
+android {
+    namespace "com.mariusschober.goalflow.nativeapp"
+    compileSdk 35
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    kotlinOptions {
+        jvmTarget = "21"
+    }
+
+    signingConfigs {
+        release {
+            def skipSigning = findProperty("goalflowSkipSigning") == "true"
+            def b64 = System.getenv("ANDROID_KEYSTORE_BASE64")
+            def storePass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+            def alias = System.getenv("ANDROID_KEY_ALIAS") ?: ""
+            def keyPass = System.getenv("ANDROID_KEY_PASSWORD") ?: ""
+            def hasB64 = b64?.trim()
+            def hasStorePass = storePass?.toString()?.trim()
+            def hasAlias = alias?.toString()?.trim()
+            def hasKeyPass = keyPass?.toString()?.trim()
+            if (!skipSigning) {
+                def anyEnvironmentSigning = hasB64 || hasStorePass || hasAlias || hasKeyPass
+                if (anyEnvironmentSigning) {
+                    if (!hasB64 || !hasStorePass || !hasAlias || !hasKeyPass) {
+                        throw new GradleException("Partial signing configuration — all of ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD must be present together. Failing closed. Use -PgoalflowSkipSigning=true for unsigned local builds.")
+                    }
+                    def decoded = new File("/tmp/goalflow.keystore")
+                    decoded.bytes = java.util.Base64.getDecoder().decode(b64)
+                    storeFile decoded
+                    storePassword hasStorePass
+                    keyAlias hasAlias
+                    keyPassword hasKeyPass
+                    enableV1Signing true
+                    enableV2Signing true
+                } else {
+                    def keystorePath = findProperty("goalflowKeystore") ?: ""
+                    def keystoreFile = keystorePath ? file(keystorePath) : null
+                    def fileStorePass = findProperty("goalflowStorePassword") ?: ""
+                    def fileAlias = findProperty("goalflowKeyAlias") ?: ""
+                    def fileKeyPass = findProperty("goalflowKeyPassword") ?: ""
+                    def anyFileSigning = keystorePath || fileStorePass || fileAlias || fileKeyPass
+                    if (anyFileSigning) {
+                        if (!keystorePath || !fileStorePass || !fileAlias || !fileKeyPass) {
+                            throw new GradleException("Partial signing configuration via gradle properties — all of goalflowKeystore, goalflowStorePassword, goalflowKeyAlias, goalflowKeyPassword must be present. Failing closed.")
+                        }
+                        if (!keystoreFile.exists()) {
+                            throw new GradleException("Configured goalflowKeystore does not exist: ${keystoreFile}")
+                        }
+                        storeFile keystoreFile
+                        storePassword fileStorePass
+                        keyAlias fileAlias
+                        keyPassword fileKeyPass
+                        enableV1Signing true
+                        enableV2Signing true
+                    }
+                }
+            }
+        }
+    }
+
+    defaultConfig {
+        applicationId "com.mariusschober.goalflow"
+        minSdk 26
+        targetSdk 35
+        versionCode 3
+        versionName "0.3.0-tranche3"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables { useSupportLibrary true }
+        buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
+        buildConfigField "String", "SUPABASE_URL", "\"${goalflowBuildConfig('goalflowSupabaseUrl')}\""
+        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${goalflowBuildConfig('goalflowSupabaseAnonKey')}\""
+        buildConfigField "boolean", "SANDBOX_BUILD", "false"
+        buildConfigField "String", "TEST_ACCESS_CODE", "\"\""
+    }
+
+    flavorDimensions += "environment"
+
+    productFlavors {
+        production {
+            dimension "environment"
+        }
+        sandbox {
+            dimension "environment"
+            applicationIdSuffix ".sandbox"
+            versionNameSuffix "-sandbox"
+            buildConfigField "boolean", "SANDBOX_BUILD", "true"
+            buildConfigField "String", "TEST_ACCESS_CODE", "\"123456\""
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix ".dev"
+            versionNameSuffix "-dev"
+        }
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    buildFeatures {
+        compose true
+        buildConfig true
+    }
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        }
+    }
+
+    sourceSets {
+        androidTest {
+            assets.srcDirs += "$projectDir/schemas"
+        }
+    }
+
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            testLogging {
+                exceptionFormat = "full"
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation platform("androidx.compose:compose-bom:2024.12.01")
+    implementation "androidx.activity:activity-compose:1.10.0"
+    implementation "androidx.activity:activity-ktx:1.10.0"
+    implementation "androidx.compose.animation:animation"
+    implementation "androidx.compose.ui:ui"
+    implementation "androidx.compose.ui:ui-tooling-preview"
+    implementation "androidx.compose.material3:material3"
+    implementation "androidx.compose.material:material-icons-extended"
+    implementation "androidx.lifecycle:lifecycle-runtime-compose:2.8.7"
+    implementation "androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7"
+    implementation "androidx.lifecycle:lifecycle-process:2.8.7"
+    implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.8.7"
+    implementation "com.squareup.okhttp3:okhttp:4.12.0"
+    implementation "androidx.navigation:navigation-compose:2.8.5"
+    implementation "androidx.core:core-ktx:1.15.0"
+    implementation "androidx.core:core-splashscreen:1.0.1"
+    implementation "androidx.profileinstaller:profileinstaller:1.4.1"
+    implementation "androidx.room:room-runtime:2.6.1"
+    implementation "androidx.room:room-ktx:2.6.1"
+    kapt "androidx.room:room-compiler:2.6.1"
+    implementation "androidx.datastore:datastore-preferences:1.1.1"
+    implementation "androidx.work:work-runtime-ktx:2.10.0"
+    debugImplementation "androidx.compose.ui:ui-tooling"
+
+    testImplementation "junit:junit:4.13.2"
+    // Android's platform org.json methods are stubs in JVM unit tests.
+    // Keep production on the platform API while giving backup tests a real implementation.
+    testImplementation "org.json:json:20240303"
+    testImplementation "org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0"
+    testImplementation "androidx.test:core:1.6.1"
+    testImplementation "androidx.room:room-testing:2.6.1"
+    testImplementation "org.robolectric:robolectric:4.14.1"
+    androidTestImplementation platform("androidx.compose:compose-bom:2024.12.01")
+    androidTestImplementation "androidx.test.ext:junit:1.2.1"
+    androidTestImplementation "androidx.test.espresso:espresso-core:3.6.1"
+    androidTestImplementation "androidx.room:room-testing:2.6.1"
+    androidTestImplementation "androidx.compose.ui:ui-test-junit4"
+    debugImplementation "androidx.compose.ui:ui-test-manifest"
+}
+
+kapt {
+    correctErrorTypes true
+    arguments {
+        arg("room.schemaLocation", "$projectDir/schemas")
+    }
+}

@@ -1,0 +1,122 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace "com.mariusschober.goalflow"
+    compileSdk rootProject.ext.compileSdkVersion
+    signingConfigs {
+        release {
+            def skipSigning = findProperty("goalflowSkipSigning") == "true"
+            def b64 = System.getenv("ANDROID_KEYSTORE_BASE64")
+            def storePass = System.getenv("ANDROID_KEYSTORE_PASSWORD") ?: ""
+            def alias = System.getenv("ANDROID_KEY_ALIAS") ?: ""
+            def keyPass = System.getenv("ANDROID_KEY_PASSWORD") ?: ""
+            def hasB64 = b64?.trim()
+            def hasStorePass = storePass?.toString()?.trim()
+            def hasAlias = alias?.toString()?.trim()
+            def hasKeyPass = keyPass?.toString()?.trim()
+            if (!skipSigning) {
+                def anyEnvironmentSigning = hasB64 || hasStorePass || hasAlias || hasKeyPass
+                if (anyEnvironmentSigning) {
+                    if (!hasB64 || !hasStorePass || !hasAlias || !hasKeyPass) {
+                        throw new GradleException("Partial signing configuration — all of ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD must be present together. Failing closed. Use -PgoalflowSkipSigning=true for unsigned local builds.")
+                    }
+                    def decoded = new File("/tmp/goalflow.keystore")
+                    decoded.bytes = java.util.Base64.getDecoder().decode(b64)
+                    storeFile decoded
+                    storePassword hasStorePass
+                    keyAlias hasAlias
+                    keyPassword hasKeyPass
+                    enableV1Signing true
+                    enableV2Signing true
+                } else {
+                    def keystorePath = findProperty("goalflowKeystore") ?: ""
+                    def keystoreFile = keystorePath ? file(keystorePath) : null
+                    def fileStorePass = findProperty("goalflowStorePassword") ?: ""
+                    def fileAlias = findProperty("goalflowKeyAlias") ?: ""
+                    def fileKeyPass = findProperty("goalflowKeyPassword") ?: ""
+                    def anyFileSigning = keystorePath || fileStorePass || fileAlias || fileKeyPass
+                    if (anyFileSigning) {
+                        if (!keystorePath || !fileStorePass || !fileAlias || !fileKeyPass) {
+                            throw new GradleException("Partial signing configuration via gradle properties — all of goalflowKeystore, goalflowStorePassword, goalflowKeyAlias, goalflowKeyPassword must be present. Failing closed.")
+                        }
+                        if (!keystoreFile.exists()) {
+                            throw new GradleException("Configured goalflowKeystore does not exist: ${keystoreFile}")
+                        }
+                        storeFile keystoreFile
+                        storePassword fileStorePass
+                        keyAlias fileAlias
+                        keyPassword fileKeyPass
+                        enableV1Signing true
+                        enableV2Signing true
+                    }
+                }
+            }
+        }
+    }
+    defaultConfig {
+        applicationId "com.mariusschober.goalflow"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 3
+        versionName "0.3.0-tranche3"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    flavorDimensions "environment"
+    productFlavors {
+        production {
+            dimension "environment"
+        }
+        sandbox {
+            dimension "environment"
+            applicationIdSuffix ".test"
+            versionNameSuffix "-test"
+            resValue "string", "app_name", "Goalflow Test"
+            resValue "string", "title_activity_main", "Goalflow Test"
+            resValue "string", "package_name", "com.mariusschober.goalflow.test"
+            resValue "string", "custom_url_scheme", "com.mariusschober.goalflow.test"
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            if (signingConfigs.release.storeFile != null) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}

@@ -2,7 +2,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Modal } from './Modal';
 import { UserSettings } from '../hooks/useGoalflow';
 import { BrainCircuit, DownloadIcon, UploadIcon, ShieldIcon, RefreshIcon } from './Icons';
-import { storageService } from '../services/storage';
+import { storageService, type GoalflowBackup } from '../services/storage';
+import { decryptBackup, encryptBackup, isEncryptedBackup } from '../services/backupCrypto';
+import { AccountSecurity } from './AccountSecurity';
+import { InviteManager } from './InviteManager';
+import { supabase } from '../services/authService';
 
 interface SettingsModalProps {
     isOpen: boolean;
@@ -10,14 +14,19 @@ interface SettingsModalProps {
     settings: UserSettings;
     onUpdateSettings: (updates: Partial<UserSettings>) => void;
     userEmail: string;
+    storageKey: string;
 }
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdateSettings, userEmail }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, settings, onUpdateSettings, userEmail, storageKey }) => {
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [importError, setImportError] = useState<string | null>(null);
     const [importSuccess, setImportSuccess] = useState(false);
     const [isExporting, setIsExporting] = useState(false);
     const [isImporting, setIsImporting] = useState(false);
+    const [backupPassword, setBackupPassword] = useState('');
+    const [restoreMode, setRestoreMode] = useState<'merge' | 'replace'>('merge');
+    const [pendingBackup, setPendingBackup] = useState<GoalflowBackup | null>(null);
+    const [activeSection, setActiveSection] = useState<'account' | 'modules' | 'ai' | 'sync' | 'appearance'>('account');
 
     // Database Status Check & Self-Repair States
     const [dbStatus, setDbStatus] = useState<{
@@ -54,7 +63,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
         setIsRepairing(true);
         setRepairResult(null);
         try {
-            const res = await storageService.runSelfRepair();
+            const res = await storageService.runSelfRepair(storageKey);
             setRepairResult(res.message);
             await fetchStatus();
         } catch (err: any) {
@@ -67,19 +76,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
     const handleExport = async () => {
         setIsExporting(true);
         try {
-            const data = await storageService.exportBackup(userEmail);
-            const jsonString = JSON.stringify(data, null, 2);
+            const data = await storageService.exportBackup(storageKey);
+            const encrypted = await encryptBackup(data, backupPassword);
+            const jsonString = JSON.stringify(encrypted, null, 2);
             const blob = new Blob([jsonString], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
             link.href = url;
-            link.download = `goalflow_backup_${userEmail}_${new Date().toISOString().split('T')[0]}.json`;
+            link.download = `goalflow_${new Date().toISOString().split('T')[0]}.goalflow-backup`;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
             URL.revokeObjectURL(url);
         } catch (err) {
-            console.error('Failed to export data', err);
+            setImportError(err instanceof Error ? err.message : 'Failed to export the backup.');
         } finally {
             setIsExporting(false);
         }
@@ -97,20 +107,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
         reader.onload = async (event) => {
             try {
                 const text = event.target?.result as string;
-                const parsed = JSON.parse(text);
+                const fileValue = JSON.parse(text);
+                const parsed = isEncryptedBackup(fileValue) ? await decryptBackup(fileValue, backupPassword) : fileValue as GoalflowBackup;
                 
-                // Minimal check to confirm structure looks like a valid goalflow backup
-                const hasValidKeys = Object.keys(parsed).some(key => key === 'tasks' || key === 'goals' || key === 'habits');
+                const collections = parsed.collections || parsed;
+                const hasValidKeys = Object.keys(collections).some(key => key === 'tasks' || key === 'goals' || key === 'habits');
                 if (!hasValidKeys) {
                     throw new Error('Invalid backup file format.');
                 }
-
-                await storageService.importBackup(userEmail, parsed);
-                setImportSuccess(true);
-                // Reload page after a brief moment to rehydrate state seamlessly
-                setTimeout(() => {
-                    window.location.reload();
-                }, 1200);
+                setPendingBackup(parsed);
             } catch (err: any) {
                 setImportError(err?.message || 'Failed to parse and import backup.');
             } finally {
@@ -120,6 +125,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
         reader.readAsText(file);
     };
 
+    const confirmRestore = async () => {
+        if (!pendingBackup) return;
+        setIsImporting(true);
+        setImportError(null);
+        try {
+            await storageService.importBackup(storageKey, pendingBackup, restoreMode);
+            setPendingBackup(null);
+            setImportSuccess(true);
+            setTimeout(() => window.location.reload(), 1200);
+        } catch (err) {
+            setImportError(err instanceof Error ? err.message : 'The backup could not be restored.');
+        } finally {
+            setIsImporting(false);
+        }
+    };
+
     const triggerFileInput = () => {
         fileInputRef.current?.click();
     };
@@ -127,9 +148,32 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
     return (
         <Modal isOpen={isOpen} onClose={onClose} title="Settings">
             <div className="p-6">
+                <nav className="mb-6 flex gap-1 overflow-x-auto border-b border-gray-200 pb-3 dark:border-slate-700" aria-label="Settings sections">
+                    {([['account', 'Account & Security'], ['modules', 'Modules'], ['ai', 'AI'], ['sync', 'Sync & Backup'], ['appearance', 'Appearance']] as const).map(([id, label]) => (
+                        <button key={id} type="button" onClick={() => setActiveSection(id)} className={`whitespace-nowrap rounded-lg px-3 py-2 text-sm font-bold ${activeSection === id ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200' : 'text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-slate-700'}`}>{label}</button>
+                    ))}
+                </nav>
                 <div className="space-y-6">
+                    {activeSection === 'account' && <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-slate-600 dark:bg-slate-700/50">
+                        <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-white">Account & Security</h2>
+                        {supabase ? <>
+                            <AccountSecurity userEmail={userEmail} isOwner={userEmail.toLowerCase() === (import.meta.env.VITE_OWNER_EMAIL || 'mris@tuta.io').toLowerCase()} />
+                            {userEmail.toLowerCase() === (import.meta.env.VITE_OWNER_EMAIL || 'mris@tuta.io').toLowerCase() && <div className="mt-5"><InviteManager /></div>}
+                        </> : <div className="rounded-lg border border-indigo-100 bg-white p-4 text-sm text-gray-600 dark:border-slate-600 dark:bg-slate-800 dark:text-gray-300">
+                            Local-only mode is active. There is no account, password, cloud session, or external login. Your data stays in this browser profile on this Mac.
+                        </div>}
+                    </section>}
+
+                    {activeSection === 'modules' && <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-slate-600 dark:bg-slate-700/50">
+                        <h2 className="text-lg font-bold text-gray-900 dark:text-white">Full Goalflow</h2>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Every original experience is enabled for the free beta. The core workflow stays Current, Plan, Habits, Goals, and Insights.</p>
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2">
+                            {['Timer & Pomodoro', 'Focus music', 'Circadian planning', 'Gamification', 'True North', 'Reality Navigator', 'Transurfing', 'AI workflows'].map(module => <div key={module} className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-bold text-gray-700 dark:border-slate-600 dark:bg-slate-800 dark:text-gray-200">{module}</div>)}
+                        </div>
+                    </section>}
+
                     {/* AI Configuration */}
-                    <div className="flex items-start justify-between bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
+                    {activeSection === 'ai' && <div className="flex items-start justify-between bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
                         <div className="flex items-start gap-4">
                             <div className="p-3 bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-xl">
                                 <BrainCircuit className="w-6 h-6" />
@@ -137,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                             <div>
                                 <h3 className="text-lg font-bold text-gray-800 dark:text-white">AI Features</h3>
                                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 max-w-sm">
-                                    Enhance Goalflow with Google Gemini. Enables automatic task breakdown, actionability checks ("Icky Filter"), goal suggestions, and visualization prompts.
+                                    Send only the selected task or goal text to the configured AI provider for breakdown, actionability review, visualization, and coaching. Goalflow never sends your complete database.
                                 </p>
                              </div>
                         </div>
@@ -151,14 +195,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                             />
                             <div className="w-14 h-7 bg-gray-200 dark:bg-gray-600 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-6 after:w-6 after:transition-all peer-checked:bg-indigo-600"></div>
                         </label>
-                    </div>
+                    </div>}
 
                     {/* Data Import/Export */}
-                    <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
+                    {activeSection === 'sync' && <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
                         <h3 className="text-lg font-bold text-gray-800 dark:text-white mb-2">Back up & Data Portability</h3>
                         <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                            Export your tasks, habits, and user statistics into a portable file, or restore them from a previous backup.
+                            Exports are encrypted in your browser. Your password is never stored and cannot be recovered by Goalflow.
                         </p>
+                        <label className="mb-4 block">
+                            <span className="mb-1 block text-sm font-bold text-gray-700 dark:text-gray-200">Backup password</span>
+                            <input
+                                type="password"
+                                value={backupPassword}
+                                onChange={event => setBackupPassword(event.target.value)}
+                                minLength={12}
+                                autoComplete="new-password"
+                                placeholder="At least 12 characters"
+                                className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                            />
+                        </label>
                         
                         <div className="flex flex-wrap gap-4">
                             <button
@@ -167,7 +223,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-200 font-medium text-sm rounded-lg border border-gray-200 dark:border-slate-600 transition-colors disabled:opacity-50"
                             >
                                 <DownloadIcon className="w-4 h-4 text-indigo-500" />
-                                {isExporting ? 'Exporting...' : 'Export Data'}
+                                {isExporting ? 'Encrypting...' : 'Export encrypted backup'}
                             </button>
                             
                             <button
@@ -176,17 +232,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 className="flex items-center gap-2 px-4 py-2 bg-white dark:bg-slate-800 hover:bg-gray-100 dark:hover:bg-slate-700 text-gray-700 dark:text-gray-200 font-medium text-sm rounded-lg border border-gray-200 dark:border-slate-600 transition-colors disabled:opacity-50"
                             >
                                 <UploadIcon className="w-4 h-4 text-emerald-500" />
-                                {isImporting ? 'Importing...' : 'Import Data'}
+                                {isImporting ? 'Reading...' : 'Choose backup'}
                             </button>
                             
                             <input
                                 type="file"
                                 ref={fileInputRef}
                                 onChange={handleImportFile}
-                                accept=".json"
+                                accept=".goalflow-backup,.json,application/json"
                                 className="hidden"
                             />
                         </div>
+
+                        {pendingBackup && (
+                            <div className="mt-4 rounded-xl border border-indigo-200 bg-white p-4 dark:border-indigo-800 dark:bg-slate-800">
+                                <h4 className="font-bold text-gray-900 dark:text-white">Restore preview</h4>
+                                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                                    {Object.entries(pendingBackup.collections || pendingBackup).filter(([, value]) => Array.isArray(value)).map(([name, value]) => `${name}: ${(value as unknown[]).length}`).join(' · ') || 'Settings and account data are ready to restore.'}
+                                </p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                    <button type="button" onClick={() => setRestoreMode('merge')} className={`rounded-lg border px-3 py-2 text-sm font-bold ${restoreMode === 'merge' ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200' : 'border-gray-200 text-gray-600 dark:border-slate-600 dark:text-gray-300'}`}>Merge</button>
+                                    <button type="button" onClick={() => setRestoreMode('replace')} className={`rounded-lg border px-3 py-2 text-sm font-bold ${restoreMode === 'replace' ? 'border-indigo-600 bg-indigo-50 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-200' : 'border-gray-200 text-gray-600 dark:border-slate-600 dark:text-gray-300'}`}>Replace local data</button>
+                                    <button type="button" onClick={confirmRestore} disabled={isImporting} className="ml-auto rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">Restore</button>
+                                </div>
+                            </div>
+                        )}
 
                         {importSuccess && (
                             <p className="text-xs text-emerald-600 dark:text-emerald-400 mt-3 font-semibold">
@@ -198,10 +268,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 {importError}
                             </p>
                         )}
-                    </div>
+                    </div>}
 
                     {/* Database Health Diagnostics & Repair */}
-                    <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
+                    {activeSection === 'sync' && <div className="bg-gray-50 dark:bg-slate-700/50 p-4 rounded-xl border border-gray-100 dark:border-slate-600">
                         <div className="flex items-start justify-between mb-3">
                             <div>
                                 <h3 className="text-lg font-bold text-gray-800 dark:text-white flex items-center gap-2">
@@ -286,11 +356,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                                 </p>
                             )}
                         </div>
-                    </div>
+                    </div>}
+
+                    {activeSection === 'appearance' && <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-slate-600 dark:bg-slate-700/50">
+                        <h2 className="text-lg font-bold text-gray-900 dark:text-white">Appearance</h2>
+                        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Goalflow uses Inter Variable, neutral surfaces, and a restrained indigo accent. Use the header control to switch light and dark appearance.</p>
+                    </section>}
                 </div>
                 
                 <div className="mt-8 pt-6 border-t border-gray-100 dark:border-slate-700 text-center">
-                    <p className="text-xs text-gray-400">Goalflow v1.0.0</p>
+                    <p className="text-xs text-gray-400">Goalflow private beta v0.1.0</p>
                 </div>
             </div>
         </Modal>

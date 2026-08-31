@@ -1,0 +1,9 @@
+{
+  "202607170001_foundation.sql": "8573c6408f952cac607fdcc364b3130d1008db28cbcfce023dbda9b578280d2e",
+  "202607180001_scheduled_execution.sql": "0cc0d9cc1d1d7a1f234cd9cf1a3be357d2dc92df6391f6599c8bddf75e1c988f",
+  "202608250001_reliability_hardening.sql": "978b7d3d51d95cd0d10b4c2e239048be3816eedb2c4ee3665e2b6da2e0fb6c94",
+  "202608260001_zero_silent_data_loss.sql": "2e965b4632ca88203bad4ce2f37bbbd445b316d23b1b4b5fefbe221e3e974feb",
+  "202608290001_native_task_events.sql": "4fe88cd8644d92d216a97819cad3f1e7a966ab684a06397750f4a41e07ea10ba",
+  "202608300001_complete_native_sync_transport.sql": "1ffe9962982326517f1b0e8ad00ebc41a54c74fc7b4874014df4a299dbb0a6b8",
+  "202608310001_telegram_auth_state_pkce.sql": "bc03354e202602ae111a27c2fa99f6256cee64abe4332882ba2c213f89f3868d"
+}
