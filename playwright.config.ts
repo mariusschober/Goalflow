@@ -28,7 +28,7 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'npm start',
+    command: 'npm run build:client:test && npm run build:server && npm start',
     url: 'http://127.0.0.1:4173/api/v1/health',
     reuseExistingServer: !process.env.CI,
     timeout: 90_000,

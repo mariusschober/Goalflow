@@ -21,10 +21,10 @@ const AppWrapper: React.FC = () => {
   const [recoveryEmailRequired, setRecoveryEmailRequired] = useState(false);
 
   useEffect(() => {
-    if (!authService.isLocalDemo() || !('serviceWorker' in navigator)) return;
+    if (!authService.shouldDisableServiceWorker() || !('serviceWorker' in navigator)) return;
 
-    // Local mode never needs an offline worker. Remove registrations left by a
-    // production preview so they cannot replace the current development app.
+    // The development-only local demo never needs an offline worker. The isolated
+    // production-mode test build keeps it enabled so CI can exercise offline PWA behavior.
     void navigator.serviceWorker.getRegistrations().then(async (registrations) => {
       await Promise.all(registrations.map((registration) => registration.unregister()));
       if ('caches' in window) {

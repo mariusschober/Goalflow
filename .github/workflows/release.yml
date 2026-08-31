@@ -10,26 +10,51 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 jobs:
+  verify-release-source:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require canonical main with a green canonical gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "Authorized releases may only be dispatched from canonical main." >&2
+            exit 1
+          fi
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100")"
+          successful="$(printf '%s' "$response" | jq '[.check_runs[] | select(.name == "canonical-gate" and .status == "completed" and .conclusion == "success")] | length')"
+          if [ "$successful" -lt 1 ]; then
+            echo "Commit $GITHUB_SHA does not have a successful canonical-gate check." >&2
+            exit 1
+          fi
+          echo "Release source verified: canonical main at $GITHUB_SHA with canonical-gate success."
+
   verify-signing-secrets:
+    needs: verify-release-source
     runs-on: ubuntu-latest
     steps:
       - name: Validate all signing secrets present
         env:
+          RELEASE_CONFIRMATION: ${{ inputs.confirm }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           EXPECTED_CERT_FINGERPRINT: ${{ secrets.EXPECTED_CERT_FINGERPRINT }}
         run: |
-          if [ "${{ inputs.confirm }}" != "release" ]; then
-            echo "Release confirmation must be exactly 'release' — got '${{ inputs.confirm }}'" >&2
+          if [ "$RELEASE_CONFIRMATION" != "release" ]; then
+            echo "Release confirmation must be exactly 'release'." >&2
             exit 1
           fi
           missing=0
           for var in ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD EXPECTED_CERT_FINGERPRINT; do
-            val=$(eval echo \$$var)
+            val="${!var}"
             if [ -z "$val" ]; then
               echo "Missing required signing secret: $var" >&2
               missing=1
@@ -47,15 +72,17 @@ jobs:
     needs: verify-signing-secrets
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: production-release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+          ref: ${{ github.sha }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
         with:
           distribution: temurin
           java-version: '21'
@@ -67,7 +94,7 @@ jobs:
       - run: node scripts/verify-migration-hashes.mjs
       - run: node scripts/verify-room-schema-hashes.mjs
       - name: Cache native Gradle
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.gradle/caches
@@ -97,20 +124,21 @@ jobs:
           done
           if [ -z "$APKSIGNER" ]; then echo "apksigner not found" >&2; exit 1; fi
           "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | tee /tmp/certs.txt
-          if [ -n "$EXPECTED_CERT_FINGERPRINT" ]; then
-            if ! grep -q "$EXPECTED_CERT_FINGERPRINT" /tmp/certs.txt; then
-              echo "Certificate fingerprint mismatch — expected $EXPECTED_CERT_FINGERPRINT" >&2
-              cat /tmp/certs.txt >&2
-              exit 1
-            fi
-            echo "Certificate fingerprint verified"
-          else
-            echo "No expected fingerprint supplied — skipping fingerprint check but still verifying no debug cert"
-            if grep -q "CN=Android Debug" /tmp/certs.txt; then
-              echo "Release APK signed with debug cert — failing closed" >&2
-              exit 1
-            fi
+          expected="$(printf '%s' "$EXPECTED_CERT_FINGERPRINT" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/certs.txt | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "EXPECTED_CERT_FINGERPRINT must normalize to exactly 64 hexadecimal characters." >&2
+            exit 1
           fi
+          if ! printf '%s' "$actual" | grep -Eq '^[0-9a-f]{64}$'; then
+            echo "apksigner did not report one valid SHA-256 signer fingerprint." >&2
+            exit 1
+          fi
+          if [ "$actual" != "$expected" ]; then
+            echo "Certificate fingerprint mismatch." >&2
+            exit 1
+          fi
+          echo "Certificate fingerprint verified exactly."
           # Also run strict signing script which will FAIL if SKIP in release context
           ANDROID_EXPECT_SIGNED=1 bash android-native/scripts/verify-signing-strict.sh "$apk"
       - name: Create digests and provenance
@@ -127,7 +155,7 @@ jobs:
             cat "$aab.sha256"
           fi
       - name: Upload signed release artifacts (authorized)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: goalflow-signed-release
           path: |
@@ -139,13 +167,14 @@ jobs:
           if-no-files-found: error
 
   canonical-gate-release:
-    needs: [verify-signing-secrets, release]
+    needs: [verify-release-source, verify-signing-secrets, release]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check release gate
         run: |
-          echo "verify-signing-secrets=${{ needs.verify-signing-secrets.result }} release=${{ needs.release.result }}"
+          echo "verify-release-source=${{ needs.verify-release-source.result }} verify-signing-secrets=${{ needs.verify-signing-secrets.result }} release=${{ needs.release.result }}"
+          if [ "${{ needs.verify-release-source.result }}" != "success" ]; then echo "verify-release-source failed" >&2; exit 1; fi
           if [ "${{ needs.verify-signing-secrets.result }}" != "success" ]; then echo "verify-signing-secrets failed" >&2; exit 1; fi
           if [ "${{ needs.release.result }}" != "success" ]; then echo "release failed" >&2; exit 1; fi
           echo "release canonical-gate PASS"

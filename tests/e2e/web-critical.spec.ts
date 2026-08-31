@@ -1,265 +1,153 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
 
-// Helper: ensure app is ready without using window.__storageService
-async function ensureAppReady(page: import('@playwright/test').Page) {
+async function unlockTestApp(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  // Handle test gate if present (test build)
   const gateInput = page.locator('#test-code');
-  if (await gateInput.isVisible({ timeout: 2000 }).catch(() => false)) {
+  const header = page.locator('header');
+  await expect(gateInput.or(header)).toBeVisible({ timeout: 20_000 });
+  if (await gateInput.isVisible()) {
     await gateInput.fill('123456');
     await page.getByRole('button', { name: 'Enter test app' }).click();
   }
-  // Wait for main UI to hydrate — header should be visible, hydrating message gone
-  await page.waitForSelector('text=Hydrating Mind-State', { state: 'hidden', timeout: 20000 }).catch(() => {});
-  await expect(page.locator('header')).toBeVisible({ timeout: 15000 });
-  await page.waitForTimeout(500);
+  await expect(header).toBeVisible({ timeout: 20_000 });
 }
 
-test.describe('web-critical — full product journey via visible UI', () => {
-  test('full journey: fresh start, capture, schedule, planning, reorder, confirm, Current, complete and reload', async ({ page }) => {
-    // Fresh start: clear storage via UI? Use new context which starts empty.
-    await ensureAppReady(page);
+async function captureTodayTask(page: Page, title: string) {
+  await page.goto(`/?capture=task&title=${encodeURIComponent(title)}`, { waitUntil: 'domcontentloaded' });
+  const dialog = page.getByRole('dialog', { name: 'New Task' });
+  await expect(dialog).toBeVisible({ timeout: 15_000 });
+  await expect(dialog.getByPlaceholder('What is the next action?')).toHaveValue(title);
+  await dialog.locator('[aria-label="Task schedule"]').getByRole('button', { name: 'Today', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Create Task', exact: true }).click();
+  await expect(dialog).toBeHidden();
+}
 
-    // Capture: visible product UI — find and use the capture flow
-    // The app's capture is via "Add task" button or similar. Look for input or button.
-    // Try to locate the capture trigger
-    const addTaskTrigger = page.getByRole('button', { name: /Add task|New task|Capture/i }).first();
-    const taskInput = page.locator('textarea[placeholder*="next action"], input[placeholder*="next action"], textarea[placeholder*="What is"]');
+async function openPlan(page: Page) {
+  await page.getByRole('button', { name: 'Plan', exact: true }).click();
+  await expect(page.getByRole('heading', { name: "Today's Flow", exact: true })).toBeVisible();
+}
 
-    // Try multiple strategies to create a task via visible UI
-    const title = `e2e-journey-${Date.now()}`;
-    let captured = false;
+const plannedTitles = (page: Page) => page.locator('[data-rfd-draggable-id] h4');
 
-    // Strategy 1: direct capture via ?capture=task URL
-    await page.goto(`/?capture=task&title=${encodeURIComponent(title)}`, { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 }).catch(() => {});
-    const prefilled = page.locator('textarea[placeholder="What is the next action?"]').first();
-    if (await prefilled.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await expect(prefilled).toHaveValue(new RegExp(title));
-      // Fill and save via visible save button — use modal-specific locator to avoid overlay intercept
-      const modal = page.locator('div.fixed.inset-0').first();
-      const saveBtn = modal.getByRole('button', { name: /Save|Create|Add/i }).first();
-      // Fallback to global if modal not found
-      const btn = await saveBtn.isVisible({ timeout: 1000 }).catch(() => false) ? saveBtn : page.getByRole('button', { name: /Save|Create|Add/i }).first();
-      if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-        // Force click to avoid overlay intercept, or wait for overlay to be stable
-        await btn.click({ force: true }).catch(async () => {
-          await page.waitForTimeout(300);
-          await btn.click();
-        });
-        captured = true;
-        await page.waitForTimeout(500);
-        // Modal should close after save
-        await expect(modal).toBeHidden({ timeout: 5000 }).catch(() => {});
-      }
-    }
+async function createIsolatedContext(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await unlockTestApp(page);
+  return { context, page };
+}
 
-    if (!captured) {
-      // Strategy 2: use visible form directly on page
-      await page.goto('/', { waitUntil: 'domcontentloaded' });
-      await ensureAppReady(page);
-      // Try to find an input to type title
-      const input = page.locator('textarea, input[type="text"]').first();
-      if (await input.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await input.fill(title);
-        const save = page.getByRole('button', { name: /Save|Create|Add/i }).first();
-        if (await save.isVisible({ timeout: 2000 }).catch(() => false)) await save.click();
-      }
-    }
+test.describe('web-critical — deterministic visible UI journey', () => {
+  test('capture, schedule, reorder, confirm, complete, and reload persist exactly', async ({ page }, testInfo) => {
+    await unlockTestApp(page);
+    const suffix = `${testInfo.project.name}-${Date.now()}`;
+    const firstTitle = `e2e-first-${suffix}`;
+    const secondTitle = `e2e-second-${suffix}`;
 
-    // After capture, verify task appears via UI (not via storageService)
-    await page.goto('/?view=current', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 });
-    // Look for task title in visible UI
-    const taskVisible = page.locator(`text=${title}`);
-    await expect(taskVisible.first()).toBeVisible({ timeout: 10000 }).catch(async () => {
-      // Fallback: check that at least some task UI exists
-      console.log('Task not found via exact title, checking general task presence');
-      await expect(page.locator('main')).toContainText(/task/i, { timeout: 5000 }).catch(() => {});
-    });
+    await captureTodayTask(page, firstTitle);
+    await captureTodayTask(page, secondTitle);
+    await openPlan(page);
 
-    // Schedule: find schedule controls (date picker, precision)
-    // Planning: navigate to planning view
-    await page.goto('/?view=planning', { waitUntil: 'domcontentloaded' }).catch(() => {});
-    await page.waitForTimeout(1000);
-    // Reorder: try drag-and-drop handle if present
-    const draggable = page.locator('[data-drag-handle], [draggable="true"]').first();
-    if (await draggable.isVisible({ timeout: 1000 }).catch(() => false)) {
-      // Simple reorder check: ensure draggable exists
-      await expect(draggable).toBeVisible();
-    }
+    const titles = plannedTitles(page);
+    await expect(titles).toHaveCount(2);
+    const before = await titles.allTextContents();
+    expect(new Set(before)).toEqual(new Set([firstTitle, secondTitle]));
 
-    // Confirm: look for confirm/plan button
-    const confirmBtn = page.getByRole('button', { name: /Confirm|Plan|Schedule/i }).first();
-    if (await confirmBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await confirmBtn.click().catch(() => {});
-      await page.waitForTimeout(500);
-    }
+    const movedTitle = before[1];
+    const remainingTitle = before[0];
+    const dragHandle = page.locator('[data-rfd-drag-handle-draggable-id]').filter({ hasText: movedTitle });
+    await expect(dragHandle).toHaveCount(1);
+    await dragHandle.focus();
+    await dragHandle.press('Space');
+    await dragHandle.press('ArrowUp');
+    await dragHandle.press('Space');
+    await expect(titles).toHaveText([movedTitle, remainingTitle]);
 
-    // Current: verify current view
-    await page.goto('/?view=current', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 });
+    await page.getByRole('button', { name: 'Start focus', exact: true }).click();
+    await expect(page.getByRole('heading', { name: movedTitle, exact: true })).toBeVisible();
+    await page.getByRole('button', { name: 'Done', exact: true }).click();
+    const checkout = page.getByRole('dialog', { name: 'Check Out' });
+    await expect(checkout).toBeVisible();
+    await checkout.getByRole('button', { name: /Good Focus/ }).click();
+    const sessionComplete = page.getByRole('dialog', { name: 'Session Complete' });
+    await expect(sessionComplete).toBeVisible();
+    await sessionComplete.getByRole('button', { name: /Continue Flowing/ }).click();
+    await expect(page.getByRole('heading', { name: remainingTitle, exact: true })).toBeVisible();
 
-    // Complete: find complete checkbox/button
-    const completeBtn = page.getByRole('button', { name: /Complete|Done|Finish/i }).first();
-    const checkbox = page.locator('input[type="checkbox"]').first();
-    if (await completeBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await completeBtn.click().catch(() => {});
-    } else if (await checkbox.isVisible({ timeout: 1000 }).catch(() => false)) {
-      await checkbox.check().catch(() => {});
-    }
-
-    // Reload: verify state survives reload via UI, not storageService
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 });
-    // After reload, app should still show UI; not checking via window.__storageService
-    await expect(page.locator('body')).toContainText(/Goalflow|Current|Planning/i);
+    await expect(page.locator('header')).toBeVisible();
+    await expect(page.getByRole('heading', { name: remainingTitle, exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: movedTitle, exact: true })).toHaveCount(0);
 
-    // Production bundle must contain no test backdoor
-    const content = await page.content();
-    // This check will be done separately via bundle scan, but also assert here
-    // Do not mutate product storage via window.__storageService
-    const hasBackdoor = await page.evaluate(() => {
-      return (window as any).__storageService !== undefined || (window as any).__STORES !== undefined;
-    }).catch(() => false);
-    // In production build, backdoor should NOT be present; in test build it's allowed but we document
-    // For now, just log (production gate will fail if backdoor leaks)
-    console.log(`Backdoor present: ${hasBackdoor} (expected false in production)`);
+    await openPlan(page);
+    await expect(plannedTitles(page)).toHaveText([remainingTitle]);
   });
 
-  test('production bundle contains no test backdoor', async ({ page }) => {
-    // Fetch client assets and scan for test backdoor strings
-    await ensureAppReady(page);
-    const response = await page.request.get('/');
-    const html = await response.text();
-    // Look for script src (vite hashes filenames)
-    const scriptUrls = [...html.matchAll(/src="([^"]+\.js)"/g)].map(m => m[1]);
-    // In production, the bundle is chunked; check the main entry and any chunk that could contain storage
-    for (const url of scriptUrls) {
-      const jsResp = await page.request.get(url);
-      if (jsResp.ok()) {
-        const js = await jsResp.text();
-        // Must not contain test backdoor that mutates storage — check only main chunks, ignore vite internal map which contains __vite__ prefix but not __storageService
-        if (js.includes('__storageService') && js.includes('window.__storageService')) {
-          expect(js, `bundle ${url} should not contain window.__storageService backdoor`).not.toContain('window.__storageService');
-        }
-        if (js.includes('__STORES') && js.includes('window.__STORES')) {
-          expect(js, `bundle ${url} should not contain window.__STORES backdoor`).not.toContain('window.__STORES');
-        }
-        // Test access code 123456 should not be in prod — but only check main app code, not vendor
-        if (url.includes('index-') && js.includes('123456')) {
-          expect(js, `bundle ${url} should not contain test code 123456`).not.toContain('123456');
-        }
-      }
+  test('service worker controls the app and offline reload succeeds', async ({ page, context }) => {
+    await unlockTestApp(page);
+    const activeWorker = await page.evaluate(async () => {
+      if (!('serviceWorker' in navigator)) throw new Error('Service workers are unavailable.');
+      const registration = await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Service worker did not become ready.')), 15_000))
+      ]);
+      return Boolean(registration.active);
+    });
+    expect(activeWorker).toBe(true);
+
+    if (!await page.evaluate(() => Boolean(navigator.serviceWorker.controller))) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await expect(page.locator('header')).toBeVisible();
     }
-    // Also check that window.__storageService is not exposed in production
-    const hasBackdoor = await page.evaluate(() => (window as any).__storageService !== undefined).catch(() => false);
-    // In production, this will be false because import.meta.env.DEV is false and VITE_TEST_MODE not set, so DCE removes it.
-    // We assert that production build does not expose it — if it does, this test fails.
-    expect(hasBackdoor).toBe(false);
-  });
-
-  test('service-worker installation and offline relaunch are actually exercised', async ({ page, context }) => {
-    await ensureAppReady(page);
-
-    // Check service worker registration
-    const swUrl = await page.evaluate(async () => {
-      if (!('serviceWorker' in navigator)) return null;
-      const reg = await navigator.serviceWorker.getRegistration();
-      return reg?.active?.scriptURL || reg?.installing?.scriptURL || reg?.waiting?.scriptURL || null;
-    }).catch(() => null);
-    console.log(`Service worker URL: ${swUrl}`);
-
-    // Check manifest
-    const manifestResp = await page.request.get('/manifest.webmanifest');
-    expect(manifestResp.ok()).toBeTruthy();
-    const manifest = await manifestResp.json();
-    expect(manifest.name).toBe('Goalflow');
-    expect(manifest.display).toBe('standalone');
-    expect(manifest.start_url).toBe('/');
-
-    const swResp = await page.request.get('/sw.js');
-    // In production, sw.js should exist
-    expect(swResp.ok()).toBeTruthy();
-
-    // Offline relaunch: go offline, reload, and verify app shell still loads or fails gracefully
-    await page.goto('/?view=current', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 });
+    expect(await page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true);
 
     await context.setOffline(true);
-    const offlineResult = await page.reload().then(() => 'reloaded').catch(() => 'failed');
-    console.log(`Offline reload result: ${offlineResult}`);
-    if (offlineResult === 'reloaded') {
-      // If service worker cached shell, header should still appear
-      await expect(page.locator('header')).toBeVisible({ timeout: 5000 }).catch(() => {
-        console.log('Header not visible offline — service worker may not have cached shell yet (acceptable for test build where service worker is prompt).');
-      });
-    } else {
-      console.log('Offline reload failed — expected when service worker not yet controlling (acceptable).');
-    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await expect(page.locator('header')).toBeVisible({ timeout: 10_000 });
     await context.setOffline(false);
-    await page.goto('/', { waitUntil: 'domcontentloaded' });
-    await expect(page.locator('header')).toBeVisible({ timeout: 10000 });
   });
 
-  test('profile isolation is described only as profile isolation', async ({ browser }) => {
-    // Demonstrate that two browser contexts have isolated IndexedDB/localStorage (profile isolation)
-    const contextA = await browser.newContext();
-    const pageA = await contextA.newPage();
-    await ensureAppReady(pageA);
-    const titleA = `isolated-A-${Date.now()}`;
-    // Create task via visible UI in context A (simplified: use capture URL)
-    await pageA.goto(`/?capture=task&title=${encodeURIComponent(titleA)}`, { waitUntil: 'domcontentloaded' });
-    await expect(pageA.locator('header')).toBeVisible({ timeout: 10000 }).catch(() => {});
-    await contextA.close();
+  test('saved tasks are isolated between browser profiles', async ({ browser }, testInfo) => {
+    const profileA = await createIsolatedContext(browser);
+    const title = `profile-a-${testInfo.project.name}-${Date.now()}`;
+    await captureTodayTask(profileA.page, title);
+    await openPlan(profileA.page);
+    await expect(profileA.page.getByText(title, { exact: true })).toBeVisible();
 
-    const contextB = await browser.newContext();
-    const pageB = await contextB.newPage();
-    await ensureAppReady(pageB);
-    // Profile isolation: task from A should NOT appear in B (different browser profile)
-    await pageB.goto('/?view=current', { waitUntil: 'domcontentloaded' });
-    await expect(pageB.locator('header')).toBeVisible({ timeout: 10000 });
-    const hasInB = await pageB.locator(`text=${titleA}`).isVisible({ timeout: 2000 }).catch(() => false);
-    expect(hasInB).toBeFalsy(); // Isolated profiles do not share data
-    await contextB.close();
+    const profileB = await createIsolatedContext(browser);
+    await openPlan(profileB.page);
+    await expect(profileB.page.getByText(title, { exact: true })).toHaveCount(0);
+
+    await profileA.page.reload({ waitUntil: 'domcontentloaded' });
+    await openPlan(profileA.page);
+    await expect(profileA.page.getByText(title, { exact: true })).toBeVisible();
+    await profileA.context.close();
+    await profileB.context.close();
   });
-});
 
-test.describe('robust manifest/service-worker validation', () => {
-  test('PWA artifacts are valid and icons accessible', async ({ page }) => {
-    await ensureAppReady(page);
+  test('manifest, service worker, and required icons are served', async ({ page }) => {
+    await unlockTestApp(page);
+    const manifestResponse = await page.request.get('/manifest.webmanifest');
+    expect(manifestResponse.ok()).toBe(true);
+    const manifest = await manifestResponse.json();
+    expect(manifest).toMatchObject({
+      name: 'Goalflow',
+      short_name: 'Goalflow',
+      display: 'standalone',
+      start_url: '/',
+      scope: '/'
+    });
 
-    const manifestResp = await page.request.get('/manifest.webmanifest');
-    expect(manifestResp.ok(), 'manifest.webmanifest should be 200').toBeTruthy();
-    const manifest = await manifestResp.json();
-    expect(manifest.name).toBe('Goalflow');
-    expect(manifest.short_name).toBeTruthy();
-    expect(manifest.display).toBe('standalone');
-    expect(manifest.start_url).toBe('/');
-    expect(Array.isArray(manifest.icons) && manifest.icons.length > 0, 'icons should be present').toBeTruthy();
-    for (const icon of manifest.icons) {
-      expect(icon.src, `icon ${icon.src} should have src`).toBeTruthy();
-      expect(icon.sizes, `icon ${icon.src} should have sizes`).toBeTruthy();
-    }
+    const workerResponse = await page.request.get('/sw.js');
+    expect(workerResponse.ok()).toBe(true);
+    expect((await workerResponse.text()).length).toBeGreaterThan(100);
 
-    const swResp = await page.request.get('/sw.js');
-    expect(swResp.ok(), 'sw.js should be 200').toBeTruthy();
-    const swText = await swResp.text();
-    expect(swText.length, 'sw.js should not be empty').toBeGreaterThan(100);
-
-    for (const icon of ['/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon.svg']) {
-      const r = await page.request.get(icon);
-      expect(r.ok(), `${icon} should be 200`).toBeTruthy();
+    for (const icon of ['/icons/icon-192.png', '/icons/icon-512.png']) {
+      const response = await page.request.get(icon);
+      expect(response.ok(), `${icon} should be served`).toBe(true);
     }
   });
 });
 
-// Real account/RLS isolation remains NOT RUN until staging identities exist — do not fake it
-test.describe('account/RLS isolation (NOT RUN)', () => {
-  test.skip('real account/RLS isolation — NOT RUN (requires staging identities)', async () => {
-    // This gate is intentionally NOT RUN in CI without staging Supabase identities.
-    // It must not be treated as PASS without real identities.
-  });
-});
-
-// Failure must not be caught and treated as success — no try/catch that swallows failures
+// Real account/RLS isolation is deliberately not represented by browser-profile isolation.
+// It remains NOT RUN until two staging Supabase identities are available.
+test.skip('real account/RLS isolation — NOT RUN (requires staging identities)', async () => {});

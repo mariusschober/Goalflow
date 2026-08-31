@@ -14,6 +14,7 @@ const testAccessStorageKey = 'goalflow-test-access';
 
 export const isTestBuild = (): boolean => testBuild;
 export const isLocalDemo = (): boolean => localDemo || testBuild;
+export const shouldDisableServiceWorker = (): boolean => localDemo;
 
 export const hasTestAccess = (): boolean => testBuild
   && typeof window !== 'undefined'

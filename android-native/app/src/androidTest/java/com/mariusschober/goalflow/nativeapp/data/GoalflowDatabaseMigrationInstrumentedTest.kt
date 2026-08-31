@@ -56,7 +56,9 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                 }
                 if (startVersion >= 6) {
                     execSQL("INSERT INTO task_events (id,taskId,eventType,localDate,metadata,createdAt) VALUES ('event-$startVersion','task-$startVersion','completed','2026-08-27','{}',1000)")
-                    execSQL("INSERT INTO local_account (bindingKey,userId) VALUES ('singleton','00000000-0000-4000-8000-0000000000$startVersion')")
+                }
+                if (startVersion >= 7) {
+                    execSQL("INSERT INTO local_account (bindingKey,userId) VALUES ('owner','00000000-0000-4000-8000-0000000000$startVersion')")
                 }
                 version = startVersion
                 close()
@@ -100,7 +102,7 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                     assertEquals(1, migrated.taskEventDao().getAll().size)
                 }
                 // Account binding
-                if (startVersion >= 6) {
+                if (startVersion >= 7) {
                     val account = migrated.localAccountDao().get()
                     assertNotNull(account)
                     assertEquals("00000000-0000-4000-8000-0000000000$startVersion", account!!.userId)
@@ -108,7 +110,6 @@ class GoalflowDatabaseMigrationInstrumentedTest {
                     assertEquals(null, migrated.localAccountDao().get())
                     migrated.localAccountDao().insert(LocalAccountEntity(userId = "00000000-0000-4000-8000-000000000001"))
                     assertEquals("00000000-0000-4000-8000-000000000001", migrated.localAccountDao().get()?.userId)
-                    migrated.localAccountDao().clear()
                 }
                 if (startVersion >= 5) assertEquals("{}", migrated.rawCollectionDao().get("stats")?.payload)
                 // Verify 7->8 indices exist
