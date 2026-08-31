@@ -1198,12 +1198,11 @@ export const storageService = {
   }
 };
 
-// Test hook: expose storage for Playwright durability verification (only in test/dev builds)
-if (typeof window !== 'undefined') {
+// Test hook: expose storage for durability verification — only when Vite test mode is explicitly enabled.
+// Vite will dead-code-eliminate this branch in production (import.meta.env.DEV === false and VITE_TEST_MODE unset).
+if (typeof window !== 'undefined' && import.meta.env.DEV) {
   try {
-    const env = (import.meta as unknown as { env: Record<string, unknown> }).env;
-    const isTest = env?.VITE_TEST_MODE === 'true' || Boolean(env?.DEV);
-    if (isTest) {
+    if (import.meta.env.VITE_TEST_MODE === 'true') {
       (window as unknown as Record<string, unknown>).__storageService = storageService;
       (window as unknown as Record<string, unknown>).__STORES = STORES;
     }
