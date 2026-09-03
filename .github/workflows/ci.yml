@@ -528,7 +528,6 @@ jobs:
       GOALFLOW_STAGING_USER_B_EMAIL: ${{ secrets.GOALFLOW_STAGING_USER_B_EMAIL }}
       GOALFLOW_STAGING_USER_B_PASSWORD: ${{ secrets.GOALFLOW_STAGING_USER_B_PASSWORD }}
       GOALFLOW_STAGING_USER_B_ID: ${{ secrets.GOALFLOW_STAGING_USER_B_ID }}
-      GOALFLOW_CROSS_CLIENT_STATE_FILE: ${{ runner.temp }}/goalflow-cross-client-state.json
     steps:
       - name: Require complete cross-client configuration on release candidates
         id: preflight
@@ -591,6 +590,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Configure private cross-client handoff path
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          printf 'GOALFLOW_CROSS_CLIENT_STATE_FILE=%s\n' \
+            "$RUNNER_TEMP/goalflow-cross-client-state.json" >> "$GITHUB_ENV"
       - name: Install cross-client test dependencies
         if: steps.preflight.outputs.run == 'true'
         run: |
