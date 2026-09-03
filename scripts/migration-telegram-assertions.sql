@@ -192,6 +192,7 @@ declare
   session_id constant uuid := '34343434-3434-4434-8434-343434343434';
   token_hash constant text := repeat('d', 64);
   init_hash constant text := repeat('e', 64);
+  revoke_result boolean;
 begin
   insert into public.telegram_identities (
     telegram_user_id, user_id, telegram_username, bot_access_granted
@@ -228,8 +229,11 @@ begin
   if (select telegram_user_id from public.telegram_identities where user_id = target_user) <> 4243 then
     raise exception 'Telegram relink did not preserve exact ownership';
   end if;
-  if not public.goalflow_revoke_user_telegram_access(target_user)
-    or (select bot_access_granted from public.telegram_identities where user_id = target_user) then
+  -- Do not combine the mutating RPC and the state read in one boolean
+  -- expression: PostgreSQL does not guarantee subexpression evaluation order.
+  revoke_result := public.goalflow_revoke_user_telegram_access(target_user);
+  if revoke_result is not true
+    or (select bot_access_granted from public.telegram_identities where user_id = target_user) is not false then
     raise exception 'Telegram unlink did not revoke bot access';
   end if;
   if has_function_privilege('authenticated', 'public.goalflow_link_telegram_identity(uuid,bigint,text)', 'EXECUTE')
