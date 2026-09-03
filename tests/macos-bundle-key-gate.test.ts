@@ -14,7 +14,7 @@ const base64url = (value: object): string =>
 const legacyKey = (role: 'anon' | 'service_role'): string =>
   [base64url({ alg: 'HS256', typ: 'JWT' }), base64url({ role }), 'synthetic-signature'].join('.');
 
-const verify = async (key: string): Promise<string> => {
+const verify = async (key: string, plutilFails = false): Promise<string> => {
   const root = await mkdtemp(path.join(tmpdir(), 'goalflow-macos-key-gate-'));
   temporaryDirectories.push(root);
   const app = path.join(root, 'GoalflowMac.app');
@@ -26,6 +26,7 @@ const verify = async (key: string): Promise<string> => {
   const fakePlutil = path.join(bin, 'plutil');
   await writeFile(fakePlutil, `#!/usr/bin/env bash
 set -euo pipefail
+if [ "\${GOALFLOW_PLUTIL_FAIL:-false}" = "true" ]; then exit 1; fi
 if [ "$2" = "SUPABASE_PUBLISHABLE_KEY" ]; then
   printf '%s' "$GOALFLOW_TEST_KEY"
 elif [ "$2" = "role" ]; then
@@ -41,6 +42,7 @@ fi
     env: {
       ...process.env,
       GOALFLOW_TEST_KEY: key,
+      GOALFLOW_PLUTIL_FAIL: String(plutilFails),
       PATH: `${bin}:${process.env.PATH ?? ''}`,
     },
   });
@@ -70,5 +72,9 @@ describe('macOS distributable Supabase key gate', () => {
     );
     expect(workflow).toContain('macos-native/scripts/verify-built-app-key.sh "$app"');
     expect(workflow).not.toContain("grep -ERaiq 'sb_secret_");
+  });
+
+  it('fails closed when the built property list cannot be inspected', async () => {
+    await expect(verify('', true)).rejects.toThrow();
   });
 });

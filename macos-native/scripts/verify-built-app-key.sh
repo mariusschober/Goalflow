@@ -14,7 +14,9 @@ info_plist="$app_path/Contents/Info.plist"
 [ -f "$info_plist" ] || fail "application bundle has no Info.plist"
 command -v plutil >/dev/null 2>&1 || fail "plutil is required"
 
-publishable_key="$(plutil -extract SUPABASE_PUBLISHABLE_KEY raw -o - "$info_plist" 2>/dev/null || true)"
+if ! publishable_key="$(plutil -extract SUPABASE_PUBLISHABLE_KEY raw -o - "$info_plist" 2>/dev/null)"; then
+  fail "the public key could not be read from the application Info.plist"
+fi
 
 # An unconfigured development build is valid and remains explicitly disconnected.
 if [ -z "$publishable_key" ]; then
@@ -55,7 +57,9 @@ chmod 600 "$payload_file"
 
 printf '%s' "$encoded_payload" | openssl base64 -d -A > "$payload_file" 2>/dev/null \
   || fail "the configured legacy JWT payload cannot be decoded"
-legacy_role="$(plutil -extract role raw -o - "$payload_file" 2>/dev/null || true)"
+if ! legacy_role="$(plutil -extract role raw -o - "$payload_file" 2>/dev/null)"; then
+  fail "the configured legacy JWT payload has no readable top-level role"
+fi
 [ "$legacy_role" = "anon" ] \
   || fail "the configured legacy JWT is not an anonymous client key"
 
