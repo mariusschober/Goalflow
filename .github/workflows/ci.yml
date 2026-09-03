@@ -271,7 +271,7 @@ jobs:
           disable-animations: true
           working-directory: ${{ github.workspace }}
           script: |
-            set -euo pipefail
+            set -eu
             sleep 45
             apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"
             [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }

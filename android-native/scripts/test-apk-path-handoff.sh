@@ -6,15 +6,22 @@ trap 'rm -rf "$work_dir"' EXIT
 repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 workflow="$repo_root/.github/workflows/ci.yml"
 [ -f "$workflow" ]
-grep -F 'working-directory: ${{ github.workspace }}' "$workflow" >/dev/null
-grep -F 'apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"' "$workflow" >/dev/null
-grep -F '[ -n "$apk" ] && [ -f "$apk" ] || {' "$workflow" >/dev/null
-grep -F 'android-native/scripts/diagnose-apk.sh "$apk"' "$workflow" >/dev/null
-if grep -F 'apk="$GOALFLOW_PRODUCTION_DEBUG_APK"' "$workflow" >/dev/null; then
+emulator_block="$(sed -n '/- name: Run native emulator journey/,/- name: Upload native production debug APK/p' "$workflow")"
+[ -n "$emulator_block" ]
+printf '%s\n' "$emulator_block" | grep -F 'working-directory: ${{ github.workspace }}' >/dev/null
+printf '%s\n' "$emulator_block" | grep -F 'set -eu' >/dev/null
+printf '%s\n' "$emulator_block" | grep -F 'apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"' >/dev/null
+printf '%s\n' "$emulator_block" | grep -F '[ -n "$apk" ] && [ -f "$apk" ] || {' >/dev/null
+printf '%s\n' "$emulator_block" | grep -F 'android-native/scripts/diagnose-apk.sh "$apk"' >/dev/null
+if printf '%s\n' "$emulator_block" | grep -F 'set -euo pipefail' >/dev/null; then
+    echo "The emulator action runs its script with POSIX sh; Bash pipefail is not valid there." >&2
+    exit 1
+fi
+if printf '%s\n' "$emulator_block" | grep -F 'apk="$GOALFLOW_PRODUCTION_DEBUG_APK"' >/dev/null; then
     echo "Workflow still depends on an action-internal environment handoff." >&2
     exit 1
 fi
-if grep -F 'apk="${{ github.workspace }}/android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"' "$workflow" >/dev/null; then
+if printf '%s\n' "$emulator_block" | grep -F 'apk="${{ github.workspace }}/android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"' >/dev/null; then
     echo "Workflow still depends on an absolute host path inside the action." >&2
     exit 1
 fi
