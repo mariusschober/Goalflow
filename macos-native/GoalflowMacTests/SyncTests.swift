@@ -16,6 +16,21 @@ final class StableJsonTests: XCTestCase {
         XCTAssertEqual(stableJson(nil), "null")
         XCTAssertEqual(stableJson([1,2,3]), "[1,2,3]")
     }
+
+    func test_any_codable_preserves_integer_and_boolean_types() throws {
+        let original = AnyCodable([
+            "zero": 0,
+            "one": 1,
+            "enabled": true,
+            "disabled": false
+        ])
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode(original))
+        let object = try XCTUnwrap(decoded.value as? [String: Any])
+        XCTAssertEqual(object["zero"] as? Int, 0)
+        XCTAssertEqual(object["one"] as? Int, 1)
+        XCTAssertEqual(object["enabled"] as? Bool, true)
+        XCTAssertEqual(object["disabled"] as? Bool, false)
+    }
 }
 
 final class SyncMetaTests: XCTestCase {

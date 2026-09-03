@@ -72,9 +72,9 @@ struct AnyCodable: Codable, Equatable, Sendable {
     init(from decoder: Decoder) throws {
         let c = try decoder.singleValueContainer()
         if c.decodeNil() { value = nil; return }
-        if let b = try? c.decode(Bool.self) { value = b; return }
         if let i = try? c.decode(Int.self) { value = i; return }
         if let d = try? c.decode(Double.self) { value = d; return }
+        if let b = try? c.decode(Bool.self) { value = b; return }
         if let s = try? c.decode(String.self) { value = s; return }
         if let a = try? c.decode([AnyCodable].self) { value = a.map(\.value); return }
         if let d = try? c.decode([String: AnyCodable].self) { value = d.mapValues(\.value); return }

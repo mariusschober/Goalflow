@@ -13,7 +13,6 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
     guard Set(resultIds).count == resultIds.count && resultIds.allSatisfy({ batchIds.contains($0) }) else {
         throw SyncError.validation("Sync push response did not acknowledge exactly the submitted mutations. Pending mutations were not changed.")
     }
-    let batchById = Dictionary(uniqueKeysWithValues: batch.map { ($0.mutationId, $0) })
     let resultsById = Dictionary(uniqueKeysWithValues: results.map { ($0.mutationId, $0) })
     // Validate each result
     for (idx, mut) in batch.enumerated() {

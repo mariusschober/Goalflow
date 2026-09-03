@@ -19,9 +19,25 @@ final class SyncEngine: @unchecked Sendable {
     private let transport: any SyncTransport
     private let storeBridge: any SyncStoreBridge
     private let gate = SyncGate()
+    private let retrySleeper: @Sendable (UInt64) async throws -> Void
+    private let retryJitter: @Sendable (UInt64) -> UInt64
 
-    init(metaStore: SyncMetaStore = SyncMetaStore(), deviceIdStore: DeviceIdStore = DeviceIdStore(), transport: any SyncTransport = URLSessionSyncTransport(), storeBridge: any SyncStoreBridge = FileSyncStoreBridge()) {
-        self.metaStore = metaStore; self.deviceIdStore = deviceIdStore; self.transport = transport; self.storeBridge = storeBridge
+    init(
+        metaStore: SyncMetaStore = SyncMetaStore(),
+        deviceIdStore: DeviceIdStore = DeviceIdStore(),
+        transport: any SyncTransport = URLSessionSyncTransport(),
+        storeBridge: any SyncStoreBridge = FileSyncStoreBridge(),
+        retrySleeper: @escaping @Sendable (UInt64) async throws -> Void = { try await Task<Never, Never>.sleep(nanoseconds: $0) },
+        retryJitter: @escaping @Sendable (UInt64) -> UInt64 = { maximum in
+            maximum == 0 ? 0 : UInt64.random(in: 0...maximum)
+        }
+    ) {
+        self.metaStore = metaStore
+        self.deviceIdStore = deviceIdStore
+        self.transport = transport
+        self.storeBridge = storeBridge
+        self.retrySleeper = retrySleeper
+        self.retryJitter = retryJitter
     }
 
     func synchronize() async throws {
@@ -146,10 +162,10 @@ final class SyncEngine: @unchecked Sendable {
             }
             // Mark attempted
             let now = ISO8601DateFormatter().string(from: Date())
-            var metaAttempted = markMutationsAttempted(meta, ids: batch.map(\.mutationId), now: now)
+            let metaAttempted = markMutationsAttempted(meta, ids: batch.map(\.mutationId), now: now)
             try metaStore.save(metaAttempted)
             let body = try JSONSerialization.data(withJSONObject: ["mutations": wire], options: [])
-            let (data, resp) = try await transport.request(path: "/api/v1/sync/push", method: "POST", headers: [:], body: body)
+            let (data, resp) = try await requestWithRetry(path: "/api/v1/sync/push", method: "POST", body: body)
             guard (200..<300).contains(resp.statusCode) else {
                 throw SyncError.validation("Sync push failed HTTP \(resp.statusCode)")
             }
@@ -199,7 +215,7 @@ final class SyncEngine: @unchecked Sendable {
         while hasMore {
             let meta = try metaStore.load()
             let cursorBefore = meta.cursor
-            let (data, resp) = try await transport.request(path: "/api/v1/sync/pull?cursor=\(cursorBefore)&limit=100", method: "GET", headers: [:], body: nil)
+            let (data, resp) = try await requestWithRetry(path: "/api/v1/sync/pull?cursor=\(cursorBefore)&limit=100", method: "GET", body: nil)
             guard (200..<300).contains(resp.statusCode) else { throw SyncError.validation("Sync pull failed HTTP \(resp.statusCode)") }
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let recordsArr = obj["records"] as? [[String: Any]],
@@ -258,5 +274,55 @@ final class SyncEngine: @unchecked Sendable {
 
     private func isValidUUID(_ s: String) -> Bool {
         UUID(uuidString: s) != nil
+    }
+
+    private func requestWithRetry(path: String, method: String, body: Data?) async throws -> (Data, HTTPURLResponse) {
+        let maximumAttempts = 4
+        var attempt = 1
+        while true {
+            do {
+                let result = try await transport.request(path: path, method: method, headers: [:], body: body)
+                if Self.isTransientStatus(result.1.statusCode), attempt < maximumAttempts {
+                    try await waitBeforeRetry(afterAttempt: attempt)
+                    attempt += 1
+                    continue
+                }
+                return result
+            } catch {
+                guard Self.isTransientTransportError(error), attempt < maximumAttempts else { throw error }
+                try await waitBeforeRetry(afterAttempt: attempt)
+                attempt += 1
+            }
+        }
+    }
+
+    private func waitBeforeRetry(afterAttempt attempt: Int) async throws {
+        let cap: UInt64 = 2_000_000_000
+        let exponent = UInt64(max(0, min(attempt - 1, 3)))
+        let base = min(cap, 250_000_000 << exponent)
+        let jitterMaximum = base / 4
+        let jitter = min(retryJitter(jitterMaximum), jitterMaximum)
+        try await retrySleeper(min(cap, base + jitter))
+    }
+
+    private static func isTransientStatus(_ status: Int) -> Bool {
+        status >= 500 || [408, 425, 429].contains(status)
+    }
+
+    private static func isTransientTransportError(_ error: Error) -> Bool {
+        if let keychainError = error as? KeychainError, case .transient = keychainError { return true }
+        guard let urlError = error as? URLError else { return false }
+        return [
+            .timedOut,
+            .cannotFindHost,
+            .cannotConnectToHost,
+            .networkConnectionLost,
+            .dnsLookupFailed,
+            .notConnectedToInternet,
+            .resourceUnavailable,
+            .internationalRoamingOff,
+            .callIsActive,
+            .dataNotAllowed
+        ].contains(urlError.code)
     }
 }

@@ -1,6 +1,24 @@
 import XCTest
 @testable import GoalflowMac
 
+private actor SyncRetryProbe {
+    private var attempts = 0
+    private var delays: [UInt64] = []
+
+    func nextAttempt() -> Int {
+        attempts += 1
+        return attempts
+    }
+
+    func recordDelay(_ nanoseconds: UInt64) {
+        delays.append(nanoseconds)
+    }
+
+    func snapshot() -> (attempts: Int, delays: [UInt64]) {
+        (attempts, delays)
+    }
+}
+
 final class HardeningTests: XCTestCase {
     private var repositoryRoot: URL {
         URL(fileURLWithPath: #filePath)
@@ -131,6 +149,110 @@ final class HardeningTests: XCTestCase {
         try await a
         try await b
         XCTAssertTrue(true)
+    }
+
+    func test_sync_retries_transient_status_with_capped_backoff() async throws {
+        let suite = "goalflow.sync.retry.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = SyncRetryProbe()
+        let transport = MockSyncTransport()
+        transport.pullHandler = { _ in
+            let attempt = await probe.nextAttempt()
+            let status = attempt < 3 ? 503 : 200
+            let data = try JSONSerialization.data(withJSONObject: ["records": [], "nextCursor": 0, "hasMore": false])
+            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: FileSyncStoreBridge(baseDir: directory, defaults: defaults),
+            retrySleeper: { await probe.recordDelay($0) },
+            retryJitter: { _ in 0 }
+        )
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
+
+        try await engine.synchronize()
+
+        let result = await probe.snapshot()
+        XCTAssertEqual(result.attempts, 3)
+        XCTAssertEqual(result.delays, [250_000_000, 500_000_000])
+    }
+
+    func test_sync_does_not_retry_permanent_validation_status() async throws {
+        let suite = "goalflow.sync.no-retry.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = SyncRetryProbe()
+        let transport = MockSyncTransport()
+        transport.pullHandler = { _ in
+            _ = await probe.nextAttempt()
+            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 422, httpVersion: nil, headerFields: nil)!
+            return (Data(), response)
+        }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: FileSyncStoreBridge(baseDir: directory, defaults: defaults),
+            retrySleeper: { await probe.recordDelay($0) },
+            retryJitter: { _ in 0 }
+        )
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
+
+        do {
+            try await engine.synchronize()
+            XCTFail("A permanent validation response must fail synchronization.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("422"))
+        }
+        let result = await probe.snapshot()
+        XCTAssertEqual(result.attempts, 1)
+        XCTAssertTrue(result.delays.isEmpty)
+    }
+
+    func test_sync_retries_timeout_without_changing_operation_identity() async throws {
+        let suite = "goalflow.sync.timeout-retry.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let probe = SyncRetryProbe()
+        let transport = MockSyncTransport()
+        transport.pullHandler = { _ in
+            let attempt = await probe.nextAttempt()
+            if attempt == 1 { throw URLError(.timedOut) }
+            let data = try JSONSerialization.data(withJSONObject: ["records": [], "nextCursor": 0, "hasMore": false])
+            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
+        }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: FileSyncStoreBridge(baseDir: directory, defaults: defaults),
+            retrySleeper: { await probe.recordDelay($0) },
+            retryJitter: { _ in 0 }
+        )
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
+
+        try await engine.synchronize()
+
+        let result = await probe.snapshot()
+        XCTAssertEqual(result.attempts, 2)
+        XCTAssertEqual(result.delays, [250_000_000])
     }
 
     func test_a11y_labels_exist() {
