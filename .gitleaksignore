@@ -1,0 +1,4 @@
+# Proven-synthetic Telegram test fixtures on the archived feat/telegram-v1
+# lineage. These are exact finding fingerprints, not rule or path exclusions.
+04aa5b4d97de0f626bd824c6b1c51c651cc14a1d:server/telegram/bot.adversarial.test.ts:generic-api-key:90
+bb5c7af0908dde92913795cd149a1c3ab6e3df06:server/telegram/bot.test.ts:generic-api-key:139
