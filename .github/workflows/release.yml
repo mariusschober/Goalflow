@@ -109,6 +109,7 @@ jobs:
       - run: npm run verify:migrations
       - run: node scripts/verify-migration-hashes.mjs
       - run: node scripts/verify-room-schema-hashes.mjs
+      - run: npm run audit:dependencies
       - name: Cache native Gradle
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:

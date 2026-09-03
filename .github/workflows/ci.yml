@@ -37,7 +37,7 @@ jobs:
       - run: node scripts/verify-migration-hashes.mjs
       - run: node scripts/verify-room-schema-hashes.mjs
       - run: node scripts/check-durable-identifiers.mjs
-      - run: npm audit --audit-level=high
+      - run: npm run audit:dependencies
       - name: Verify production startup
         run: npm run verify:server
       - name: Verify one-shot maintenance fails closed
@@ -325,7 +325,7 @@ jobs:
         run: npm run verify:maintenance
       - run: npm run verify:client-secrets
       - run: npm run verify:client-artifacts
-      - run: npm audit --audit-level=high
+      - run: npm run audit:dependencies
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium webkit
       - name: Run Playwright web-critical journeys (chromium + webkit)
