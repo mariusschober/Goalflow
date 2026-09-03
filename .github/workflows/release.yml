@@ -16,7 +16,7 @@ jobs:
   verify-release-source:
     runs-on: ubuntu-latest
     steps:
-      - name: Require canonical main with a green canonical gate
+      - name: Require main with a green beta gate
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -28,12 +28,12 @@ jobs:
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
             "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100")"
-          successful="$(printf '%s' "$response" | jq '[.check_runs[] | select(.name == "canonical-gate" and .status == "completed" and .conclusion == "success")] | length')"
+          successful="$(printf '%s' "$response" | jq '[.check_runs[] | select(.name == "beta-gate" and .status == "completed" and .conclusion == "success")] | length')"
           if [ "$successful" -lt 1 ]; then
-            echo "Commit $GITHUB_SHA does not have a successful canonical-gate check." >&2
+            echo "Commit $GITHUB_SHA does not have a successful beta-gate check." >&2
             exit 1
           fi
-          echo "Release source verified: canonical main at $GITHUB_SHA with canonical-gate success."
+          echo "Release source verified: main at $GITHUB_SHA with beta-gate success."
 
   verify-signing-secrets:
     needs: verify-release-source
@@ -166,7 +166,7 @@ jobs:
             android-native/app/build/outputs/**/*.aab.sha256
           if-no-files-found: error
 
-  canonical-gate-release:
+  release-gate:
     needs: [verify-release-source, verify-signing-secrets, release]
     runs-on: ubuntu-latest
     if: always()
@@ -177,4 +177,4 @@ jobs:
           if [ "${{ needs.verify-release-source.result }}" != "success" ]; then echo "verify-release-source failed" >&2; exit 1; fi
           if [ "${{ needs.verify-signing-secrets.result }}" != "success" ]; then echo "verify-signing-secrets failed" >&2; exit 1; fi
           if [ "${{ needs.release.result }}" != "success" ]; then echo "release failed" >&2; exit 1; fi
-          echo "release canonical-gate PASS"
+          echo "release-gate PASS"

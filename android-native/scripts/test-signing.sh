@@ -1,36 +1,13 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Test signing for release artifacts. If no keystore, skip (local dev).
-if [ -z "${ANDROID_KEYSTORE_BASE64:-}" ] && [ ! -f "${HOME}/.gradle/gradle.properties" ]; then
-  echo "SIGNING=SKIP (no keystore)"
-  exit 0
-fi
-
-# Find apksigner
-APKSIGNER=""
-for p in "$ANDROID_HOME/build-tools"/*/apksigner; do
-  if [ -x "$p" ]; then APKSIGNER="$p"; break; fi
-done
-if [ -z "$APKSIGNER" ]; then
-  echo "SIGNING=SKIP (apksigner not found)"
-  exit 0
+# Compatibility wrapper for manual checks. When signing material is configured,
+# absence of an APK or verifier is a failure rather than a skip.
+expect_signed="${ANDROID_EXPECT_SIGNED:-0}"
+if [[ -n "${ANDROID_KEYSTORE_BASE64:-}" || -n "${ANDROID_KEYSTORE_PASSWORD:-}" \
+  || -n "${ANDROID_KEY_ALIAS:-}" || -n "${ANDROID_KEY_PASSWORD:-}" ]]; then
+  expect_signed=1
 fi
 
-apk=$(find android-native/app/build/outputs/apk/production/release -name "*.apk" 2>/dev/null | head -n 1)
-if [ -z "$apk" ] || [ ! -f "$apk" ]; then
-  echo "SIGNING=SKIP (no release apk)"
-  exit 0
-fi
-
-echo "Checking $apk"
-"$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | tee /tmp/certs.txt
-if grep -q "CN=Android Debug" /tmp/certs.txt; then
-  echo "SIGNING=FAIL (debug cert, expected release CN=Goalflow)" >&2
-  exit 1
-fi
-if grep -q "CN=Goalflow" /tmp/certs.txt; then
-  echo "SIGNING=PASS (release cert CN=Goalflow)"
-  exit 0
-fi
-echo "SIGNING=PASS (release cert, no debug)"
+ANDROID_EXPECT_SIGNED="$expect_signed" \
+  exec bash "$(dirname "$0")/verify-signing-strict.sh" "${1:-}"

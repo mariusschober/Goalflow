@@ -1,79 +1,65 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Owner-device installation for T807D_EEA (ZXKRS4VKGQ8PWGEQ)
-APK="android-native/app/build/outputs/apk/production/release/app-production-release.apk"
-if [ ! -f "$APK" ]; then
-  echo "OWNER_INSTALL=SKIP (no release apk)"
-  exit 0
-fi
+apk="${1:-android-native/app/build/outputs/apk/production/release/app-production-release.apk}"
+[[ -f "$apk" ]] || { echo "OWNER_INSTALL=FAIL (missing release APK: $apk)" >&2; exit 1; }
 
-# Find aapt and apksigner
-AAPT=""
-for p in "$ANDROID_HOME/build-tools/35.0.0/aapt" "$ANDROID_HOME/build-tools"/*/aapt; do [ -x "$p" ] && AAPT="$p" && break; done
-APKSIGNER=""
-for p in "$ANDROID_HOME/build-tools/35.0.0/apksigner" "$ANDROID_HOME/build-tools"/*/apksigner; do [ -x "$p" ] && APKSIGNER="$p" && break; done
+sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+find_android_tool() {
+  local name="$1"
+  local result=""
+  if command -v "$name" >/dev/null 2>&1; then command -v "$name"; return; fi
+  [[ -n "$sdk_root" && -d "$sdk_root/build-tools" ]] || return 1
+  while IFS= read -r candidate; do [[ -x "$candidate" ]] && result="$candidate"; done \
+    < <(find "$sdk_root/build-tools" -type f -name "$name" -print 2>/dev/null | sort -V)
+  [[ -n "$result" ]] || return 1
+  printf '%s\n' "$result"
+}
+aapt_bin="$(find_android_tool aapt)" || { echo 'OWNER_INSTALL=FAIL (aapt unavailable)' >&2; exit 1; }
+apksigner_bin="$(find_android_tool apksigner)" || { echo 'OWNER_INSTALL=FAIL (apksigner unavailable)' >&2; exit 1; }
+adb_bin="$(command -v adb || true)"
+[[ -n "$adb_bin" ]] || { echo 'OWNER_INSTALL=FAIL (adb unavailable)' >&2; exit 1; }
+adb_command=("$adb_bin")
+if [[ -n "${GOALFLOW_ANDROID_SERIAL:-}" ]]; then adb_command+=( -s "$GOALFLOW_ANDROID_SERIAL" ); fi
+[[ "$("${adb_command[@]}" get-state 2>/dev/null || true)" == device ]] || {
+  echo 'OWNER_INSTALL=FAIL (selected device unavailable)' >&2
+  exit 1
+}
 
-PKG=$($AAPT dump badging "$APK" 2>/dev/null | grep -o "package: name='[^']*'" | cut -d"'" -f2)
-VCODE=$($AAPT dump badging "$APK" 2>/dev/null | grep -o "versionCode='[^']*'" | cut -d"'" -f2)
-VNAME=$($AAPT dump badging "$APK" 2>/dev/null | grep -o "versionName='[^']*'" | cut -d"'" -f2)
+badging="$("$aapt_bin" dump badging "$apk")"
+package_name="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+version_code="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$badging")"
+version_name="$(sed -n "s/^package:.*versionName='\([^']*\)'.*/\1/p" <<<"$badging")"
+[[ -n "$package_name" && -n "$version_code" && -n "$version_name" ]] || {
+  echo 'OWNER_INSTALL=FAIL (APK identity unavailable)' >&2
+  exit 1
+}
 
-echo "Installing $PKG $VCODE $VNAME to owner device"
-# Check device
-if ! adb devices -l | grep -q "device"; then
-  echo "OWNER_INSTALL=SKIP (no device)"
-  exit 0
-fi
+certificate_output="$("$apksigner_bin" verify --verbose --print-certs "$apk")"
+[[ "$certificate_output" != *'CN=Android Debug'* ]] || {
+  echo 'OWNER_INSTALL=FAIL (debug certificate)' >&2
+  exit 1
+}
 
-adb shell pm list packages | grep -q "$PKG" && adb uninstall "$PKG" >/dev/null 2>&1 || true
-adb install -r "$APK" >/dev/null 2>&1
-adb shell pm list packages | grep -q "$PKG" || { echo "OWNER_INSTALL=FAIL not installed"; exit 1; }
+"${adb_command[@]}" install -r "$apk" >/dev/null
+installed_packages="$("${adb_command[@]}" shell pm list packages)"
+grep -Fq "package:$package_name" <<<"$installed_packages" || {
+  echo 'OWNER_INSTALL=FAIL (package not installed)' >&2
+  exit 1
+}
 
-# Launch and measure
-START=$(adb shell am start -W -n "$PKG/com.mariusschober.goalflow.nativeapp.MainActivity" 2>&1)
-echo "$START"
-TOTAL=$(echo "$START" | grep "TotalTime" | grep -o "[0-9]*" | head -n 1)
-echo "TotalTime: $TOTAL ms"
-if [ -n "$TOTAL" ] && [ "$TOTAL" -lt 1500 ]; then
-  echo "COLD_START=PASS (<1500ms)"
-else
-  echo "COLD_START=WARN ($TOTAL ms)"
-fi
-
-# gfxinfo
-adb shell dumpsys gfxinfo "$PKG" 2>&1 | head -n 60 > /tmp/gfxinfo.txt
-cat /tmp/gfxinfo.txt | head -n 30
-JANKY=$(grep "Janky frames:" /tmp/gfxinfo.txt | head -n 1 | grep -o "[0-9]*" | head -n 1 || echo "0")
-echo "Janky: $JANKY"
-if [ "$JANKY" -lt 10 ]; then
-  echo "JANK=PASS"
-else
-  echo "JANK=WARN"
-fi
-
-# meminfo
-adb shell dumpsys meminfo "$PKG" 2>&1 | head -n 30 > /tmp/meminfo.txt
-PSS=$(grep "TOTAL PSS" /tmp/meminfo.txt | grep -o "[0-9]*" | head -n 1 || echo "0")
-echo "PSS: $PSS KB"
-
-# logcat check no crash
+"${adb_command[@]}" logcat -c
+start_output="$("${adb_command[@]}" shell am start -W -n "$package_name/com.mariusschober.goalflow.nativeapp.MainActivity")"
+grep -Fq 'Status: ok' <<<"$start_output" || { printf '%s\n' "$start_output" >&2; exit 1; }
+total_ms="$(sed -n 's/^TotalTime: //p' <<<"$start_output")"
 sleep 2
-LOGCAT=$(adb logcat -d 2>&1 | grep -E "AndroidRuntime.*$PKG|FATAL.*$PKG" | head -n 20 || true)
-if [ -n "$LOGCAT" ]; then
-  echo "LOGCAT_FAIL: $LOGCAT"
+logcat_output="$("${adb_command[@]}" logcat -d)"
+if grep -E "AndroidRuntime.*$package_name|FATAL.*$package_name" <<<"$logcat_output" >/dev/null; then
+  echo 'OWNER_INSTALL=FAIL (application crash in logcat)' >&2
   exit 1
 fi
-echo "LOGCAT=PASS (no crash)"
 
-# cert
-"$APKSIGNER" verify --print-certs "$APK" 2>&1 | grep "CN=Goalflow" && echo "CERT=PASS" || echo "CERT=FAIL"
-
-# digest
-sha256sum "$APK" | cut -d' ' -f1 > /tmp/apk.sha256
-echo "APK_SHA256=$(cat /tmp/apk.sha256)"
-
-# Record to RELEASE_REPORT
-echo "OWNER_DEVICE_INSTALL=PASS on $(adb shell getprop ro.product.model 2>&1 | tr -d '\r') $(adb shell getprop ro.build.version.release 2>&1 | tr -d '\r') api $(adb shell getprop ro.build.version.sdk 2>&1 | tr -d '\r')"
-
-# Cleanup? Keep installed for owner
-echo "OWNER_INSTALL=PASS"
+checksum="$(sha256sum "$apk" | awk '{print $1}')"
+printf 'PACKAGE=%s\nVERSION_CODE=%s\nVERSION_NAME=%s\nCOLD_START_MS=%s\nAPK_SHA256=%s\n' \
+  "$package_name" "$version_code" "$version_name" "${total_ms:-unknown}" "$checksum"
+echo 'OWNER_INSTALL=PASS'

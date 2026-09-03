@@ -1,84 +1,83 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env bash
+set -euo pipefail
 
-# Clean-install matrix for Tranche 3
-# Tests productionRelease and sandboxDebug on the connected device and via emulator if available.
-# For local-only, we test the connected T807D_EEA (API 34) and record.
+if [[ "${GOALFLOW_ALLOW_TEST_APP_DATA_ERASE:-0}" != "1" ]]; then
+  echo 'CLEAN_INSTALL_MATRIX=FAIL (set GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 only on a nonproduction test device)' >&2
+  exit 1
+fi
 
-apk_prod="android-native/app/build/outputs/apk/production/release/app-production-release.apk"
-apk_sandbox="android-native/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk"
+production_apk="${1:-android-native/app/build/outputs/apk/production/release/app-production-release.apk}"
+sandbox_apk="${2:-android-native/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk}"
+for apk in "$production_apk" "$sandbox_apk"; do
+  [[ -f "$apk" ]] || { echo "CLEAN_INSTALL_MATRIX=FAIL (missing APK: $apk)" >&2; exit 1; }
+done
 
-# Find apksigner
-APKSIGNER=""
-for p in "$ANDROID_HOME/build-tools"/*/apksigner; do [ -x "$p" ] && APKSIGNER="$p" && break; done
+sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-}}"
+find_android_tool() {
+  local name="$1"
+  local result=""
+  if command -v "$name" >/dev/null 2>&1; then
+    command -v "$name"
+    return
+  fi
+  [[ -n "$sdk_root" && -d "$sdk_root/build-tools" ]] || return 1
+  while IFS= read -r candidate; do
+    [[ -x "$candidate" ]] && result="$candidate"
+  done < <(find "$sdk_root/build-tools" -type f -name "$name" -print 2>/dev/null | sort -V)
+  [[ -n "$result" ]] || return 1
+  printf '%s\n' "$result"
+}
+
+aapt_bin="$(find_android_tool aapt)" || { echo 'CLEAN_INSTALL_MATRIX=FAIL (aapt unavailable)' >&2; exit 1; }
+apksigner_bin="$(find_android_tool apksigner)" || { echo 'CLEAN_INSTALL_MATRIX=FAIL (apksigner unavailable)' >&2; exit 1; }
+adb_bin="$(command -v adb || true)"
+[[ -n "$adb_bin" ]] || { echo 'CLEAN_INSTALL_MATRIX=FAIL (adb unavailable)' >&2; exit 1; }
+
+adb_command=("$adb_bin")
+if [[ -n "${GOALFLOW_ANDROID_SERIAL:-}" ]]; then
+  adb_command+=( -s "$GOALFLOW_ANDROID_SERIAL" )
+fi
+device_state="$("${adb_command[@]}" get-state 2>/dev/null || true)"
+[[ "$device_state" == 'device' ]] || { echo 'CLEAN_INSTALL_MATRIX=FAIL (test device unavailable)' >&2; exit 1; }
 
 check_install() {
   local apk="$1"
   local label="$2"
-  if [ ! -f "$apk" ]; then
-    echo "$label: SKIP (no apk $apk)"
-    return 0
-  fi
-  local pkg=$(aapt dump badging "$apk" 2>/dev/null | grep -o "package: name='[^']*'" | cut -d"'" -f2)
-  echo "Testing $label $pkg $apk"
-  # Uninstall if exists
-  adb shell pm list packages | grep -q "$pkg" && adb uninstall "$pkg" >/dev/null 2>&1 || true
-  # Install
-  if ! adb install -r "$apk" >/dev/null 2>&1; then
-    echo "$label: FAIL install"
+  local badging package_name installed_packages launch_output certificate_output
+
+  badging="$("$aapt_bin" dump badging "$apk")"
+  package_name="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$badging")"
+  [[ -n "$package_name" && "$package_name" != *$'\n'* ]] || {
+    echo "$label: FAIL (package identity unavailable)" >&2
+    return 1
+  }
+
+  "${adb_command[@]}" uninstall "$package_name" >/dev/null 2>&1 || true
+  "${adb_command[@]}" install "$apk" >/dev/null
+  installed_packages="$("${adb_command[@]}" shell pm list packages)"
+  grep -Fq "package:$package_name" <<<"$installed_packages" || {
+    echo "$label: FAIL (package not installed)" >&2
+    return 1
+  }
+
+  launch_output="$("${adb_command[@]}" shell am start -W -n "$package_name/com.mariusschober.goalflow.nativeapp.MainActivity")"
+  grep -Fq 'Status: ok' <<<"$launch_output" || {
+    printf '%s\n' "$launch_output" >&2
+    echo "$label: FAIL (first launch failed)" >&2
+    return 1
+  }
+
+  certificate_output="$("$apksigner_bin" verify --verbose --print-certs "$apk")"
+  if [[ "$label" == productionRelease && "$certificate_output" == *'CN=Android Debug'* ]]; then
+    echo "$label: FAIL (debug certificate)" >&2
     return 1
   fi
-  # Verify package
-  if ! adb shell pm list packages | grep -q "$pkg"; then
-    echo "$label: FAIL not installed"
-    return 1
-  fi
-  # Launch
-  local mainActivity=""
-  if echo "$pkg" | grep -q "sandbox"; then
-    mainActivity="$pkg/com.mariusschober.goalflow.nativeapp.MainActivity"
-  else
-    mainActivity="$pkg/com.mariusschober.goalflow.nativeapp.MainActivity"
-  fi
-  # Try to launch
-  if adb shell am start -W -n "$mainActivity" 2>&1 | grep -q "Status: ok"; then
-    echo "$label: CLEAN_INSTALL_PASS"
-  else
-    echo "$label: CLEAN_INSTALL_FAIL"
-    return 1
-  fi
-  # Check signature is release (not debug) for productionRelease
-  if echo "$label" | grep -q "productionRelease"; then
-    if "$APKSIGNER" verify --print-certs "$apk" 2>&1 | grep -q "CN=Android Debug"; then
-      echo "$label: FAIL debug cert"
-      return 1
-    fi
-  fi
-  # Uninstall after test to keep clean
-  adb uninstall "$pkg" >/dev/null 2>&1 || true
+
+  bash android-native/scripts/diagnose-apk.sh "$apk"
+  "${adb_command[@]}" uninstall "$package_name" >/dev/null
+  echo "$label: CLEAN_INSTALL_PASS"
 }
 
-# Use aapt from build-tools
-for p in "$ANDROID_HOME/build-tools"/*/aapt; do [ -x "$p" ] && alias aapt="$p" 2>/dev/null || true; break; done
-# Actually use full path
-AAPT=""
-for p in "$ANDROID_HOME/build-tools"/*/aapt; do [ -x "$p" ] && AAPT="$p" && break; done
-if [ -z "$AAPT" ]; then echo "aapt not found"; exit 1; fi
-# Override aapt dump via function
-aapt() { "$AAPT" "$@"; }
-
-echo "=== Clean-install matrix ==="
-check_install "$apk_prod" "productionRelease-API34-T807D"
-# Try sandbox if exists
-if [ -f "android-native/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk" ]; then
-  check_install "android-native/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk" "sandboxDebug-API34-T807D"
-fi
-
-# Also run diagnose-apk.sh for each
-for apk in "$apk_prod" android-native/app/build/outputs/apk/sandbox/debug/*.apk; do
-  [ -f "$apk" ] || continue
-  echo "Diagnosing $apk"
-  bash android-native/scripts/diagnose-apk.sh "$apk" 2>&1 | grep -E "APK_DIAGNOSTIC|ZIP_TEST|ZIPALIGN|APK_SIGNATURE|PACKAGE|VERSION" | head -n 20
-done
-
-echo "CLEAN_INSTALL_MATRIX=PASS"
+check_install "$production_apk" productionRelease
+check_install "$sandbox_apk" sandboxDebug
+echo 'CLEAN_INSTALL_MATRIX=PASS'

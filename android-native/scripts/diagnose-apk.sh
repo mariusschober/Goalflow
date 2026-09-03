@@ -58,26 +58,26 @@ else
     exit 3
 fi
 
-package_name="$(printf '%s\n' "$badging" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" | head -n 1)"
-version_code="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionCode='\\([^']*\\)'.*/\\1/p" | head -n 1)"
-version_name="$(printf '%s\n' "$badging" | sed -n "s/^package:.*versionName='\\([^']*\\)'.*/\\1/p" | head -n 1)"
-min_sdk="$(printf '%s\n' "$badging" | sed -n -E "s/^[[:space:]]*(minSdkVersion|sdkVersion):'([^']*)'.*/\2/p" | head -n 1)"
+package_name="$(sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p" <<<"$badging")"
+version_code="$(sed -n "s/^package:.*versionCode='\\([^']*\\)'.*/\\1/p" <<<"$badging")"
+version_name="$(sed -n "s/^package:.*versionName='\\([^']*\\)'.*/\\1/p" <<<"$badging")"
+min_sdk="$(sed -n -E "s/^[[:space:]]*(minSdkVersion|sdkVersion):'([^']*)'.*/\2/p" <<<"$badging")"
 if [[ -z "$min_sdk" ]]; then
     printf '%s\n' 'AAPT2_BADGING_BEGIN' "$badging" 'AAPT2_BADGING_END' >&2
 fi
 if [[ -z "$min_sdk" && -n "$aapt2_bin" ]]; then
     manifest_dump="$("$aapt2_bin" dump xmltree "$apk_path" --file AndroidManifest.xml)"
-    min_sdk_hex="$(printf '%s\n' "$manifest_dump" | sed -n -E 's/.*android:minSdkVersion[^=]*=.*(0x[0-9a-fA-F]+).*/\1/p' | head -n 1)"
+    min_sdk_hex="$(sed -n -E 's/.*android:minSdkVersion[^=]*=.*(0x[0-9a-fA-F]+).*/\1/p' <<<"$manifest_dump")"
     if [[ -n "$min_sdk_hex" ]]; then
         min_sdk="$(printf '%d' "$min_sdk_hex")"
     else
-        min_sdk="$(printf '%s\n' "$manifest_dump" | sed -n -E 's/.*android:minSdkVersion[^=]*=([0-9]+).*/\1/p' | head -n 1)"
+        min_sdk="$(sed -n -E 's/.*android:minSdkVersion[^=]*=([0-9]+).*/\1/p' <<<"$manifest_dump")"
     fi
     if [[ -z "$min_sdk" ]]; then
         printf '%s\n' 'AAPT2_MANIFEST_BEGIN' "$manifest_dump" 'AAPT2_MANIFEST_END' >&2
     fi
 fi
-target_sdk="$(printf '%s\n' "$badging" | sed -n "s/^targetSdkVersion:'\\([^']*\\)'.*/\\1/p" | head -n 1)"
+target_sdk="$(sed -n "s/^targetSdkVersion:'\\([^']*\\)'.*/\\1/p" <<<"$badging")"
 printf 'PACKAGE=%s\nVERSION_CODE=%s\nVERSION_NAME=%s\nMIN_SDK=%s\nTARGET_SDK=%s\n' \
     "$package_name" "$version_code" "$version_name" "$min_sdk" "$target_sdk"
 [[ -n "$package_name" && -n "$version_code" && -n "$min_sdk" ]] || {
@@ -86,22 +86,24 @@ printf 'PACKAGE=%s\nVERSION_CODE=%s\nVERSION_NAME=%s\nMIN_SDK=%s\nTARGET_SDK=%s\
 }
 
 if [[ "${DIAGNOSE_APK_INSTALL:-0}" == "1" ]]; then
+    if [[ "${GOALFLOW_ALLOW_TEST_APP_DATA_ERASE:-0}" != "1" ]]; then
+        echo "Install diagnostics require an explicit nonproduction test-device data-erasure flag." >&2
+        exit 5
+    fi
+    if [[ -n "${DIAGNOSE_APK_UPGRADE_FROM:-}" ]]; then
+        echo "Upgrade verification must use test-upgrade-matrix.sh with a same-package prior APK and durable-data probe." >&2
+        exit 5
+    fi
     adb_bin="$(command -v adb || true)"
     [[ -n "$adb_bin" ]] || { echo "adb was not found for install verification." >&2; exit 3; }
     "$adb_bin" wait-for-device
-    if [[ -n "${DIAGNOSE_APK_UPGRADE_FROM:-}" ]]; then
-        "$adb_bin" uninstall "$package_name" >/dev/null 2>&1 || true
-        "$adb_bin" install "${DIAGNOSE_APK_UPGRADE_FROM}"
-        "$adb_bin" install -r "$apk_path"
-        echo "INSTALL_MATRIX=UPGRADE_PASS"
-    else
-        "$adb_bin" uninstall "$package_name" >/dev/null 2>&1 || true
-        "$adb_bin" install "$apk_path"
-        echo "INSTALL_MATRIX=CLEAN_INSTALL_PASS"
-    fi
+    "$adb_bin" uninstall "$package_name" >/dev/null 2>&1 || true
+    "$adb_bin" install "$apk_path"
+    echo "INSTALL_MATRIX=CLEAN_INSTALL_PASS"
     "$adb_bin" shell monkey -p "$package_name" 1 >/dev/null
     sleep 3
-    "$adb_bin" shell dumpsys activity activities | grep -q "$package_name"
+    activity_state="$("$adb_bin" shell dumpsys activity activities)"
+    grep -Fq "$package_name" <<<"$activity_state"
     echo "LAUNCH_FIRST_FRAME=PASS"
 fi
 
