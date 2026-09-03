@@ -151,12 +151,13 @@ const AppWrapper: React.FC = () => {
         .catch(error => rejectSession(error, ++validationVersion));
     };
 
+    // Subscribe before the first asynchronous lookup/validation. A cross-tab
+    // sign-out or account switch must invalidate that in-flight result instead
+    // of being missed between getSession() and subscription setup.
+    unsubscribe = authService.onSessionChange(sessionChanged);
+    window.addEventListener('goalflow:session-rejected', sessionRejected);
     void (async () => {
       await acceptSession(await authService.getSession(), true);
-      if (active) {
-        unsubscribe = authService.onSessionChange(sessionChanged);
-        window.addEventListener('goalflow:session-rejected', sessionRejected);
-      }
     })().catch(async error => {
       const version = ++validationVersion;
       await rejectSession(error, version);
