@@ -25,6 +25,7 @@ export const createApp = async (config: AppConfig) => {
   const ai = createDeepSeekProvider(config);
   const speech = createOpenAiSpeechProvider(config);
   const localOnly = config.NODE_ENV !== 'production' && config.ENABLE_LOCAL_DEMO === 'true';
+  const publicOriginUsesTls = new URL(config.APP_ORIGIN).protocol === 'https:';
   const allowedOrigins = new Set([
     config.APP_ORIGIN,
     'https://localhost',
@@ -65,7 +66,11 @@ export const createApp = async (config: AppConfig) => {
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
         mediaSrc: ["'self'", "blob:", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com"],
-        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"]
+        fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"],
+        // WebKit upgrades every relative asset request when this directive is
+        // served over a deliberate HTTP origin, then fails against the plain
+        // HTTP listener. Keep the production protection for HTTPS origins.
+        ...(publicOriginUsesTls ? {} : { upgradeInsecureRequests: null })
       }
     },
     crossOriginEmbedderPolicy: false

@@ -1,4 +1,53 @@
-import { test, expect, type Browser, type BrowserContext, type Page } from '@playwright/test';
+import { test, expect, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+
+const diagnosticsByTest = new Map<string, string[]>();
+
+const safeUrl = (raw: string): string => {
+  try {
+    const url = new URL(raw);
+    return `${url.protocol}//${url.host}${url.pathname}`;
+  } catch {
+    return '<invalid-url>';
+  }
+};
+
+const redactDiagnostic = (value: string): string => value
+  .replace(/Bearer\s+\S+/gi, 'Bearer <redacted>')
+  .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>')
+  .slice(0, 2_000);
+
+const observePage = (page: Page, testInfo: TestInfo, label: string) => {
+  const diagnostics = diagnosticsByTest.get(testInfo.testId) ?? [];
+  diagnosticsByTest.set(testInfo.testId, diagnostics);
+  page.on('console', message => {
+    if (message.type() === 'error' || message.type() === 'warning') {
+      diagnostics.push(`${label} console.${message.type()}: ${redactDiagnostic(message.text())}`);
+    }
+  });
+  page.on('pageerror', error => diagnostics.push(`${label} pageerror: ${redactDiagnostic(error.message)}`));
+  page.on('requestfailed', request => diagnostics.push(
+    `${label} requestfailed: ${request.method()} ${safeUrl(request.url())} — ${redactDiagnostic(request.failure()?.errorText ?? 'unknown')}`
+  ));
+  page.on('response', response => {
+    if (response.status() >= 400) {
+      diagnostics.push(`${label} response: ${response.status()} ${safeUrl(response.url())}`);
+    }
+  });
+};
+
+test.beforeEach(async ({ page }, testInfo) => {
+  diagnosticsByTest.set(testInfo.testId, []);
+  observePage(page, testInfo, 'fixture');
+});
+
+test.afterEach(async ({}, testInfo) => {
+  const diagnostics = diagnosticsByTest.get(testInfo.testId) ?? [];
+  await testInfo.attach('browser-diagnostics', {
+    body: Buffer.from(diagnostics.length > 0 ? diagnostics.join('\n') : 'No browser warnings or errors captured.'),
+    contentType: 'text/plain'
+  });
+  diagnosticsByTest.delete(testInfo.testId);
+});
 
 async function unlockTestApp(page: Page) {
   await page.goto('/', { waitUntil: 'domcontentloaded' });
@@ -29,9 +78,10 @@ async function openPlan(page: Page) {
 
 const plannedTitles = (page: Page) => page.locator('[data-rfd-draggable-id] h4');
 
-async function createIsolatedContext(browser: Browser): Promise<{ context: BrowserContext; page: Page }> {
+async function createIsolatedContext(browser: Browser, testInfo: TestInfo, label: string): Promise<{ context: BrowserContext; page: Page }> {
   const context = await browser.newContext();
   const page = await context.newPage();
+  observePage(page, testInfo, label);
   await unlockTestApp(page);
   return { context, page };
 }
@@ -107,13 +157,13 @@ test.describe('web-critical — deterministic visible UI journey', () => {
   });
 
   test('saved tasks are isolated between browser profiles', async ({ browser }, testInfo) => {
-    const profileA = await createIsolatedContext(browser);
+    const profileA = await createIsolatedContext(browser, testInfo, 'profile-a');
     const title = `profile-a-${testInfo.project.name}-${Date.now()}`;
     await captureTodayTask(profileA.page, title);
     await openPlan(profileA.page);
     await expect(profileA.page.getByText(title, { exact: true })).toBeVisible();
 
-    const profileB = await createIsolatedContext(browser);
+    const profileB = await createIsolatedContext(browser, testInfo, 'profile-b');
     await openPlan(profileB.page);
     await expect(profileB.page.getByText(title, { exact: true })).toHaveCount(0);
 
@@ -126,6 +176,10 @@ test.describe('web-critical — deterministic visible UI journey', () => {
 
   test('manifest, service worker, and required icons are served', async ({ page }) => {
     await unlockTestApp(page);
+    const documentResponse = await page.request.get('/');
+    expect(documentResponse.ok()).toBe(true);
+    expect(documentResponse.headers()['content-security-policy']).not.toContain('upgrade-insecure-requests');
+
     const manifestResponse = await page.request.get('/manifest.webmanifest');
     expect(manifestResponse.ok()).toBe(true);
     const manifest = await manifestResponse.json();
