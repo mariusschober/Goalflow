@@ -87,9 +87,9 @@ When enabled, retain these values only in the matching Railway environment:
 Telegram requires a real test bot and complete webhook/replay/account-linking
 matrix. AI and voice are not required for core beta task capture and sync.
 
-## Android release signing
+## Android beta and release signing
 
-The protected manual GitHub workflow requires:
+Both protected manual GitHub workflows require:
 
 - `ANDROID_KEYSTORE_BASE64`;
 - `ANDROID_KEYSTORE_PASSWORD`;
@@ -97,9 +97,19 @@ The protected manual GitHub workflow requires:
 - `ANDROID_KEY_PASSWORD`;
 - `EXPECTED_CERT_FINGERPRINT`.
 
-The keystore must be generated and retained outside the repository. The release
-gate compares the normalized SHA-256 certificate fingerprint and uploads the
-signed APK plus checksum/provenance only after `beta-gate` succeeds on `main`.
+The keystore must be generated and retained outside the repository. The
+`Android internal beta (manual)` workflow additionally embeds only the three
+staging public values already listed above. It can run only for an exact
+`integration/beta` commit with a successful push `beta-gate`; it verifies one
+expected signer and uploads an APK plus verified checksum and provenance without
+creating a GitHub release. The production release workflow remains restricted
+to an exact successful `main` push.
+
+Do not reuse the historical temporary test signer mentioned in old evidence
+snapshots. No keystore or private-key file is tracked anywhere in Git history,
+but a password-like test value was removed from the current documentation as a
+precaution. The beta signer must have a separately retained private key and an
+independently recorded SHA-256 certificate fingerprint.
 
 ## Historical credential action
 

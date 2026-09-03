@@ -65,6 +65,18 @@ rule, file paths, commits, and other findings remain scanned. When Telegram is
 ported, fixtures must use conspicuously synthetic low-entropy construction so
 new commits do not require additional ignores.
 
+## Historical Android test signer
+
+**Status: RETIRED TEST-ONLY IDENTITY; DO NOT REUSE FOR BETA.**
+
+A password-like value for a temporary Android test keystore appeared in the
+current copy of a historical readiness snapshot and has been redacted. A
+complete filename audit across all refs found no tracked `.keystore`, `.jks`,
+`.p12`, `.pem`, or private-key file, so the value alone cannot sign an APK. It
+is nevertheless not acceptable beta signing material. The internal beta must
+use an externally retained key, and its expected certificate SHA-256 fingerprint
+must be configured independently before the signed-artifact workflow runs.
+
 ## History-rewrite decision
 
 History is not rewritten at this stage. Every branch head has already been
