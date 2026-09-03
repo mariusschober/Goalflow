@@ -279,7 +279,7 @@ heads is a production release merely because it exists.
 | `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
 | `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
 | `feat/telegram-beta` | `4d36dc11a9bf4e83d6dbb882c4c94e9de7ee4eb3` | 9 commits after `feat/macos-beta` | Selective bot/Mini App transplant plus additive-migration and PostgreSQL verification hardening; feature remains disabled pending live verification |
-| `chore/railway-beta-gate` | `22b8b5dbbc30e997f7fc66c46284bb7e4c5eacbf` | 34 commits after `feat/telegram-beta` | Repository-backed Railway cron, hosted proof harnesses, fail-closed release/signing/key gates, backup/restore verification, web/native auth and transport hardening, complete Android migration fixtures, and retained macOS beta artifact |
+| `chore/railway-beta-gate` | implementation head `aa014fe898b2beb9d0aee95770338fd86c4ecc50` | 52 commits after `feat/telegram-beta`; 96 after canonical; 77 after `integration/beta` | Repository-backed Railway cron, hosted proof harnesses, fail-closed release/signing/key gates, backup/restore verification, web/native auth and transport hardening, complete Android installed-upgrade fixtures, visible device launch proof, and retained macOS beta artifact |
 
 Useful `sol/web-production-24h` behavior is replaced by current WebKit and
 production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
@@ -453,9 +453,90 @@ fail-closed checks, current-tree client scans, all migration and Room hash
 ledgers, durable identifiers, shell syntax, and the high-severity dependency
 audit with zero reported vulnerabilities. GitHub Actions run
 [`33782495962`](https://github.com/mariusschober/Goalflow/actions/runs/33782495962)
-is the exact-implementation run and remains in progress at this capture. Its
-completed `verify` and clean PostgreSQL `migrations` jobs passed; it is not
-represented as a green aggregate gate.
+subsequently completed: its internal implementation jobs passed and its
+aggregate correctly failed the unresolved complete-history credential scan.
+Hosted staging proof was an absent-configuration preflight. This historical
+checkpoint predates the installed-upgrade and signed-artifact hardening below
+and is not represented as the current candidate.
+
+The third release-gate tranche is represented by these exact remote commits:
+
+```text
+818d61a docs(reconciliation): record release hardening tranche
+9db420f docs(beta): add evidence-based readiness ledger
+be5d5e1 ci: scan candidate after history findings
+b10352e test(android): prove installed upgrade data retention
+302af78 test(android): pin upgrade source evidence
+08bfe1a test(android): accept fail-closed APK handoff layout
+81fcf40 ci(android): add signed internal beta gate
+32e7c67 docs(security): retire historical Android test signer
+9d38763 ci(android): scope internal signer environment
+2b2189c fix(ci): use POSIX emulator script contract
+da30768 fix(android): stabilize Robolectric dependency resolution
+3ced314 fix(ci): gate signed APK on integration push
+9cbd161 fix(ci): keep emulator gate in one shell
+46eea5f fix(android): verify installed upgrade test target
+37c5cf1 fix(android): run instrumentation without UTP installer
+f114042 fix(android): cold-start preserved upgrade fixture
+8cac2c9 fix(android): verify rendered cold launches
+aa014fe fix(android): verify visible cold launches
+```
+
+The signed Android workflow is restricted to an exact `integration/beta` push
+and the protected `internal-beta` environment. It requires one external
+signer, its independently configured SHA-256 certificate fingerprint, and only
+the three public staging values in the APK. Ordinary CI compiles an unsigned
+production release and cannot emit a release artifact accidentally. The
+signed job remains unexecuted because no beta signer or live staging
+configuration has been supplied.
+
+The Android device gate was repaired from evidence rather than by changing the
+expected durable UUID. Run
+[`33790070003`](https://github.com/mariusschober/Goalflow/actions/runs/33790070003)
+proved all seven current instrumentation tests, then showed that `aapt badging`
+omitted optional instrumentation target metadata. Commit `46eea5f`
+changed the gate to verify the installed Package Manager binding. Run
+[`33793009895`](https://github.com/mariusschober/Goalflow/actions/runs/33793009895)
+then exposed a Gradle UTP installer/device-property failure before any upgrade
+assertion. Commit `37c5cf1` installs the exact compiled application and test
+APKs directly, verifies their binding, and requires the exact seven-test
+result; it does not retry or skip the tests.
+
+Runs
+[`33796040203`](https://github.com/mariusschober/Goalflow/actions/runs/33796040203)
+and
+[`33798480455`](https://github.com/mariusschober/Goalflow/actions/runs/33798480455)
+both passed those seven tests and the preserved-version seed but revealed that
+`am start -W` times out on the headless API-30 image even after explicit
+process death. Run
+[`33801111276`](https://github.com/mariusschober/Goalflow/actions/runs/33801111276)
+proved the exact process and activity were live/resumed while the ATD
+`gfxinfo` counter remained zero, so a zero/nonzero frame counter was not used
+as a false release oracle. Commit `aa014fe` instead requires the device
+accessibility hierarchy to contain the exact Goalflow package and visible
+`Current` or `Capture` semantics; process existence alone cannot pass. Failure
+retains synthetic-device activity state, UI XML, and a screenshot.
+
+GitHub Actions run
+[`33806219844`](https://github.com/mariusschober/Goalflow/actions/runs/33806219844)
+at exact implementation commit
+`aa014fe898b2beb9d0aee95770338fd86c4ecc50` is the current internal proof.
+`verify`, clean PostgreSQL `migrations`, `web-release`, legacy `android`,
+`native-android`, and `macos` all succeeded. Chromium and WebKit passed all
+eight critical journeys; macOS passed 175 tests and its build. Native Android
+proved visible clean, preserved-v2, and upgraded-v3 UI; exactly seven current
+instrumentation tests; versionCode `2->3`; and exact preservation of two task
+rows, three outbox rows, a tombstone, a dependency, account binding, cursor,
+timestamps, and durable IDs. Its final markers were
+`UPGRADE_DATA_PRESERVATION=PASS`, `UPGRADE_MATRIX=PASS`, and
+`EMULATOR_GATE=PASS`.
+
+The same run's candidate/event scan was clean. Complete-history scanning
+examined 311 commits and found exactly the one unresolved historical
+Firebase/GCP key (`history_status=1`, `tree_status=0`), so `beta-gate`
+correctly remained red. Hosted staging steps were skipped under the explicit
+short-lived-branch rule, and the signed internal APK job did not run. Those
+external proofs remain release blockers, not implied successes.
 
 `feature/chrome-execution-companion` remains unported and tagged as post-beta.
 No historical remote branch has been deleted.

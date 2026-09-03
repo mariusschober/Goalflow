@@ -10,7 +10,7 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Candidate implementation | `chore/railway-beta-gate` at `22b8b5dbbc30e997f7fc66c46284bb7e4c5eacbf` | CANDIDATE ONLY |
+| Candidate implementation | `chore/railway-beta-gate` implementation tree at `aa014fe898b2beb9d0aee95770338fd86c4ecc50` | CANDIDATE ONLY |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
 | Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
@@ -19,21 +19,33 @@ or `IN PROGRESS`.
 ## CI and build evidence
 
 The exact-implementation [Beta Gate run
-33782495962](https://github.com/mariusschober/Goalflow/actions/runs/33782495962)
-is in progress. Its `verify` and clean PostgreSQL `migrations` jobs have passed.
-The aggregate must remain red until the historical credential action is
-completed and every exact-candidate job succeeds. A successful job from an
-older commit is supporting evidence only, never a substitute for this gate.
+33806219844](https://github.com/mariusschober/Goalflow/actions/runs/33806219844)
+completed at `aa014fe898b2beb9d0aee95770338fd86c4ecc50`. Its `verify`, clean
+PostgreSQL `migrations`, `web-release`, legacy `android`, `native-android`, and
+`macos` jobs succeeded. Chromium and WebKit completed all eight critical
+journeys. The macOS job completed 175 tests and a build, and retained ad-hoc
+artifact `9913119768` (1,148,530 bytes; artifact digest
+`sha256:390c933811b80144693002c3ca4861ead08b93a6ad718bf9ba0e935e8df3652f`).
 
-The earlier [run
-33772320743](https://github.com/mariusschober/Goalflow/actions/runs/33772320743)
-at `ebd512c` passed Chromium and WebKit critical journeys, clean migrations,
-legacy Android, native Android migration instrumentation and emulator launch,
-and macOS tests/build. Its aggregate correctly failed only the unresolved
-complete-history secret scan. This establishes that those gates can execute;
-it does not authorize the current candidate.
+The native API-30 gate proved a clean install and visible `Current`/`Capture`
+semantics, ran exactly seven Compose/Room instrumentation tests, and installed
+the preserved version-2 APK before upgrading it in place to version 3. Both
+pre- and post-upgrade UI checks passed. SQLite verification retained two task
+rows, three outbox rows, one tombstone, one mutation dependency, one account
+binding, exact timestamps and cursor state, and every fixed durable ID. The
+device emitted `UPGRADE_DATA_PRESERVATION=PASS`, `UPGRADE_MATRIX=PASS`, and
+`EMULATOR_GATE=PASS`.
 
-Local verification at the implementation tree passed 46 Vitest files / 245
+The same run's event-commit scan and candidate-tree scan found no leaks. The
+complete-history scan examined 311 commits and found exactly the one unresolved
+historical Firebase/GCP key (`history_status=1`, `tree_status=0`). Therefore
+the aggregate `beta-gate` correctly failed. The `hosted-staging` result was
+only the allowed absent-configuration preflight for this short-lived branch;
+all hosted proof steps were skipped. `android-internal-beta` was also skipped
+because this is not `integration/beta` and no signer/staging configuration has
+been supplied. Neither skip is release evidence.
+
+Local verification at the implementation tree passed 49 Vitest files / 254
 tests, TypeScript, production client/server/Mini App builds, client and
 built-artifact secret scans, production boot and one-shot maintenance
 fail-closed checks, all 14 migration hashes, all 8 Room schema hashes, durable
@@ -86,7 +98,7 @@ identity A and B UUIDs/passwords must never be recorded in this file.
 | Offline mutations survive restart/reconnect | IndexedDB/Room outbox tests pass | No two-client staging drill | NOT RUN |
 | Conflict and tombstone convergence | Shared protocol and PostgreSQL tests pass | No live cross-client drill | NOT RUN |
 | User A cannot inject/read user B | Server/RLS test harness exists | Two real staging users absent | NOT RUN |
-| Web to native Android | Shared protocol and emulator tests pass | No signed build or staging account | NOT RUN |
+| Web to native Android | API-30 visible-UI, seven-test instrumentation, and exact installed v2→v3 preservation gates pass | No signed build or staging account | NOT RUN |
 | Web to native macOS | Swift tests and ad-hoc build gate exist | No staging login/sync drill | NOT RUN |
 | Telegram to linked Goalflow account | Disabled implementation and adversarial tests exist | BotFather test bot absent | DISABLED / NOT RUN |
 
