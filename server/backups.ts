@@ -157,6 +157,14 @@ const EXACT_RESTORE_COLLECTIONS = new Set<string>([
   'telegram_captures', 'telegram_updates', 'entitlements'
 ]);
 
+const RESTORE_MUTABLE_FIELDS: Partial<Record<keyof typeof COLLECTION_IDENTITIES, ReadonlySet<string>>> = {
+  tasks: new Set(['revision', 'sync_server_version']),
+  daily_plans: new Set(['revision', 'sync_server_version']),
+  sync_records: new Set(['version', 'server_version', 'device_id', 'updated_at']),
+  sync_conflicts: new Set(['server_version', 'server_payload', 'server_deleted_at']),
+  ai_usage: new Set(['request_count'])
+};
+
 export interface BackupRestoreVerification {
   expectedCounts: Record<string, number>;
   actualCounts: Record<string, number>;
@@ -178,11 +186,12 @@ export const normalizeBackupForRestore = (backup: DecryptedServerBackup): Decryp
 const collectionIdentitySet = (
   collections: Record<string, unknown>,
   collection: keyof typeof COLLECTION_IDENTITIES
-): { count: number; identities: Set<string> } => {
+): { count: number; identities: Set<string>; rowsByIdentity: Map<string, Record<string, unknown>> } => {
   const rows = collections[collection];
   if (!Array.isArray(rows)) throw new Error(`Backup collection ${collection} is missing or invalid.`);
   const fields = COLLECTION_IDENTITIES[collection];
   const identities = new Set<string>();
+  const rowsByIdentity = new Map<string, Record<string, unknown>>();
   for (const row of rows) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
       throw new Error(`Backup collection ${collection} contains an invalid row.`);
@@ -195,8 +204,25 @@ const collectionIdentitySet = (
     const identity = JSON.stringify(values);
     if (identities.has(identity)) throw new Error(`Backup collection ${collection} contains duplicate durable identities.`);
     identities.add(identity);
+    rowsByIdentity.set(identity, record);
   }
-  return { count: rows.length, identities };
+  return { count: rows.length, identities, rowsByIdentity };
+};
+
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const object = value as Record<string, unknown>;
+  return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`;
+};
+
+const comparableRestoreRow = (
+  collection: keyof typeof COLLECTION_IDENTITIES,
+  row: Record<string, unknown>
+): Record<string, unknown> => {
+  const mutable = RESTORE_MUTABLE_FIELDS[collection];
+  if (!mutable) return row;
+  return Object.fromEntries(Object.entries(row).filter(([field]) => !mutable.has(field)));
 };
 
 /**
@@ -219,6 +245,20 @@ export const verifyRestoredBackupCollections = (
     for (const identity of expected.identities) {
       if (!actual.identities.has(identity)) {
         throw new Error(`Restore verification could not find a durable ${collection} identity.`);
+      }
+      const expectedRow = expected.rowsByIdentity.get(identity)!;
+      const actualRow = actual.rowsByIdentity.get(identity)!;
+      if (canonicalJson(comparableRestoreRow(collection, expectedRow))
+        !== canonicalJson(comparableRestoreRow(collection, actualRow))) {
+        throw new Error(`Restore verification found changed ${collection} content for a durable identity.`);
+      }
+      if (collection === 'ai_usage') {
+        const expectedCount = Number(expectedRow.request_count);
+        const actualCount = Number(actualRow.request_count);
+        if (!Number.isSafeInteger(expectedCount) || expectedCount < 0
+          || !Number.isSafeInteger(actualCount) || actualCount < expectedCount) {
+          throw new Error('Restore verification found rewound or invalid AI quota usage.');
+        }
       }
     }
     if (EXACT_RESTORE_COLLECTIONS.has(collection) && actual.count !== expected.count) {

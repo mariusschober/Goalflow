@@ -296,7 +296,7 @@ describe('server backup restore boundary', () => {
       sync_conflicts: [{ id: 'conflict-a' }],
       api_mutation_receipts: [{ mutation_id: 'receipt-a' }],
       entitlements: [row()],
-      ai_usage: [{ usage_date: '2026-09-03' }]
+      ai_usage: [{ user_id: '00000000-0000-4000-8000-000000000001', usage_date: '2026-09-03', request_count: 3 }]
     };
     const actual = {
       ...expected,
@@ -327,5 +327,56 @@ describe('server backup restore boundary', () => {
       ...base,
       tasks: [...base.tasks, { id: 'unexpected-task' }]
     })).toThrow('unexpected tasks row count');
+  });
+
+  it('rejects changed content under a preserved durable identity', () => {
+    const base = {
+      profiles: [{ user_id: 'user-a', timezone: 'UTC' }],
+      tasks: [{ id: 'task-a', title: 'Keep me', revision: 4, sync_server_version: 10 }],
+      daily_plans: [], task_events: [], telegram_identities: [], telegram_captures: [],
+      telegram_updates: [],
+      sync_records: [{
+        entity_type: 'tasks', entity_id: 'task-a', version: 4, server_version: 10,
+        device_id: 'before-restore', updated_at: '2026-09-03T00:00:00Z',
+        payload: { title: 'Keep me' }, deleted_at: null
+      }],
+      sync_mutations: [], sync_conflicts: [], api_mutation_receipts: [],
+      entitlements: [{ user_id: 'user-a', active: true }], ai_usage: []
+    };
+    const rebased = {
+      ...base,
+      tasks: [{ ...base.tasks[0], revision: 20, sync_server_version: 30 }],
+      sync_records: [{
+        ...base.sync_records[0], version: 20, server_version: 30,
+        device_id: 'server-restore', updated_at: '2026-09-03T01:00:00Z'
+      }]
+    };
+    expect(() => verifyRestoredBackupCollections(base, rebased)).not.toThrow();
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...rebased,
+      tasks: [{ ...rebased.tasks[0], title: 'Silently changed' }]
+    })).toThrow('changed tasks content');
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...rebased,
+      sync_records: [{ ...rebased.sync_records[0], payload: { title: 'Silently changed' } }]
+    })).toThrow('changed sync_records content');
+  });
+
+  it('allows quota growth but rejects quota rewind under the same date', () => {
+    const base = {
+      profiles: [{ user_id: 'user-a' }], tasks: [], daily_plans: [], task_events: [],
+      telegram_identities: [], telegram_captures: [], telegram_updates: [], sync_records: [],
+      sync_mutations: [], sync_conflicts: [], api_mutation_receipts: [],
+      entitlements: [{ user_id: 'user-a' }],
+      ai_usage: [{ user_id: 'user-a', usage_date: '2026-09-03', request_count: 5 }]
+    };
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...base,
+      ai_usage: [{ ...base.ai_usage[0], request_count: 8 }]
+    })).not.toThrow();
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...base,
+      ai_usage: [{ ...base.ai_usage[0], request_count: 4 }]
+    })).toThrow('rewound');
   });
 });

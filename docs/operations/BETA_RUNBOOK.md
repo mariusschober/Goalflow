@@ -99,7 +99,9 @@ npm run restore:backup -- \
 
 The command first creates and finalizes an encrypted `pre-restore` object. The
 database replacement and AI-usage recovery then run in one PostgreSQL
-transaction. AI quota usage, sync mutation receipts, API receipts, conflicts,
+transaction. The post-commit verifier compares row content as well as durable
+IDs and counts, allowing only documented sequence/rebase fields. AI quota
+usage, sync mutation receipts, API receipts, conflicts,
 and restore tombstones are non-rewindable safety ledgers: backup identities
 must remain present, while newer rows may also remain. Content tables require
 exact row counts and durable IDs. The command re-exports committed state and
