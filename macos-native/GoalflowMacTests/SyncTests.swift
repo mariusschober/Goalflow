@@ -205,6 +205,65 @@ final class SyncMetaTests: XCTestCase {
         XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(try task.toSyncDictionary()))
     }
 
+    func test_goal_stores_stage_every_durable_field() throws {
+        let suite = "goalflow.sync.goal-fields.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let deviceStore = DeviceIdStore(defaults: defaults)
+        let goalStore = GoalStore(
+            fileURL: directory.appendingPathComponent("goals.json"),
+            defaults: defaults,
+            syncMetaStore: metaStore,
+            deviceIdStore: deviceStore
+        )
+        let trueNorthStore = TrueNorthStore(
+            fileURL: directory.appendingPathComponent("truenorth.json"),
+            defaults: defaults,
+            syncMetaStore: metaStore,
+            deviceIdStore: deviceStore
+        )
+
+        try goalStore.saveAll([Goal(
+            id: "goal-1",
+            name: "Complete goal",
+            description: "Keep this description",
+            color: "#123456",
+            createdAt: 1_788_393_600_123
+        )])
+        try trueNorthStore.saveAll([TrueNorthGoal(
+            id: "north-1",
+            vision: "A complete vision",
+            isMoneyGoal: true,
+            tangibleReality: "Concrete outcome",
+            sensoryDetails: "Detailed evidence",
+            planB: "Safe fallback",
+            importance: 9,
+            anchorHabit: "Daily review",
+            anchorTask: "Weekly plan",
+            createdAt: 1_788_393_600_456
+        )])
+
+        let outbox = try metaStore.load().outbox
+        let goalPayload = try XCTUnwrap(outbox.first(where: { $0.entityType == "goals" })?.payload.value as? [String: Any])
+        XCTAssertEqual(goalPayload["description"] as? String, "Keep this description")
+        XCTAssertEqual(goalPayload["color"] as? String, "#123456")
+        XCTAssertEqual(strictJSONInteger(goalPayload["createdAt"]), 1_788_393_600_123)
+
+        let trueNorthPayload = try XCTUnwrap(outbox.first(where: { $0.entityType == "truenorth" })?.payload.value as? [String: Any])
+        XCTAssertEqual(trueNorthPayload["isMoneyGoal"] as? Bool, true)
+        XCTAssertEqual(trueNorthPayload["tangibleReality"] as? String, "Concrete outcome")
+        XCTAssertEqual(trueNorthPayload["sensoryDetails"] as? String, "Detailed evidence")
+        XCTAssertEqual(trueNorthPayload["planB"] as? String, "Safe fallback")
+        XCTAssertEqual(strictJSONInteger(trueNorthPayload["importance"]), 9)
+        XCTAssertEqual(trueNorthPayload["anchorHabit"] as? String, "Daily review")
+        XCTAssertEqual(trueNorthPayload["anchorTask"] as? String, "Weekly plan")
+        XCTAssertEqual(strictJSONInteger(trueNorthPayload["createdAt"]), 1_788_393_600_456)
+    }
+
     func test_pending_local_commit_recovers_after_interrupted_write() throws {
         let suite = "goalflow.sync.recovery.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))

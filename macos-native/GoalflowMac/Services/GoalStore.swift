@@ -40,8 +40,8 @@ final class GoalStore: @unchecked Sendable {
             throw SyncError.validation("Goal storage is invalid. No goal was discarded or replaced.")
         }
         let previous = try loadAll()
-        let prevVal: Any? = previous.map { ["id": $0.id, "name": $0.name] as [String: Any] }
-        let nextVal: Any? = goals.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+        let prevVal: Any? = try JSONSerialization.jsonObject(with: encoder.encode(previous), options: [.fragmentsAllowed])
+        let nextVal: Any? = try JSONSerialization.jsonObject(with: encoder.encode(goals), options: [.fragmentsAllowed])
         let transaction = try buildStagedLocalTransaction(storeName: "goals", userKey: "unbound-local-workspace", previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString.lowercased() })
         let currentMeta = try syncMetaStore.load()
         let nextMeta: SyncMeta
@@ -96,8 +96,8 @@ final class TrueNorthStore: @unchecked Sendable {
             throw SyncError.validation("True North storage is invalid. No goal was discarded or replaced.")
         }
         let previous = try loadAll()
-        let prevVal: Any? = previous.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
-        let nextVal: Any? = goals.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
+        let prevVal: Any? = try JSONSerialization.jsonObject(with: encoder.encode(previous), options: [.fragmentsAllowed])
+        let nextVal: Any? = try JSONSerialization.jsonObject(with: encoder.encode(goals), options: [.fragmentsAllowed])
         let transaction = try buildStagedLocalTransaction(storeName: "truenorth", userKey: "unbound-local-workspace", previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString.lowercased() })
         let currentMeta = try syncMetaStore.load()
         let nextMeta: SyncMeta
