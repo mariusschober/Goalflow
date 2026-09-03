@@ -349,10 +349,7 @@ jobs:
           app="$RUNNER_TEMP/goalflow-macos-release/Build/Products/Release/GoalflowMac.app"
           [ -d "$app" ] || { echo "macOS application bundle was not produced." >&2; exit 1; }
           codesign --verify --deep --strict "$app"
-          if LC_ALL=C grep -ERaiq 'sb_secret_[A-Za-z0-9_-]{20,}' "$app"; then
-            echo "A server-only Supabase credential pattern reached the macOS bundle." >&2
-            exit 1
-          fi
+          macos-native/scripts/verify-built-app-key.sh "$app"
           archive="$RUNNER_TEMP/goalflow-macos-ad-hoc-beta.zip"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
           (

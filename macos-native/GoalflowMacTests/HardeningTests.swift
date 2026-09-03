@@ -392,6 +392,32 @@ final class HardeningTests: XCTestCase {
         XCTAssertEqual(configuration.supabaseURL?.absoluteString, "https://project.supabase.co")
     }
 
+    func test_cloud_configuration_allows_only_anon_legacy_jwt() throws {
+        func legacyKey(role: String) throws -> String {
+            let header = try JSONSerialization.data(withJSONObject: ["alg": "HS256", "typ": "JWT"])
+            let payload = try JSONSerialization.data(withJSONObject: ["role": role])
+            return [
+                header.base64URLEncodedString(),
+                payload.base64URLEncodedString(),
+                "synthetic-signature"
+            ].joined(separator: ".")
+        }
+
+        let anonConfiguration = MacCloudConfiguration(
+            apiOrigin: "https://app.goalflow.test",
+            supabaseURL: "https://project.supabase.co",
+            publishableKey: try legacyKey(role: "anon")
+        )
+        XCTAssertTrue(anonConfiguration.isCloudConfigured)
+
+        let serverConfiguration = MacCloudConfiguration(
+            apiOrigin: "https://app.goalflow.test",
+            supabaseURL: "https://project.supabase.co",
+            publishableKey: try legacyKey(role: "service_role")
+        )
+        XCTAssertFalse(serverConfiguration.isCloudConfigured)
+    }
+
     func test_auth_callback_requires_exact_custom_url() {
         XCTAssertTrue(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://auth/callback?code=one&state=two")!))
         XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://auth/other?code=one&state=two")!))
