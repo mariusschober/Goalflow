@@ -21,21 +21,21 @@ write_signer() {
 }
 
 write_signer 2 'synthetic signer failure'
-if ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
+if PATH="$tool_dir:$PATH" ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
   bash "$script_dir/verify-signing-strict.sh" "$apk" >/dev/null 2>&1; then
   echo 'SIGNING_GATE=FAIL (apksigner failure was masked)' >&2
   exit 1
 fi
 
 write_signer 0 'Signer #1 certificate DN: CN=Android Debug,O=Android,C=US'
-if ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
+if PATH="$tool_dir:$PATH" ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
   bash "$script_dir/verify-signing-strict.sh" "$apk" >/dev/null 2>&1; then
   echo 'SIGNING_GATE=FAIL (debug certificate was accepted)' >&2
   exit 1
 fi
 
 write_signer 0 'Signer #1 certificate DN: CN=Goalflow Beta,O=Goalflow,C=DE'
-release_output="$(ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
+release_output="$(PATH="$tool_dir:$PATH" ANDROID_HOME="$work_dir/android-sdk" ANDROID_EXPECT_SIGNED=1 \
   bash "$script_dir/verify-signing-strict.sh" "$apk")"
 grep -Fq 'SIGNING=PASS' <<<"$release_output"
 
