@@ -279,7 +279,7 @@ heads is a production release merely because it exists.
 | `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
 | `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
 | `feat/telegram-beta` | `4d36dc11a9bf4e83d6dbb882c4c94e9de7ee4eb3` | 9 commits after `feat/macos-beta` | Selective bot/Mini App transplant plus additive-migration and PostgreSQL verification hardening; feature remains disabled pending live verification |
-| `chore/railway-beta-gate` | `8c9c6f74f6fbaa873884102cbb3d89104fa90a5e` | 12 commits after `feat/telegram-beta` | Repository-backed Railway cron, protocol and real-browser hosted staging proof, fail-closed release promotion, complete Android migration fixtures, retained macOS beta artifact, and removal of obsolete release guidance |
+| `chore/railway-beta-gate` | `22b8b5dbbc30e997f7fc66c46284bb7e4c5eacbf` | 34 commits after `feat/telegram-beta` | Repository-backed Railway cron, hosted proof harnesses, fail-closed release/signing/key gates, backup/restore verification, web/native auth and transport hardening, complete Android migration fixtures, and retained macOS beta artifact |
 
 Useful `sol/web-production-24h` behavior is replaced by current WebKit and
 production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
@@ -405,6 +405,57 @@ test files / 217 tests. The hosted command was separately shown to reject a
 missing staging guard, and the ordinary Playwright configuration lists only its
 eight Chromium/WebKit synthetic journeys. The live hosted browser journey
 remains unexecuted until staging exists.
+
+The second operational hardening tranche is represented by these exact remote
+commits. It is additive application, test, CI, and documentation work; it does
+not edit or add a database migration:
+
+```text
+a009a8f4582c09c2f6e79d2ce4b7899568d605e1 docs(beta): record browser and emulator evidence
+e8e926ff3a2f9c8d5094b8c5ea6f249946ba4667 test(staging): revoke hosted test sessions
+79d8ea9578921d2220a99b16e83cde9a6a16b696 fix(release): require one verified APK signer
+f33bf98b19fc201263c87da4eb867b3273dbca9a fix(android): remove decoded signing material
+f4134fc62a7922a48d51c15f62ec9f13a5605bed fix(security): enforce Supabase key roles at build
+5b4ed903ef9abf5580826fbb0f524c33e4da0b27 fix(macos): reject server keys in app bundles
+70fb4a61c9caf6634644a186a44d069ff9c1778a test(maintenance): use role-correct Supabase keys
+157b5338215af54fcecbfbe0f7e89660b81d2083 fix(backups): verify uploaded objects before completion
+db26fc33d57d6ad1d5e1e121525d6e0656fa41d6 fix(restore): verify restored row content
+0f641dbf3615201559948afdf1d4d44e1e0ca2cc fix(web): bound complete auth and sync responses
+f05d52735d907c0edaac2ce36a2490a8ca65c8ed fix(auth): subscribe before initial validation
+eee4af0300eb42392df6204d348f4c06bee00a65 fix(ci): use runner PostgreSQL for migrations
+f9ceb6a6d742111897fa22f0d21729c24e625f19 fix(macos): fail closed on bundle inspection
+6ecfb5dcd2f2f87946766490c93811e8c3abc0fb fix(macos): fail closed on source discovery
+9f04d34a05abd0f91892285cf2d91cdb8ca9d805 fix(auth): scope owner gate to admin routes
+cb72a806d469f366b05e53a17377a23d4784d147 fix(macos): use portable source discovery
+6cd699087ed4f5c923f031d1bee9982e41ff9d85 fix(auth): verify session termination results
+123475b36aae7e044dc0ee3707f2069df2a8e5a1 feat(android): support owner MFA elevation
+480c225ba899b620e1490fd0edaa8bbec2aeeaca ci: cancel superseded branch gates
+85586fb4fd7b359718ab493a1b2d4cd55c0171ce fix(web): cap buffered API responses
+122f5e700c096c4393326bf5ba61a4d6288d144e fix(android): bound synchronization responses
+22b8b5dbbc30e997f7fc66c46284bb7e4c5eacbf fix(android): surface corrupt cloud sessions
+```
+
+This tranche makes signing require one expected certificate, prevents decoded
+keystore material from surviving the release step, and rejects Supabase
+server-secret key forms in every distributable. Backup completion now requires
+read-after-write byte and authenticated-decryption verification; restore
+completion re-exports and compares committed content, not only row IDs and
+counts. Web authentication subscribes before initial validation, bounds full
+response reads, and surfaces local/global sign-out failures. Native Android
+can elevate the owner through a project-bound TOTP challenge, caps sync
+responses, and reports damaged encrypted session state while retaining Room
+data and pending mutations. The CI concurrency key cancels only older runs for
+the same ref; the newest exact commit must still finish every required job.
+
+Local verification at `22b8b5d` passed 46 Vitest files / 245 tests, TypeScript,
+production client/server/Mini App builds, production boot and maintenance
+fail-closed checks, current-tree client scans, all migration and Room hash
+ledgers, durable identifiers, shell syntax, and the high-severity dependency
+audit with zero reported vulnerabilities. GitHub Actions run
+[`33782495962`](https://github.com/mariusschober/Goalflow/actions/runs/33782495962)
+is the exact-implementation run and remains in progress at this capture. Its
+completed `verify` and clean PostgreSQL `migrations` jobs passed; it is not
+represented as a green aggregate gate.
 
 `feature/chrome-execution-companion` remains unported and tagged as post-beta.
 No historical remote branch has been deleted.
