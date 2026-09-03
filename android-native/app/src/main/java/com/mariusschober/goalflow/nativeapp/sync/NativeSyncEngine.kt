@@ -13,10 +13,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
+import okhttp3.ResponseBody
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.concurrent.TimeUnit
 import kotlin.math.min
@@ -51,6 +54,32 @@ class NativeSyncSessionChangedDuringSync : IllegalStateException(
 )
 class NativeSyncProtocolException(message: String) : IllegalStateException(message)
 class NativeSyncTransientException(message: String, cause: Throwable? = null) : IOException(message, cause)
+private const val MAX_NATIVE_SYNC_RESPONSE_BYTES = 16 * 1024 * 1024
+
+internal fun readNativeSyncResponse(
+    body: ResponseBody?,
+    maximumBytes: Int = MAX_NATIVE_SYNC_RESPONSE_BYTES
+): String {
+    require(maximumBytes > 0) { "A positive response limit is required." }
+    if (body == null) return ""
+    val declaredLength = body.contentLength()
+    if (declaredLength > maximumBytes) {
+        throw NativeSyncProtocolException("The synchronization response exceeded the safe client limit.")
+    }
+    val output = ByteArrayOutputStream()
+    body.byteStream().use { stream ->
+        val buffer = ByteArray(8_192)
+        while (true) {
+            val count = stream.read(buffer)
+            if (count < 0) break
+            if (count > maximumBytes - output.size()) {
+                throw NativeSyncProtocolException("The synchronization response exceeded the safe client limit.")
+            }
+            output.write(buffer, 0, count)
+        }
+    }
+    return String(output.toByteArray(), StandardCharsets.UTF_8)
+}
 
 data class NativeSyncRetryPolicy(
     val maxAttempts: Int = 3,
@@ -493,7 +522,6 @@ class NativeSyncEngine(
         }
 
         const val MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991.0
-
         fun isRetryableStatus(code: Int): Boolean = code >= 500 || code in RETRYABLE_STATUS
 
         fun JSONObject.nullableString(key: String): String? =
@@ -514,7 +542,7 @@ class NativeSyncEngine(
             }.build()
             okHttpSingleton.newCall(request).execute().use { response ->
                 val code = response.code
-                val responseBody = response.body?.string().orEmpty()
+                val responseBody = readNativeSyncResponse(response.body)
                 return NativeHttpResponse(code, responseBody)
             }
         }
