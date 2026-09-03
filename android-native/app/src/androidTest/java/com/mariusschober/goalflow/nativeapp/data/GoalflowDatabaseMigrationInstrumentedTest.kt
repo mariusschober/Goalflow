@@ -57,30 +57,30 @@ class GoalflowDatabaseMigrationInstrumentedTest {
             migrationHelper.createDatabase(databaseName, startVersion).apply {
                 execSQL(
                     "INSERT INTO tasks (id,title,notes,schedulePrecision,scheduledFor,scheduledTime,plannedOrder,status,isFrog,beforeFrog,frogFailures,source,goalId,parentTaskId,habitId,createdAt,updatedAt,completedAt,deletedAt" +
-                        if (startVersion >= 4) ",extraJson)" else ")" +
+                        (if (startVersion >= 4) ",extraJson)" else ")") +
                         " VALUES ('$taskId','Keep this task','','DAY','2026-08-27',NULL,0,'OPEN',0,0,0,'MANUAL',NULL,NULL,NULL,1000,2000,NULL,NULL" +
-                        if (startVersion >= 4) ",'{}')" else ")"
+                        (if (startVersion >= 4) ",'{}')" else ")")
                 )
                 execSQL(
                     "INSERT INTO tasks (id,title,notes,schedulePrecision,scheduledFor,scheduledTime,plannedOrder,status,isFrog,beforeFrog,frogFailures,source,goalId,parentTaskId,habitId,createdAt,updatedAt,completedAt,deletedAt" +
-                        if (startVersion >= 4) ",extraJson)" else ")" +
+                        (if (startVersion >= 4) ",extraJson)" else ")") +
                         " VALUES ('$tombstoneTaskId','Preserve this tombstone','','DAY','2026-08-26',NULL,1,'DONE',0,0,0,'MANUAL',NULL,NULL,NULL,3000,4000,4500,5000" +
-                        if (startVersion >= 4) ",'{}')" else ")"
+                        (if (startVersion >= 4) ",'{}')" else ")")
                 )
                 execSQL("INSERT INTO daily_plans (localDate,confirmedAt,taskIds) VALUES ('2026-08-27',6000,'$taskId')")
                 if (startVersion >= 2) {
                     execSQL(
                         "INSERT INTO sync_outbox (mutationId,deviceId,entityType,entityId,baseServerVersion,version,payload,updatedAt,deletedAt" +
-                            if (startVersion >= 3) ",dependsOnMutationId,resolvesConflictId,attemptedAt)" else ")" +
+                            (if (startVersion >= 3) ",dependsOnMutationId,resolvesConflictId,attemptedAt)" else ")") +
                             " VALUES ('$mutationId','device-a','tasks','$entityId',41,42,'$localPayload','$updatedAt','$deletedAt'" +
-                            if (startVersion >= 3) ",'$dependencyMutationId','conflict-$startVersion','$attemptedAt')" else ")"
+                            (if (startVersion >= 3) ",'$dependencyMutationId','conflict-$startVersion','$attemptedAt')" else ")")
                     )
                     execSQL("INSERT INTO sync_meta (entityType,cursor,localVersion,serverVersion,lastSuccessfulSync) VALUES ('$syncMetaKey',17,42,41,'$updatedAt')")
                     execSQL(
                         "INSERT INTO sync_conflicts (id,entityType,localPayload,serverPayload,serverVersion,createdAt" +
-                            if (startVersion >= 3) ",entityId,mutationId,localDeletedAt,localHistory,serverDeletedAt,status)" else ")" +
+                            (if (startVersion >= 3) ",entityId,mutationId,localDeletedAt,localHistory,serverDeletedAt,status)" else ")") +
                             " VALUES ('conflict-$startVersion','tasks','$localPayload','$serverPayload',43,'$updatedAt'" +
-                            if (startVersion >= 3) ",'$entityId','$mutationId','$deletedAt','[\"history\"]','$attemptedAt','unresolved')" else ")"
+                            (if (startVersion >= 3) ",'$entityId','$mutationId','$deletedAt','[\"history\"]','$attemptedAt','unresolved')" else ")")
                     )
                 }
                 if (startVersion >= 5) {
