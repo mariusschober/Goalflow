@@ -141,4 +141,7 @@ expect_query account-binding \
 
 echo 'UPGRADE_INSTALL_LAUNCH=PASS'
 echo 'UPGRADE_DATA_PRESERVATION=PASS'
+echo "UPGRADE_PACKAGE=$new_package"
+echo "UPGRADE_VERSION_CODES=$old_version->$new_version"
+echo 'UPGRADE_SENTINELS=2_tasks,3_outbox,1_tombstone,1_dependency,1_account_binding'
 echo 'UPGRADE_MATRIX=PASS'

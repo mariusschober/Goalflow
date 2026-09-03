@@ -218,7 +218,12 @@ jobs:
         run: |
           set -euo pipefail
           old_source="$RUNNER_TEMP/goalflow-native-v2-source"
-          git worktree add --detach "$old_source" 763460aa45a1173839fb31c2950f20a08abaacc3^
+          expected_old_commit="02e7280fb4162e6ac9436638f29e69acf9dcb1fb"
+          git worktree add --detach "$old_source" "$expected_old_commit"
+          [ "$(git -C "$old_source" rev-parse HEAD)" = "$expected_old_commit" ] || {
+            echo "Preserved v2 worktree is not at the required commit." >&2
+            exit 1
+          }
           fixture_dir="$old_source/android-native/app/src/androidTest/java/com/mariusschober/goalflow/nativeapp/data"
           mkdir -p "$fixture_dir"
           cp android-native/upgrade-fixtures/PriorInstallUpgradeSeedTest.kt "$fixture_dir/"
