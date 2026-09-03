@@ -195,6 +195,7 @@ const run = async () => {
   expectStatus(await request('/api/v1/health/ready'), 200, 'Readiness');
 
   const databaseA = client();
+  const databaseASecond = client();
   const databaseB = client();
   let sessionA = await signIn(
     databaseA,
@@ -217,6 +218,36 @@ const run = async () => {
   assert(refreshed.data.session, 'User A refresh did not return a session');
   assert.equal(refreshed.data.session.user.id, sessionA.user.id, 'Refresh changed the durable account identity');
   sessionA = refreshed.data.session;
+  const sessionASecond = await signIn(
+    databaseASecond,
+    environment.GOALFLOW_STAGING_USER_A_EMAIL,
+    environment.GOALFLOW_STAGING_USER_A_PASSWORD,
+    environment.GOALFLOW_STAGING_USER_A_ID
+  );
+  await verifyServerSession(sessionASecond.access_token, sessionASecond.user.id);
+
+  const accountExport = expectStatus(await request('/api/v1/account/export', sessionA.access_token), 200,
+    'Account export');
+  const exportBody = asRecord(accountExport.body, 'Account export is not an object');
+  assert.equal(exportBody.schemaVersion, 3, 'Account export schema version is unexpected');
+  const collections = asRecord(exportBody.collections, 'Account export has no collections');
+  for (const [collection, rows] of Object.entries(collections)) {
+    assert(Array.isArray(rows), `Account export collection ${collection} is not an array`);
+    for (const value of rows) {
+      const row = asRecord(value, `Account export collection ${collection} contains a non-object row`);
+      for (const ownerColumn of ['user_id', 'auth_user_id', 'created_by'] as const) {
+        if (typeof row[ownerColumn] === 'string') {
+          assert.equal(row[ownerColumn], sessionA.user.id,
+            `Account export collection ${collection} crossed an account boundary`);
+        }
+      }
+    }
+  }
+  const deletion = await request('/api/v1/account', sessionA.access_token, { method: 'DELETE' });
+  assert.equal(deletion.status, 409, 'Transactional account deletion unexpectedly became active');
+  expectSafeFailure(deletion, 'Disabled account deletion');
+  assert.equal(asRecord(asRecord(deletion.body, 'Deletion response is invalid').error,
+    'Deletion response has no error').code, 'account_deletion_disabled');
 
   const ownDataRead = await databaseA.from('sync_records').select('entity_id').limit(1);
   assert(ownDataRead.error, 'Direct client Data API access bypassed the Goalflow protocol');
@@ -308,7 +339,7 @@ const run = async () => {
     payload: taskPayload(taskA, 'Hosted user A converged edit', sessionA.user.id),
     updatedAt: new Date().toISOString()
   };
-  const editAReceipt = await push(sessionA.access_token, editA);
+  const editAReceipt = await push(sessionASecond.access_token, editA);
   const editAServerVersion = serverVersion(editAReceipt);
   const converged = await pull(sessionA.access_token, createAServerVersion);
   assert.equal(asRecord(findRecord(converged.records, taskA)?.payload, 'Edited task did not converge').title,
@@ -394,6 +425,9 @@ const run = async () => {
     isolation: 'PASS',
     directClientBypass: 'DENIED',
     refresh: 'PASS',
+    secondAuthenticatedSession: 'PASS',
+    accountExportIsolation: 'PASS',
+    accountDeletion: 'SAFELY_DISABLED',
     remoteLogout: 'PASS',
     duplicateDelivery: 'IDEMPOTENT',
     conflict: 'PRESERVED_AND_RESOLVED',

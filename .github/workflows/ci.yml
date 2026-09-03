@@ -446,6 +446,19 @@ jobs:
       - name: Prove hosted authentication, isolation, synchronization, and revocation
         if: steps.preflight.outputs.run == 'true'
         run: npm run test:hosted:staging
+      - name: Install hosted browser
+        if: steps.preflight.outputs.run == 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Prove hosted browser convergence and account isolation
+        if: steps.preflight.outputs.run == 'true'
+        run: npm run test:hosted:browser
+      - name: Upload redacted hosted browser diagnostics
+        if: always() && steps.preflight.outputs.run == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: hosted-browser-diagnostics
+          path: test-results
+          if-no-files-found: error
 
   beta-gate:
     name: beta-gate
