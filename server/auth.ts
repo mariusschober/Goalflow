@@ -8,15 +8,25 @@ export const bearerToken = (request: Request): string | undefined => {
   const header = request.header("authorization");
   return header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 };
-const tokenAal = (token: string): "aal1" | "aal2" => {
+const tokenClaims = (token: string): { aal: "aal1" | "aal2"; sessionId?: string } => {
   try {
-    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as { aal?: string };
-    return payload.aal === "aal2" ? "aal2" : "aal1";
-  } catch { return "aal1"; }
+    const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as {
+      aal?: string;
+      session_id?: string;
+    };
+    const sessionId = typeof payload.session_id === "string"
+      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.session_id)
+      ? payload.session_id
+      : undefined;
+    return { aal: payload.aal === "aal2" ? "aal2" : "aal1", sessionId };
+  } catch { return { aal: "aal1" }; }
 };
 
-export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) => {
-  const supabase = createUserVerifierClient(config);
+export const createAuthMiddleware = (
+  config: AppConfig,
+  admin?: SupabaseClient,
+  supabase: SupabaseClient | undefined = createUserVerifierClient(config)
+) => {
   return async (request: Request, response: Response, next: NextFunction) => {
     const token = bearerToken(request);
     if (token === "local-demo" && config.NODE_ENV !== "production" && config.ENABLE_LOCAL_DEMO === "true") {
@@ -30,13 +40,34 @@ export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) 
     if (error || !data.user) {
       response.status(401).json({ error: { code: "unauthorized", message: "The session is invalid or expired." } }); return;
     }
+    const claims = tokenClaims(token);
+    if (!claims.sessionId) {
+      response.status(401).json({ error: { code: "unauthorized", message: "The session is invalid or expired." } }); return;
+    }
+    const { data: activeSession, error: sessionError } = await admin.rpc("goalflow_session_is_active", {
+      target_user_id: data.user.id,
+      target_session_id: claims.sessionId
+    });
+    if (sessionError) {
+      response.status(503).json({ error: { code: "session_check_unavailable", message: "Account access could not be verified." } }); return;
+    }
+    if (activeSession !== true) {
+      response.status(401).json({ error: { code: "session_revoked", message: "This session has been signed out." } }); return;
+    }
     const authEmail = data.user.email?.toLowerCase() ?? "";
     let { data: profile, error: profileError } = await admin.from("profiles").select("email,role,status")
       .eq("user_id", data.user.id).maybeSingle();
     if (!profile && !profileError && data.user.id === config.OWNER_USER_ID) {
-      const result = await admin.from("profiles").upsert({ user_id: data.user.id, email: authEmail, role: "owner", status: "active" }, { onConflict: "user_id" })
-        .select("email,role,status").single();
-      profile = result.data; profileError = result.error;
+      const bootstrap = await admin.rpc("bootstrap_goalflow_owner", {
+        target_user_id: data.user.id,
+        target_email: authEmail
+      });
+      if (bootstrap.error) profileError = bootstrap.error;
+      else if (bootstrap.data === true) {
+        const result = await admin.from("profiles").select("email,role,status")
+          .eq("user_id", data.user.id).maybeSingle();
+        profile = result.data; profileError = result.error;
+      }
     }
     if (profileError) {
       response.status(503).json({ error: { code: "profile_unavailable", message: "Account access could not be verified." } }); return;
@@ -63,7 +94,7 @@ export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) 
       email: String(profile.email || authEmail),
       role: profile.role === "owner" ? "owner" : "beta",
       status: "active",
-      aal: tokenAal(token)
+      aal: claims.aal
     };
     (request as AuthenticatedRequest).user = user;
     next();

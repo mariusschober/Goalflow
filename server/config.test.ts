@@ -66,6 +66,7 @@ describe("production environment contract", () => {
       "ai_key_missing",
       "voice_key_missing",
       "turnstile_secret_missing",
+      "turnstile_site_key_missing",
       "backup_key_invalid"
     ]);
   });

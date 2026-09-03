@@ -1,4 +1,4 @@
-import { createClient, type Session } from '@supabase/supabase-js';
+import { createClient, type AuthChangeEvent, type Session } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabasePublicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -11,6 +11,26 @@ const localDemo = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_DEMO 
 const testBuild = import.meta.env.VITE_TEST_MODE === 'true';
 const testCode = import.meta.env.VITE_TEST_CODE || '';
 const testAccessStorageKey = 'goalflow-test-access';
+const emailActivationMetadataKey = 'goalflow_beta_activation_id';
+
+export interface ServerAccount {
+  id: string;
+  email: string;
+  role: 'owner' | 'beta';
+  status: 'active';
+  assuranceLevel: 'aal1' | 'aal2';
+}
+
+export class SessionValidationError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string
+  ) {
+    super(message);
+    this.name = 'SessionValidationError';
+  }
+}
 
 export const isTestBuild = (): boolean => testBuild;
 export const isLocalDemo = (): boolean => localDemo || testBuild;
@@ -50,13 +70,13 @@ export const getSession = async (): Promise<Session | null> => {
   return data.session;
 };
 
-export const onSessionChange = (callback: (session: Session | null) => void) => {
+export const onSessionChange = (callback: (session: Session | null, event: AuthChangeEvent) => void) => {
   if (!supabase) return () => undefined;
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') {
-      // Quarantine sync state on sign-out to prevent cross-account leakage
+      // Authentication artifacts are removed, but the per-account durable
+      // outbox remains intact for a later sign-in and retry.
       try {
-        localStorage.removeItem('goalflow:sync-state');
         sessionStorage.removeItem('goalflow_telegram_attempt');
         sessionStorage.removeItem('goalflow_telegram_state');
         sessionStorage.removeItem('goalflow_telegram_verifier');
@@ -66,7 +86,7 @@ export const onSessionChange = (callback: (session: Session | null) => void) => 
     if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
       // Proactive refresh succeeded, clear any quarantine
     }
-    callback(session);
+    callback(session, event);
   });
   return () => data.subscription.unsubscribe();
 };
@@ -85,6 +105,121 @@ export const requestOwnerMagicLink = async (email: string): Promise<void> => {
     options: { emailRedirectTo: window.location.origin, shouldCreateUser: false }
   });
   if (error) throw error;
+};
+
+export const registerWithEmail = async (
+  email: string,
+  password: string,
+  inviteCode: string,
+  captchaToken = ''
+): Promise<{ verificationRequired: boolean }> => {
+  if (!supabase) throw new Error('Authentication is not configured.');
+  const normalizedEmail = email.trim().toLowerCase();
+  const preflight = await fetch(apiUrl('/api/v1/auth/email/preflight'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ email: normalizedEmail, code: inviteCode.trim(), captchaToken })
+  });
+  const preflightBody = await preflight.json() as {
+    activationId?: string;
+    expiresInSeconds?: number;
+    error?: { message?: string };
+  };
+  if (!preflight.ok || !preflightBody.activationId) {
+    throw new Error(preflightBody.error?.message || 'Email signup could not be started.');
+  }
+  const { data, error } = await supabase.auth.signUp({
+    email: normalizedEmail,
+    password,
+    options: {
+      emailRedirectTo: `${window.location.origin}/?auth=email`,
+      data: { [emailActivationMetadataKey]: preflightBody.activationId }
+    }
+  });
+  if (error) throw error;
+  return { verificationRequired: !data.session };
+};
+
+export const signInWithEmail = async (email: string, password: string): Promise<void> => {
+  if (!supabase) throw new Error('Authentication is not configured.');
+  const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
+  if (error) throw error;
+};
+
+export const requestPasswordReset = async (email: string): Promise<void> => {
+  if (!supabase) throw new Error('Authentication is not configured.');
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim().toLowerCase(), {
+    redirectTo: `${window.location.origin}/?auth=recovery`
+  });
+  if (error) throw error;
+};
+
+export const updateRecoveredPassword = async (password: string): Promise<void> => {
+  if (!supabase) throw new Error('Authentication is not configured.');
+  const { error } = await supabase.auth.updateUser({ password });
+  if (error) throw error;
+  const { error: revokeError } = await supabase.auth.signOut({ scope: 'global' });
+  if (revokeError) {
+    throw new Error('The password was updated, but other sessions could not be revoked. Sign out all devices before continuing.');
+  }
+};
+
+export const hasPendingEmailActivation = (session: Session): boolean => {
+  const activationId = session.user.user_metadata?.[emailActivationMetadataKey];
+  return typeof activationId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(activationId);
+};
+
+export const clearPendingEmailActivation = (): void => {
+  const url = new URL(window.location.href);
+  url.searchParams.delete('auth');
+  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
+};
+
+export const activateEmailSignup = async (session: Session): Promise<void> => {
+  if (!hasPendingEmailActivation(session)) {
+    clearPendingEmailActivation();
+    throw new SessionValidationError('This verification link has no valid beta activation. Start signup again.', 400, 'activation_rejected');
+  }
+  const response = await fetch(apiUrl('/api/v1/auth/email/activate'), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
+    body: '{}'
+  });
+  const result = await response.json() as { error?: { code?: string; message?: string } };
+  if (!response.ok) {
+    if (response.status < 500) clearPendingEmailActivation();
+    throw new SessionValidationError(
+      result.error?.message || 'Email signup could not be activated.',
+      response.status,
+      result.error?.code || 'activation_failed'
+    );
+  }
+  clearPendingEmailActivation();
+  // The attempt ID is not a credential and is already consumed server-side.
+  // Remove it from future session payloads as a best-effort hygiene step.
+  try {
+    await supabase?.auth.updateUser({ data: { [emailActivationMetadataKey]: null } });
+  } catch {}
+};
+
+export const validateServerSession = async (session: Session): Promise<ServerAccount> => {
+  const response = await fetch(apiUrl('/api/v1/session'), {
+    headers: { authorization: `Bearer ${session.access_token}` }
+  });
+  const result = await response.json() as {
+    user?: Omit<ServerAccount, 'assuranceLevel'>;
+    assuranceLevel?: 'aal1' | 'aal2';
+    error?: { code?: string; message?: string };
+  };
+  if (!response.ok || !result.user || !result.assuranceLevel) {
+    throw new SessionValidationError(
+      result.error?.message || 'Account access could not be verified.',
+      response.status,
+      result.error?.code || 'session_validation_failed'
+    );
+  }
+  return { ...result.user, assuranceLevel: result.assuranceLevel };
 };
 
 const generateState = (): string => {
@@ -205,5 +340,9 @@ export const authenticatedFetch = async (input: RequestInfo | URL, init: Request
 };
 
 export const logout = async (): Promise<void> => {
-  if (supabase) await supabase.auth.signOut();
+  if (supabase) await supabase.auth.signOut({ scope: 'local' });
+};
+
+export const logoutEverywhere = async (): Promise<void> => {
+  if (supabase) await supabase.auth.signOut({ scope: 'global' });
 };

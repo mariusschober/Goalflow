@@ -12,6 +12,7 @@ import { createAiRouter } from "./routes/ai";
 import { createTaskRouter } from "./routes/tasks";
 import { createTelegramRouter } from "./routes/telegram";
 import { createTelegramAuthRouter } from "./routes/telegramAuth";
+import { createEmailAuthRouter } from "./routes/emailAuth";
 import { createSyncRouter } from "./routes/sync";
 import { createAdminInviteRouter } from "./routes/adminInvites";
 import { createAccountRouter } from './routes/account';
@@ -129,8 +130,17 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
   // Backwards-compatible alias that now has fail-closed readiness semantics.
   app.get("/api/v1/health", ready);
 
-  app.use("/api/v1/auth", createTelegramAuthRouter(config, admin));
+  app.use("/api/v1/auth", createEmailAuthRouter(config, admin), createTelegramAuthRouter(config, admin));
   app.use("/api/v1/telegram", createTelegramRouter(config, admin, speech, logger));
+  app.get("/api/v1/session", auth, (request, response) => response.json({
+    user: {
+      id: request.user!.id,
+      email: request.user!.email,
+      role: request.user!.role,
+      status: request.user!.status
+    },
+    assuranceLevel: request.user!.aal
+  }));
   app.use("/api/v1", auth, requireOwnerMfa, createAdminInviteRouter(admin), createAccountRouter(admin, config.TELEGRAM_OIDC_PROVIDER_ID), createSyncRouter(admin), createTaskRouter(admin));
   app.use("/api/v1/ai", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));
   app.use("/api/gemini", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));

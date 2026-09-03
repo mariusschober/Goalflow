@@ -17,6 +17,12 @@ export const checkSupabaseDependencies = async (
     throw new Error("The required synchronization protocol is unavailable.");
   }
 
+  const accountProtocol = await admin.rpc("goalflow_account_protocol_version")
+    .abortSignal(AbortSignal.timeout(config.READINESS_TIMEOUT_MS));
+  if (accountProtocol.error || Number(accountProtocol.data) !== 1) {
+    throw new Error("The required account protocol is unavailable.");
+  }
+
   const profiles = await admin.from("profiles").select("user_id", { count: "exact", head: true })
     .abortSignal(AbortSignal.timeout(config.READINESS_TIMEOUT_MS));
   if (profiles.error) throw new Error("The account profile store is unavailable.");

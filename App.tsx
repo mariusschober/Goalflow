@@ -36,11 +36,12 @@ const ViewFallback = () => <div className="flex min-h-[40vh] items-center justif
 interface AppProps {
   userEmail: string;
   userKey: string;
+  userRole: 'owner' | 'beta';
   openAccountSetup?: boolean;
   onLogout: () => void;
 }
 
-const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false, onLogout }) => {
+const App: React.FC<AppProps> = ({ userEmail, userKey, userRole, openAccountSetup = false, onLogout }) => {
   const [currentLocalDay, setCurrentLocalDay] = useState(getTodayYYYYMMDD());
   const [currentView, setCurrentView] = useState<View>('current');
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
@@ -678,6 +679,7 @@ const App: React.FC<AppProps> = ({ userEmail, userKey, openAccountSetup = false,
             onUpdateSettings={updateUserSettings}
             userEmail={userEmail}
             storageKey={userKey}
+            isOwner={userRole === 'owner'}
           />
         </React.Suspense>
       )}

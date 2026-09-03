@@ -21,6 +21,7 @@ export const Turnstile: React.FC<{ onToken: (token: string) => void }> = ({ onTo
         widgetId = window.turnstile.render(container.current, {
           sitekey: siteKey,
           theme: 'light',
+          action: 'beta-signup',
           callback: onToken,
           'expired-callback': () => onToken(''),
           'error-callback': () => onToken('')

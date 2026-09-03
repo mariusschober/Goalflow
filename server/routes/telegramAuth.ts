@@ -6,6 +6,7 @@ import { z } from "zod";
 import { bearerToken } from "../auth";
 import type { AppConfig } from "../config";
 import { createUserVerifierClient } from "../supabase";
+import { verifyTurnstile } from "../turnstile";
 
 const hash = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
 const codeChallengePattern = /^[A-Za-z0-9_-]{43,128}$/;
@@ -47,18 +48,9 @@ export const createTelegramAuthRouter = (config: AppConfig, admin?: SupabaseClie
     }
     try {
       const input = preflightBody.parse(request.body);
-      if (config.TURNSTILE_ENABLED === "true" && config.TURNSTILE_SECRET_KEY) {
-        const verification = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ secret: config.TURNSTILE_SECRET_KEY, response: input.captchaToken, remoteip: request.ip || '' }),
-          signal: AbortSignal.timeout(config.READINESS_TIMEOUT_MS)
-        });
-        const result = await verification.json() as { success?: boolean };
-        if (!result.success) {
-          response.status(400).json({ error: { code: 'captcha_failed', message: 'Human verification failed. Please try again.' } });
-          return;
-        }
+      if (!await verifyTurnstile(config, input.captchaToken, request.ip)) {
+        response.status(400).json({ error: { code: 'captcha_failed', message: 'Human verification failed. Please try again.' } });
+        return;
       }
       const { data: invite, error } = await admin.from("invite_codes").select("id,use_count,max_uses")
         .eq("code_hash", hash(input.code)).is("disabled_at", null).gt("expires_at", new Date().toISOString())

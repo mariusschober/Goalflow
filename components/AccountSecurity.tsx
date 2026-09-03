@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { authenticatedFetch, beginOwnerTelegramLink, supabase, telegramProvider } from '../services/authService';
+import { beginOwnerTelegramLink, logoutEverywhere, supabase, telegramProvider } from '../services/authService';
 
 type TotpEnrollment = {
   factorId: string;
@@ -98,19 +98,14 @@ export const AccountSecurity: React.FC<{ userEmail: string; isOwner?: boolean }>
     }
   };
 
-  const deleteAccount = async () => {
-    const confirmation = window.prompt('This permanently deletes your Goalflow account and cloud data. Type DELETE to continue.');
-    if (confirmation !== 'DELETE') return;
-    setBusy(true); setMessage(null);
+  const signOutEverywhere = async () => {
+    setBusy(true);
+    setMessage(null);
     try {
-      const response = await authenticatedFetch('/api/v1/account', {
-        method: 'DELETE', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ confirmation })
-      });
-      if (!response.ok) throw new Error('The account could not be deleted.');
-      await supabase?.auth.signOut();
+      await logoutEverywhere();
       window.location.assign('/');
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'The account could not be deleted.');
+      setMessage(error instanceof Error ? error.message : 'The sessions could not be revoked.');
       setBusy(false);
     }
   };
@@ -168,9 +163,13 @@ export const AccountSecurity: React.FC<{ userEmail: string; isOwner?: boolean }>
 
       {message && <p role="status" className="text-sm text-indigo-700 dark:text-indigo-300">{message}</p>}
       <div className="border-t border-gray-200 pt-5 dark:border-slate-700">
+        <h3 className="text-base font-bold text-gray-900 dark:text-white">Active sessions</h3>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Revoke refresh tokens on every device. Goalflow also rejects their existing access tokens immediately.</p>
+        <button type="button" onClick={() => void signOutEverywhere()} disabled={busy} className="mt-3 rounded-lg border border-red-200 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900/20">Sign out all devices</button>
+      </div>
+      <div className="border-t border-gray-200 pt-5 dark:border-slate-700">
         <h3 className="text-base font-bold text-gray-900 dark:text-white">Delete account</h3>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Permanently removes the auth account and cloud data. Export a backup first.</p>
-        <button type="button" onClick={deleteAccount} disabled={busy} className="mt-3 rounded-lg border border-red-200 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900/20">Delete account</button>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Self-service deletion is temporarily disabled during beta until database and encrypted-backup removal can be transactionally coordinated. Account export remains available.</p>
       </div>
     </div>
   );

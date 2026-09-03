@@ -1,7 +1,7 @@
 \set ON_ERROR_STOP on
 
-insert into auth.users (id, email)
-values ('11111111-1111-4111-8111-111111111111', 'migration@example.com');
+insert into auth.users (id, email, email_confirmed_at)
+values ('11111111-1111-4111-8111-111111111111', 'migration@example.com', now());
 insert into public.profiles (user_id, email, timezone)
 values ('11111111-1111-4111-8111-111111111111', 'migration@example.com', 'Pacific/Kiritimati');
 insert into public.tasks (

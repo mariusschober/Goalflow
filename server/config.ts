@@ -46,6 +46,7 @@ const environmentSchema = z.object({
   TELEGRAM_MAX_VOICE_BYTES: z.coerce.number().int().min(1_024).max(20_000_000).default(19_000_000),
   TURNSTILE_ENABLED: enabledFlag,
   TURNSTILE_SECRET_KEY: optionalString(),
+  VITE_TURNSTILE_SITE_KEY: optionalString(),
   BACKUPS_ENABLED: enabledFlag,
   BACKUP_MASTER_KEY: optionalString(z.string().min(32)),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
@@ -96,8 +97,9 @@ export const productionConfigurationProblems = (config: AppConfig): string[] => 
     if (config.TELEGRAM_ENABLED !== "true") problems.push("voice_requires_telegram");
     if (!config.OPENAI_API_KEY) problems.push("voice_key_missing");
   }
-  if (config.TURNSTILE_ENABLED === "true" && !config.TURNSTILE_SECRET_KEY) {
-    problems.push("turnstile_secret_missing");
+  if (config.TURNSTILE_ENABLED === "true") {
+    if (!config.TURNSTILE_SECRET_KEY) problems.push("turnstile_secret_missing");
+    if (!config.VITE_TURNSTILE_SITE_KEY) problems.push("turnstile_site_key_missing");
   }
   if (config.BACKUPS_ENABLED === "true" && !validBackupKey(config.BACKUP_MASTER_KEY)) {
     problems.push("backup_key_invalid");

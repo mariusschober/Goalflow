@@ -6,5 +6,6 @@
   "202608290001_native_task_events.sql": "4fe88cd8644d92d216a97819cad3f1e7a966ab684a06397750f4a41e07ea10ba",
   "202608300001_complete_native_sync_transport.sql": "1ffe9962982326517f1b0e8ad00ebc41a54c74fc7b4874014df4a299dbb0a6b8",
   "202608310001_telegram_auth_state_pkce.sql": "bc03354e202602ae111a27c2fa99f6256cee64abe4332882ba2c213f89f3868d",
-  "202609030001_access_boundary_hardening.sql": "da05c9f3ca5bc8f88cfc7577b9acbf0f9dfa1e316257b1548d6f548e59013627"
+  "202609030001_access_boundary_hardening.sql": "da05c9f3ca5bc8f88cfc7577b9acbf0f9dfa1e316257b1548d6f548e59013627",
+  "202609030002_account_lifecycle.sql": "3653ad3b92d1c7079fe4190646b1cd4682f88540c9f08408b6c3fe1d65723d4f"
 }

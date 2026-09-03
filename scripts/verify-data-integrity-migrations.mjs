@@ -11,11 +11,13 @@ const nativeEvents = migrations.find(item => item.file === '202608290001_native_
 const transportCompletion = migrations.find(item => item.file === '202608300001_complete_native_sync_transport.sql');
 const telegramAuth = migrations.find(item => item.file === '202608310001_telegram_auth_state_pkce.sql');
 const accessBoundary = migrations.find(item => item.file === '202609030001_access_boundary_hardening.sql');
+const accountLifecycle = migrations.find(item => item.file === '202609030002_account_lifecycle.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
 assert(telegramAuth, 'Telegram auth state PKCE migration is missing.');
 assert(accessBoundary, 'Access-boundary hardening migration is missing.');
+assert(accountLifecycle, 'Account lifecycle migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -108,6 +110,16 @@ assert(
     && accessBoundary.sql.includes('validate_goalflow_daily_plan_ownership')
     && accessBoundary.sql.includes('alter default privileges in schema public'),
   'Server-only data access, internal RPC denial, or same-owner constraints are incomplete.'
+);
+assert(
+  accountLifecycle.sql.includes('activate_goalflow_email_beta')
+    && accountLifecycle.sql.includes('goalflow_account_protocol_version')
+    && accountLifecycle.sql.includes('email_confirmed_at is not null')
+    && accountLifecycle.sql.includes("attempt.state = 'used'")
+    && accountLifecycle.sql.includes('bootstrap_goalflow_owner')
+    && accountLifecycle.sql.includes('goalflow_session_is_active')
+    && accountLifecycle.sql.includes('from auth.sessions'),
+  'Atomic invite activation, verified owner bootstrap, or session revocation support is incomplete.'
 );
 
 process.stdout.write(JSON.stringify({
