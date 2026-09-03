@@ -1,10 +1,10 @@
-name: CI
+name: Beta Gate
 
 on:
   push:
-    branches: [main, develop, goalflow-production, "reconcile/**"]
+    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**"]
   pull_request:
-    branches: [main, develop, goalflow-production, "reconcile/**"]
+    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**"]
 
 permissions:
   contents: read
@@ -305,7 +305,8 @@ jobs:
           path: test-results
           if-no-files-found: ignore
 
-  canonical-gate:
+  beta-gate:
+    name: beta-gate
     needs: [verify, secrets, migrations, android, native-android, web-release]
     runs-on: ubuntu-latest
     if: always()
@@ -319,4 +320,4 @@ jobs:
           if [ "${{ needs.android.result }}" != "success" ]; then echo "android failed: ${{ needs.android.result }}" >&2; exit 1; fi
           if [ "${{ needs.native-android.result }}" != "success" ]; then echo "native-android failed: ${{ needs.native-android.result }}" >&2; exit 1; fi
           if [ "${{ needs.web-release.result }}" != "success" ]; then echo "web-release failed: ${{ needs.web-release.result }}" >&2; exit 1; fi
-          echo "canonical-gate PASS — all required jobs succeeded"
+          echo "beta-gate PASS — all required jobs succeeded"
