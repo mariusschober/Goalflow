@@ -268,6 +268,61 @@ chrome-extension/tests/scheduling.test.ts
 The presence of `DemoCurrentTaskProvider` and absent canonical account/sync
 integration makes this post-beta work, not a beta dependency.
 
+## Selective-port execution ledger
+
+This ledger records the temporary beta branches created from canonical. It is
+append-only evidence of what replaced useful divergent work; none of these
+heads is a production release merely because it exists.
+
+| Temporary branch | Exact remote head | Base relationship | Current purpose |
+| --- | --- | --- | --- |
+| `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
+| `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
+| `feat/telegram-beta` | `26629c1ff22165b710a45a94a728fdc87af09861` | 6 commits after `feat/macos-beta` | Selective bot/Mini App transplant; feature remains disabled pending live verification |
+
+Useful `sol/web-production-24h` behavior is replaced by current WebKit and
+production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
+`f437888`. Useful session, revoked-token, timeout, ownership, and restore
+hardening identified on `codex/zero-data-loss-finalization` is represented by
+the current-contract commits from `955a340` through `87ae325`; the historical
+SQL blob and mutable deployment workflow were not copied.
+
+The native macOS application was introduced by `ee52d36` and subsequently
+hardened without merging its historical branch. Commits `8ae2fbd` through
+`d0e60bd` bind local workspaces to immutable accounts, make local mutation
+journaling recoverable, validate canonical response envelopes and receipts,
+preserve numeric/task/goal wire values, and surface corrupt storage rather than
+falling back to demo synchronization. `b0337ca` corrects the Android migration
+matrix to model the version-2 snapshot identity actually shipped (`singleton`)
+while retaining exact assertions for tasks, tombstones, payloads, timestamps,
+mutation IDs, dependencies, conflicts, events, and account IDs.
+
+The Telegram transplant is represented by these exact remote commits:
+
+```text
+0768288 fix(telegram): claim webhook updates atomically
+b1a4dc8 feat(telegram): add replay-safe Mini App sessions
+f1c5da3 fix(telegram): enforce account-bound bot access
+06024e7 feat(telegram): parse explicit rich schedules safely
+3d86b55 feat(db): confirm Telegram captures atomically
+26629c1 feat(telegram): preserve capture intent durably
+```
+
+The historical `202609010001_telegram_rich_capture.sql` was deliberately not
+ported: it added columns omitted by the canonical transactional restore
+function, which would have made a restore silently discard capture metadata.
+Instead, rich pending intent uses a versioned envelope in the already-backed-up
+`telegram_captures.transcript` field; forwarded user-visible content is written
+to the existing task `notes` field inside the same idempotent creation
+transaction. New additive migration
+`202609030007_telegram_capture_confirmation.sql` locks the pending capture,
+checks active ownership, creates or replays the deterministic task, and marks
+the capture confirmed atomically. Duplicate Telegram delivery and two
+intentionally identical messages therefore remain distinct concepts.
+
+`feature/chrome-execution-companion` remains unported and tagged as post-beta.
+No historical remote branch has been deleted.
+
 ## Non-negotiable reconciliation decisions
 
 1. `integration/beta` starts at exactly the verified canonical SHA; no merge was
