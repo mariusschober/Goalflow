@@ -2,7 +2,7 @@ name: Beta Gate
 
 on:
   push:
-    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**"]
+    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**", "feat/macos-beta"]
   pull_request:
     branches: [main, develop, goalflow-production, "reconcile/**", "integration/**"]
 
@@ -298,19 +298,74 @@ jobs:
           path: test-results
           if-no-files-found: ignore
 
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Verify public configuration and project specification
+        run: |
+          macos-native/scripts/verify-public-config.sh
+          plutil -lint macos-native/GoalflowMac/Resources/Info.plist
+          plutil -lint macos-native/GoalflowMac/Resources/PrivacyInfo.xcprivacy
+          ruby -e 'require "yaml"; YAML.safe_load(File.read("macos-native/project.yml"), aliases: true)'
+      - name: Record Xcode toolchain
+        run: |
+          xcodebuild -version
+          xcodebuild -project macos-native/GoalflowMac.xcodeproj -list
+      - name: Run macOS unit tests
+        run: |
+          xcodebuild test \
+            -project macos-native/GoalflowMac.xcodeproj \
+            -scheme GoalflowMac \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/goalflow-macos-tests" \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Build development-signed macOS beta candidate
+        run: |
+          xcodebuild clean build \
+            -project macos-native/GoalflowMac.xcodeproj \
+            -scheme GoalflowMac \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/goalflow-macos-release" \
+            CODE_SIGN_STYLE=Manual \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_ALLOWED=YES \
+            CODE_SIGNING_REQUIRED=YES
+          app="$RUNNER_TEMP/goalflow-macos-release/Build/Products/Release/GoalflowMac.app"
+          [ -d "$app" ] || { echo "macOS application bundle was not produced." >&2; exit 1; }
+          codesign --verify --deep --strict "$app"
+          if rg -a -q '(?i)sb_secret_[A-Za-z0-9_-]{20,}' "$app"; then
+            echo "A server-only Supabase credential pattern reached the macOS bundle." >&2
+            exit 1
+          fi
+      - name: Upload macOS result bundles on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-test-results
+          path: ${{ runner.temp }}/goalflow-macos-tests/Logs/Test
+          if-no-files-found: ignore
+
   beta-gate:
     name: beta-gate
-    needs: [verify, secrets, migrations, android, native-android, web-release]
+    needs: [verify, secrets, migrations, android, native-android, web-release, macos]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all required jobs succeeded
         run: |
-          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }}"
+          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }}"
           if [ "${{ needs.verify.result }}" != "success" ]; then echo "verify failed: ${{ needs.verify.result }}" >&2; exit 1; fi
           if [ "${{ needs.secrets.result }}" != "success" ]; then echo "secrets failed: ${{ needs.secrets.result }}" >&2; exit 1; fi
           if [ "${{ needs.migrations.result }}" != "success" ]; then echo "migrations failed: ${{ needs.migrations.result }}" >&2; exit 1; fi
           if [ "${{ needs.android.result }}" != "success" ]; then echo "android failed: ${{ needs.android.result }}" >&2; exit 1; fi
           if [ "${{ needs.native-android.result }}" != "success" ]; then echo "native-android failed: ${{ needs.native-android.result }}" >&2; exit 1; fi
           if [ "${{ needs.web-release.result }}" != "success" ]; then echo "web-release failed: ${{ needs.web-release.result }}" >&2; exit 1; fi
+          if [ "${{ needs.macos.result }}" != "success" ]; then echo "macos failed: ${{ needs.macos.result }}" >&2; exit 1; fi
           echo "beta-gate PASS — all required jobs succeeded"
