@@ -232,6 +232,9 @@ fun GoalflowRoot(
     var sessionAssuranceLevel by remember {
         mutableStateOf(application.sessionStore.read()?.assuranceLevel ?: "aal1")
     }
+    var sessionStorageProblem by remember {
+        mutableStateOf(application.sessionStore.readProblem())
+    }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
@@ -243,6 +246,10 @@ fun GoalflowRoot(
     var restoreCheckpointAvailable by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val lifecycleOwner = LocalLifecycleOwner.current
+
+    LaunchedEffect(sessionStorageProblem) {
+        sessionStorageProblem?.let { snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Long) }
+    }
 
     // Room is the source of truth for recovery. Query it directly before
     // observing the task stream so an initial empty StateFlow value cannot
@@ -266,6 +273,7 @@ fun GoalflowRoot(
         val currentSession = application.sessionStore.read()
         sessionActive = currentSession != null
         sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+        sessionStorageProblem = application.sessionStore.readProblem()
     }
 
     LaunchedEffect(tasks) {
@@ -321,6 +329,7 @@ fun GoalflowRoot(
                 val currentSession = application.sessionStore.read()
                 sessionActive = currentSession != null
                 sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+                sessionStorageProblem = application.sessionStore.readProblem()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -633,6 +642,7 @@ fun GoalflowRoot(
                     RootDestination.SETTINGS -> SettingsScreen(
                         signedIn = sessionActive,
                         mfaVerified = sessionAssuranceLevel == "aal2",
+                        cloudSessionProblem = sessionStorageProblem,
                         canUseAuthentication = NativeConfig.canUseAuthentication,
                         canUseCloud = NativeConfig.canUseCloud,
                         onSignIn = { signInOpen = true },
@@ -652,6 +662,7 @@ fun GoalflowRoot(
                                         val currentSession = application.sessionStore.read()
                                         sessionActive = currentSession != null
                                         sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+                                        sessionStorageProblem = application.sessionStore.readProblem()
                                         snackbarHostState.showSnackbar(
                                             error.message ?: "Server sign-out could not be confirmed."
                                         )
@@ -956,6 +967,7 @@ fun GoalflowRoot(
                             onComplete()
                             sessionActive = true
                             sessionAssuranceLevel = elevated.assuranceLevel
+                            sessionStorageProblem = application.sessionStore.readProblem()
                             authError = null
                             mfaOpen = false
                             NativeSyncScheduler.schedule(context)
@@ -966,6 +978,7 @@ fun GoalflowRoot(
                             val currentSession = application.sessionStore.read()
                             sessionActive = currentSession != null
                             sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+                            sessionStorageProblem = application.sessionStore.readProblem()
                             authError = error.message ?: "Owner verification failed"
                         }
                 }
@@ -1948,6 +1961,7 @@ private fun GoalRow(goal: GoalflowGoal) {
 private fun SettingsScreen(
     signedIn: Boolean,
     mfaVerified: Boolean,
+    cloudSessionProblem: String?,
     canUseAuthentication: Boolean,
     canUseCloud: Boolean,
     onSignIn: () -> Unit,
@@ -1974,7 +1988,8 @@ private fun SettingsScreen(
             SettingsCard(
                 title = "Cloud sync",
                 body = when {
-                    signedIn && canUseCloud && mfaVerified -> "Connected with owner verification. Local actions stay immediate; queued changes sync when the network returns."
+                    cloudSessionProblem != null -> cloudSessionProblem
+                    signedIn && canUseCloud && mfaVerified -> "Signed in with owner verification. Local actions stay immediate; queued changes are complete only after server acknowledgment."
                     signedIn && canUseCloud -> "Signed in at basic assurance. Beta accounts can sync; owner accounts must verify an authenticator before cloud sync can continue."
                     canUseCloud -> "Optional. Sign in to sync across devices. Local execution never waits for it."
                     else -> "Not configured in this build. Local execution is complete without a backend."
