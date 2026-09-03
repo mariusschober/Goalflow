@@ -12,12 +12,14 @@ const transportCompletion = migrations.find(item => item.file === '202608300001_
 const telegramAuth = migrations.find(item => item.file === '202608310001_telegram_auth_state_pkce.sql');
 const accessBoundary = migrations.find(item => item.file === '202609030001_access_boundary_hardening.sql');
 const accountLifecycle = migrations.find(item => item.file === '202609030002_account_lifecycle.sql');
+const backupHardening = migrations.find(item => item.file === '202609030003_backup_restore_hardening.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
 assert(telegramAuth, 'Telegram auth state PKCE migration is missing.');
 assert(accessBoundary, 'Access-boundary hardening migration is missing.');
 assert(accountLifecycle, 'Account lifecycle migration is missing.');
+assert(backupHardening, 'Backup/restore hardening migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -120,6 +122,22 @@ assert(
     && accountLifecycle.sql.includes('goalflow_session_is_active')
     && accountLifecycle.sql.includes('from auth.sessions'),
   'Atomic invite activation, verified owner bootstrap, or session revocation support is incomplete.'
+);
+const backupWithoutBodies = backupHardening.sql.replace(/\$\$[\s\S]*?\$\$/g, '$$BODY$$').toLowerCase();
+for (const forbidden of [/\bdrop\s+table\b/, /\btruncate\b/, /\bdrop\s+column\b/, /\bdelete\s+from\b/]) {
+  assert(!forbidden.test(backupWithoutBodies), `Backup hardening migration contains destructive top-level SQL: ${forbidden}.`);
+}
+assert(
+  backupHardening.sql.includes('add column if not exists encryption_version')
+    && backupHardening.sql.includes("backup_kind in ('daily', 'weekly', 'pre-restore')")
+    && backupHardening.sql.includes('goalflow_backup_protocol_version')
+    && backupHardening.sql.includes("'ai_usage'")
+    && backupHardening.sql.includes('validate_goalflow_backup_v2')
+    && backupHardening.sql.includes('restore_goalflow_backup_v2')
+    && backupHardening.sql.includes("jsonb_typeof(collections->collection_name) is distinct from 'array'")
+    && backupHardening.sql.includes('revoke all on function public.restore_goalflow_backup(uuid, jsonb)')
+    && backupHardening.sql.includes('greatest(current_usage.request_count, excluded.request_count)'),
+  'Per-user backup protocol metadata, dry-run validation, or non-rewindable quota recovery is incomplete.'
 );
 
 process.stdout.write(JSON.stringify({

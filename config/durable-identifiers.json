@@ -19,6 +19,7 @@
   },
   "backup": {
     "magic": "GFB1",
+    "currentMagic": "GFB2",
     "storageBucket": "goalflow-backups",
     "encryptedSuffix": ".goalflow-backup.enc"
   },
@@ -31,7 +32,8 @@
     "202608300001_complete_native_sync_transport.sql",
     "202608310001_telegram_auth_state_pkce.sql",
     "202609030001_access_boundary_hardening.sql",
-    "202609030002_account_lifecycle.sql"
+    "202609030002_account_lifecycle.sql",
+    "202609030003_backup_restore_hardening.sql"
   ],
   "roomSchemaFiles": [
     "1.json",

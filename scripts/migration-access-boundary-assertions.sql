@@ -86,6 +86,24 @@ begin
   ) then
     raise exception 'Canonical sync RPC is not callable by the service API role';
   end if;
+  if has_function_privilege(
+    'service_role',
+    'public.restore_goalflow_backup(uuid,jsonb)',
+    'EXECUTE'
+  ) then
+    raise exception 'Legacy restore RPC remains callable by the service API role';
+  end if;
+  if not has_function_privilege(
+    'service_role',
+    'public.validate_goalflow_backup_v2(uuid,jsonb)',
+    'EXECUTE'
+  ) or not has_function_privilege(
+    'service_role',
+    'public.restore_goalflow_backup_v2(uuid,jsonb)',
+    'EXECUTE'
+  ) then
+    raise exception 'Validated backup v2 RPC boundary is incomplete';
+  end if;
 end;
 $$;
 

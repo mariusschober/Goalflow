@@ -36,7 +36,8 @@ for migration in \
   "${repository_root}/supabase/migrations/202608300001_complete_native_sync_transport.sql" \
   "${repository_root}/supabase/migrations/202608310001_telegram_auth_state_pkce.sql" \
   "${repository_root}/supabase/migrations/202609030001_access_boundary_hardening.sql" \
-  "${repository_root}/supabase/migrations/202609030002_account_lifecycle.sql"; do
+  "${repository_root}/supabase/migrations/202609030002_account_lifecycle.sql" \
+  "${repository_root}/supabase/migrations/202609030003_backup_restore_hardening.sql"; do
   psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null
@@ -47,4 +48,4 @@ account_assertions="${repository_root}/scripts/migration-account-lifecycle-asser
 psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${account_assertions}" >/dev/null
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${account_assertions}" >/dev/null
 
-echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","inviteActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS"}'
+echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","backupDryRun":"PASS","quotaRewind":"DENIED","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","inviteActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS"}'

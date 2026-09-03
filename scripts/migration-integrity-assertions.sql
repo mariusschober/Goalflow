@@ -31,6 +31,9 @@ begin
   if public.goalflow_sync_protocol_version() <> 3 then
     raise exception 'hardened sync protocol version is not active';
   end if;
+  if public.goalflow_backup_protocol_version() <> 2 then
+    raise exception 'hardened backup protocol version is not active';
+  end if;
   if not exists (select 1 from public.tasks where user_id = target_user and title = 'Preserve seeded task') then
     raise exception 'forward migration lost the seeded task';
   end if;
@@ -320,11 +323,41 @@ begin
   end if;
 
   backup_payload := public.export_goalflow_backup(target_user);
+  if jsonb_array_length(backup_payload->'ai_usage') <> 1
+    or (backup_payload->'ai_usage'->0->>'request_count')::integer <> 3 then
+    raise exception 'backup export omitted per-user AI usage state';
+  end if;
+  if coalesce((public.validate_goalflow_backup_v2(
+      target_user,
+      jsonb_build_object('schemaVersion', 4, 'userId', target_user, 'collections', backup_payload)
+    )->>'valid')::boolean, false) is not true then
+    raise exception 'backup dry-run validation did not accept a coherent snapshot';
+  end if;
   preserved_title := (select title from public.tasks where id = created_task_id);
   begin
-    perform public.restore_goalflow_backup(
+    perform public.restore_goalflow_backup_v2(
       target_user,
-      jsonb_set(backup_payload, '{tasks,0,title}', 'null'::jsonb, false)
+      jsonb_build_object(
+        'schemaVersion', 4,
+        'userId', target_user,
+        'collections', jsonb_build_object('profiles', backup_payload->'profiles')
+      )
+    );
+    raise exception 'incomplete restore unexpectedly succeeded';
+  exception when invalid_parameter_value then
+    null;
+  end;
+  if (select title from public.tasks where id = created_task_id) <> preserved_title then
+    raise exception 'incomplete restore validation reached destructive replacement';
+  end if;
+  begin
+    perform public.restore_goalflow_backup_v2(
+      target_user,
+      jsonb_build_object(
+        'schemaVersion', 4,
+        'userId', target_user,
+        'collections', jsonb_set(backup_payload, '{tasks,0,title}', 'null'::jsonb, false)
+      )
     );
     raise exception 'corrupt restore unexpectedly succeeded';
   exception when not_null_violation or check_violation or invalid_text_representation then
@@ -359,8 +392,13 @@ begin
     )
   );
   update public.tasks set title = 'Temporary post-backup edit' where id = created_task_id;
+  update public.ai_usage set request_count = 7
+  where user_id = target_user and usage_date = '2099-01-01';
   cursor_before_restore := (select max(server_version) from public.sync_records where user_id = target_user);
-  perform public.restore_goalflow_backup(target_user, backup_payload);
+  perform public.restore_goalflow_backup_v2(
+    target_user,
+    jsonb_build_object('schemaVersion', 4, 'userId', target_user, 'collections', backup_payload)
+  );
   if (select title from public.tasks where id = created_task_id) <> preserved_title then
     raise exception 'valid atomic restore did not restore the verified backup';
   end if;
@@ -404,6 +442,10 @@ begin
     select 1 from public.api_mutation_receipts where user_id = target_user and mutation_id = post_backup_task_mutation
   ) then
     raise exception 'restore erased a post-backup idempotency receipt';
+  end if;
+  if (select request_count from public.ai_usage
+      where user_id = target_user and usage_date = '2099-01-01') <> 7 then
+    raise exception 'restore rewound newer per-user quota usage';
   end if;
 end;
 $$;

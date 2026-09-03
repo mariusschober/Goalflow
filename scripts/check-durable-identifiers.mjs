@@ -88,7 +88,8 @@ const secureSessionFile = 'android-native/app/src/main/java/com/mariusschober/go
 assertExtracted('Secure-session preferences name', secureSessionFile, /getSharedPreferences\("([^"]+)"/, frozen.android.securePreferences);
 assertExtracted('Android Keystore alias', secureSessionFile, /const val KEY_ALIAS\s*=\s*"([^"]+)"/, frozen.android.keystoreAlias);
 
-assertExtracted('Encrypted backup magic', 'server/backups.ts', /Buffer\.from\('([^']+)'\)/, frozen.backup.magic);
+assertExtracted('Encrypted backup legacy magic', 'server/backups.ts', /LEGACY_MAGIC\s*=\s*Buffer\.from\('([^']+)'\)/, frozen.backup.magic);
+assertExtracted('Encrypted backup current magic', 'server/backups.ts', /DERIVED_KEY_MAGIC\s*=\s*Buffer\.from\('([^']+)'\)/, frozen.backup.currentMagic);
 assertAllExtracted('Backup storage bucket', 'server/backups.ts', /\.storage\.from\('([^']+)'\)/g, frozen.backup.storageBucket);
 assertExtracted('Encrypted backup suffix', 'server/backups.ts', /const objectPath\s*=\s*`[^`]*(\.[a-z-]+\.enc)`/, frozen.backup.encryptedSuffix);
 

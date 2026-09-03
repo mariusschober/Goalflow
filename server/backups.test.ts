@@ -2,7 +2,13 @@ import crypto from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it } from 'vitest';
 import type { AppConfig } from './config';
-import { createEncryptedBackupForUser, decryptServerBackup } from './backups';
+import {
+  createEncryptedBackupForUser,
+  decryptServerBackup,
+  normalizeBackupForRestore,
+  rotateEncryptedBackups,
+  verifyRestoredBackupCollections
+} from './backups';
 
 const key = crypto.randomBytes(32);
 
@@ -74,8 +80,8 @@ describe('server backup restore boundary', () => {
     };
     const admin = {
       async rpc(name: string) {
-        if (name === 'goalflow_sync_protocol_version') return { data: 3, error: null };
-        if (name === 'export_goalflow_backup') return { data: { tasks: [{ id: 'valuable' }] }, error: null };
+        if (name === 'goalflow_backup_protocol_version') return { data: 2, error: null };
+        if (name === 'export_goalflow_backup') return { data: { tasks: [{ id: 'valuable' }], ai_usage: [] }, error: null };
         return { data: null, error: new Error('unexpected RPC') };
       },
       from(table: string) {
@@ -112,18 +118,27 @@ describe('server backup restore boundary', () => {
     );
 
     expect(events).toEqual(['metadata-failed', 'object-upload', 'metadata-complete']);
-    expect(inserted).toMatchObject({ status: 'failed', checksum: created.checksum });
+    expect(inserted).toMatchObject({ status: 'failed', checksum: created.checksum, encryption_version: 2 });
+    expect(created.encryptionVersion).toBe(2);
     expect(created.objectPath).toContain('/pre-restore/');
-    expect(decryptServerBackup(uploaded!, key.toString('hex'), created.checksum).collections)
-      .toEqual({ tasks: [{ id: 'valuable' }] });
+    expect(uploaded!.subarray(0, 4).toString('ascii')).toBe('GFB2');
+    expect(decryptServerBackup(
+      uploaded!, key.toString('hex'), created.checksum, '00000000-0000-4000-8000-000000000001'
+    ).collections).toEqual({ tasks: [{ id: 'valuable' }], ai_usage: [] });
+    expect(() => decryptServerBackup(
+      uploaded!, key.toString('hex'), created.checksum, '00000000-0000-4000-8000-000000000002'
+    )).toThrow('different user');
+    const modifiedAuthenticatedUser = Buffer.from(uploaded!);
+    modifiedAuthenticatedUser[39] = modifiedAuthenticatedUser[39] === 49 ? 50 : 49;
+    expect(() => decryptServerBackup(modifiedAuthenticatedUser, key.toString('hex'), created.checksum)).toThrow();
   });
 
   it('leaves visible failed metadata when object upload fails', async () => {
     const statuses: unknown[] = [];
     const admin = {
       async rpc(name: string) {
-        return name === 'goalflow_sync_protocol_version'
-          ? { data: 3, error: null }
+        return name === 'goalflow_backup_protocol_version'
+          ? { data: 2, error: null }
           : { data: { tasks: [] }, error: null };
       },
       from() {
@@ -143,5 +158,127 @@ describe('server backup restore boundary', () => {
       '00000000-0000-4000-8000-000000000001'
     )).rejects.toThrow('storage unavailable');
     expect(statuses).toEqual(['failed']);
+  });
+
+  it('normalizes legacy usage state without changing the original backup', () => {
+    const original = {
+      schemaVersion: 3,
+      exportedAt: '2026-08-27T00:00:00Z',
+      userId: '00000000-0000-4000-8000-000000000001',
+      collections: { tasks: [] }
+    };
+
+    const normalized = normalizeBackupForRestore(original);
+
+    expect(normalized.collections).toEqual({
+      tasks: [],
+      telegram_captures: [],
+      telegram_updates: [],
+      sync_mutations: [],
+      sync_conflicts: [],
+      api_mutation_receipts: [],
+      ai_usage: []
+    });
+    expect(original.collections).toEqual({ tasks: [] });
+  });
+
+  it('does not normalize an explicitly malformed historical collection', () => {
+    const original = {
+      schemaVersion: 3,
+      exportedAt: '2026-08-27T00:00:00Z',
+      userId: '00000000-0000-4000-8000-000000000001',
+      collections: { tasks: [], ai_usage: null }
+    };
+
+    expect(normalizeBackupForRestore(original).collections.ai_usage).toBeNull();
+  });
+
+  it('marks a retention target failed when storage deletion is uncertain', async () => {
+    const statusChanges: string[] = [];
+    const listing = {
+      eq() { return this; },
+      async order() {
+        return {
+          data: [
+            { id: 'kept', object_path: 'user/daily/kept.enc' },
+            { id: 'expired', object_path: 'user/daily/expired.enc' }
+          ],
+          error: null
+        };
+      }
+    };
+    const admin = {
+      from(table: string) {
+        expect(table).toBe('backup_metadata');
+        return {
+          select() { return listing; },
+          update(row: { status: string }) {
+            statusChanges.push(row.status);
+            return {
+              eq() { return this; },
+              select() { return this; },
+              async single() { return { data: { id: 'expired' }, error: null }; }
+            };
+          }
+        };
+      },
+      storage: {
+        from(bucket: string) {
+          expect(bucket).toBe('goalflow-backups');
+          return { remove: async () => ({ data: null, error: new Error('storage uncertain') }) };
+        }
+      }
+    } as unknown as SupabaseClient;
+
+    await expect(rotateEncryptedBackups(admin, 'user', 'daily', 1)).rejects.toThrow('storage uncertain');
+    expect(statusChanges).toEqual(['deleted', 'failed']);
+  });
+
+  it('verifies exact content identities while allowing append-only safety rows', () => {
+    const row = (userId = '00000000-0000-4000-8000-000000000001') => ({ user_id: userId });
+    const expected = {
+      profiles: [row()],
+      tasks: [{ id: 'task-a' }],
+      daily_plans: [{ local_date: '2026-09-03' }],
+      task_events: [{ id: 'event-a' }],
+      telegram_identities: [{ telegram_user_id: 10 }],
+      telegram_captures: [{ id: 'capture-a' }],
+      telegram_updates: [{ update_id: 11 }],
+      sync_records: [{ entity_type: 'tasks', entity_id: 'task-a' }],
+      sync_mutations: [{ mutation_id: 'mutation-a' }],
+      sync_conflicts: [{ id: 'conflict-a' }],
+      api_mutation_receipts: [{ mutation_id: 'receipt-a' }],
+      entitlements: [row()],
+      ai_usage: [{ usage_date: '2026-09-03' }]
+    };
+    const actual = {
+      ...expected,
+      sync_records: [...expected.sync_records, { entity_type: 'tasks', entity_id: 'post-backup-tombstone' }],
+      sync_conflicts: [...expected.sync_conflicts, { id: 'restore-conflict' }]
+    };
+
+    const verification = verifyRestoredBackupCollections(expected, actual);
+
+    expect(verification.additionalSafetyRows.sync_records).toBe(1);
+    expect(verification.additionalSafetyRows.sync_conflicts).toBe(1);
+    expect(verification.additionalSafetyRows.tasks).toBe(0);
+  });
+
+  it('rejects a missing durable identity or extra replace-restored row', () => {
+    const base = {
+      profiles: [{ user_id: 'user-a' }], tasks: [{ id: 'task-a' }],
+      daily_plans: [], task_events: [], telegram_identities: [], telegram_captures: [],
+      telegram_updates: [], sync_records: [], sync_mutations: [], sync_conflicts: [],
+      api_mutation_receipts: [], entitlements: [{ user_id: 'user-a' }], ai_usage: []
+    };
+
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...base,
+      tasks: [{ id: 'different-task' }]
+    })).toThrow('durable tasks identity');
+    expect(() => verifyRestoredBackupCollections(base, {
+      ...base,
+      tasks: [...base.tasks, { id: 'unexpected-task' }]
+    })).toThrow('unexpected tasks row count');
   });
 });

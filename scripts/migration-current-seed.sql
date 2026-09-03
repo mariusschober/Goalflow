@@ -4,6 +4,8 @@ insert into auth.users (id, email, email_confirmed_at)
 values ('11111111-1111-4111-8111-111111111111', 'migration@example.com', now());
 insert into public.profiles (user_id, email, timezone)
 values ('11111111-1111-4111-8111-111111111111', 'migration@example.com', 'Pacific/Kiritimati');
+insert into public.ai_usage (user_id, usage_date, request_count)
+values ('11111111-1111-4111-8111-111111111111', '2099-01-01', 3);
 insert into public.tasks (
   id, user_id, title, schedule_precision, scheduled_for, source
 ) values (
