@@ -25,6 +25,10 @@ describe('macOS beta artifact', () => {
   it('fails closed when Swift source discovery is empty or ambiguous', () => {
     expect(sourceGate).toContain('[ -s "$source_list" ]');
     expect(sourceGate).toContain('Duplicate Swift basenames');
+    expect(sourceGate).toContain("find macos-native/GoalflowMac macos-native/GoalflowMacTests");
+    expect(sourceGate).toContain("LC_ALL=C sort | uniq -d");
+    expect(sourceGate).toContain("exit(count < 2)");
+    expect(sourceGate).not.toContain('rg ');
     expect(sourceGate).not.toContain('done < <(cd "$repo_root"');
   });
 });

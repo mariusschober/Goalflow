@@ -11,10 +11,11 @@ cleanup() {
   rm -f "$source_list"
 }
 trap cleanup EXIT
-(cd "$repo_root" && rg --files macos-native/GoalflowMac macos-native/GoalflowMacTests -g '*.swift' | sort) \
+(cd "$repo_root" && find macos-native/GoalflowMac macos-native/GoalflowMacTests \
+  -type f -name '*.swift' -print | LC_ALL=C sort) \
   > "$source_list"
 [ -s "$source_list" ] || { echo "No checked-in macOS Swift sources were discovered." >&2; exit 1; }
-duplicate_names="$(awk -F/ '{ print $NF }' "$source_list" | uniq -d)"
+duplicate_names="$(awk -F/ '{ print $NF }' "$source_list" | LC_ALL=C sort | uniq -d)"
 [ -z "$duplicate_names" ] || {
   echo "Duplicate Swift basenames make Xcode membership ambiguous." >&2
   exit 1
@@ -23,7 +24,9 @@ duplicate_names="$(awk -F/ '{ print $NF }' "$source_list" | uniq -d)"
 missing=0
 while IFS= read -r source; do
   name="${source##*/}"
-  if ! rg -F "/* $name in Sources */" "$project_file" | awk 'END { exit(NR < 2) }'; then
+  if ! awk -v needle="/* $name in Sources */" \
+    'index($0, needle) { count += 1 } END { exit(count < 2) }' \
+    "$project_file"; then
     echo "Checked-in Xcode project does not compile $source" >&2
     missing=1
   fi
