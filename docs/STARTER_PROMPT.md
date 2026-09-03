@@ -1,4 +1,6 @@
-> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+> **HISTORICAL PROMPT — DO NOT EXECUTE.** The branch, gates, and evidence below
+> are obsolete. Use `docs/reconciliation/BETA_PROVENANCE.md` and the live
+> `integration/beta` branch.
 
 
 
@@ -56,4 +58,3 @@ Begin by reporting the live branch SHA, the hosted run status for 3b510ca, and t
 - Scopes Tranche 2 precisely and forbids 3–5.
 
 **Local evidence at 3b510ca (to be confirmed hosted after billing fix):** `npm lint` PASS, `npm test` 10 files 102 tests PASS, `npm run build` PASS, `npm run verify:migrations` PASS, `bash scripts/test-postgres-migrations.sh` PASS, `bash scripts/test-postgres-migration-case-regression.sh` POSTGRES_CASE_REGRESSION=PASS, `bash android-native/scripts/test-room-schema-assets.sh` ROOM_SCHEMA_ASSETS=PASS, `env JAVA_HOME=... ./android-native/gradlew -p android-native test` 70 tests PASS, `assembleProductionDebugAndroidTest` PASS, `lint` PASS.
-

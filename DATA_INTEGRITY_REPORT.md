@@ -1,3 +1,6 @@
+> **HISTORICAL SNAPSHOT.** This report predates `integration/beta`; its test
+> results are not current release evidence.
+
 # Goalflow data-integrity report
 
 Date: 2026-08-30

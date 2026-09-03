@@ -1,3 +1,8 @@
+> **HISTORICAL SNAPSHOT — NOT A RELEASE GATE.** This file records the
+> 2026-08-31 reconciliation candidate. It is superseded by
+> `docs/reconciliation/BETA_PROVENANCE.md` and the live `integration/beta`
+> branch. No PASS or “production-ready” statement below is current evidence.
+
 # Canonical Status — 2026-08-31
 
 ## Exact candidate SHA
@@ -82,4 +87,3 @@
 - `tests/fixtures/*` — golden backup fixtures via actual serializers
 - `.github/workflows/ci.yml` — hardened CI (fetch-depth 0, signing partial-fail, unsigned release compile, release workflow, canonical-gate, reconcile/main/develop triggers)
 - `.github/workflows/release.yml` — protected/manual release (requires secrets, verifies fingerprint, creates digests/provenance, fails closed)
-

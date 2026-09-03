@@ -1,4 +1,8 @@
-> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+> **HISTORICAL SNAPSHOT — NOT A RELEASE GATE.** This document is preserved as
+> 2026-08-31 context. It is superseded by
+> `docs/reconciliation/BETA_PROVENANCE.md` and the live `integration/beta`
+> branch. In particular, the simulated Android upgrade recorded below is not
+> valid beta evidence. No PASS below is current evidence.
 
 
 
@@ -146,4 +150,3 @@ No visual polish, broad refactoring, release publication, signing, AAB/raw APK d
 1. Push 91db2ce..5e30d78 fast-forward-safe to `origin/goalflow-production` and record the hosted CI run URL and `migrations`/`native-android` results in this document.
 2. Re-run the hosted emulator `connectedProductionDebugAndroidTest` and confirm `ROOM_SCHEMA_ASSETS=PASS`, `APK_DIAGNOSTIC=PASS`, `INSTALL_MATRIX=CLEAN_INSTALL_PASS`, `LAUNCH_FIRST_FRAME=PASS`.
 3. Only then begin Tranche 2, in small reviewable subtranches per `PRODUCTION_FINALIZATION_PLAN.md`: secure callback flow, session recovery, sync serialization/health, fault injection, two-client convergence — each with tests, commits, pushes, and readiness updates, stopping at the T2 boundary.
-

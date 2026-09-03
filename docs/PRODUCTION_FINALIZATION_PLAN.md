@@ -1,4 +1,6 @@
-> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+> **HISTORICAL PLAN.** Preserved for provenance; it is not the current beta
+> execution authority. See `docs/reconciliation/BETA_PROVENANCE.md` and the
+> release requirements represented by `beta-gate`.
 
 
 

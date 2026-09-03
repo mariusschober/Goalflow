@@ -1,4 +1,6 @@
-> **HISTORICAL — 2026-08-31 Reconciliation:** This document is preserved as historical context. The authoritative status is now `docs/CANONICAL_STATUS.md` and `docs/reconciliation/BRANCH_MANIFEST_20260831.md`. Content below is unchanged; do not treat as current gate.
+> **HISTORICAL PROMPT — DO NOT EXECUTE.** The branch, gates, and evidence below
+> are obsolete. Use `docs/reconciliation/BETA_PROVENANCE.md` and the live
+> `integration/beta` branch.
 
 
 

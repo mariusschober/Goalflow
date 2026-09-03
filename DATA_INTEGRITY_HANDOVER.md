@@ -1,3 +1,6 @@
+> **HISTORICAL HANDOVER.** This file predates `integration/beta` and must not be
+> used as current release or deployment instruction.
+
 # Goalflow zero-silent-data-loss handover
 
 ## Current status — 2026-08-30

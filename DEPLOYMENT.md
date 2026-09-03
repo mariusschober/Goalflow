@@ -1,69 +1,114 @@
-# Goalflow Deployment Runbook
+# Goalflow beta deployment runbook
 
-## 1. Supabase
+Status: pre-beta. No hosted Goalflow environment is release evidence until its
+exact commit, configuration, migration state, and live verification are recorded
+in `docs/BETA_READINESS.md`.
 
-1. Create separate development, staging, and production projects.
-2. Disable public email signup. Configure the production Site URL and allowed redirect URLs.
-3. Apply `supabase/migrations/202607170001_foundation.sql`, then `202607180001_scheduled_execution.sql`, then every later forward-only migration such as `202608250001_reliability_hardening.sql`.
-4. Configure Telegram as a Custom OIDC provider with identifier `custom:telegram`, issuer `https://oauth.telegram.org`, PKCE enabled, scopes `openid profile telegram:bot_access`, and the provider setting `email_optional=true`. Use the callback URL shown by Supabase in BotFather's allowed URLs.
-5. Configure Resend as custom SMTP for owner magic links, recovery-email confirmation, and auth recovery.
-6. Confirm every application table has RLS enabled. The service-role key belongs only in Railway.
-7. Upgrade to a non-pausing Supabase plan before reliability-sensitive beta use.
+## Environment topology
 
-## 2. Telegram
+Use one private Railway project with two persistent, isolated environments:
 
-1. Create one branded bot with BotFather and set its public username.
-2. Configure the OIDC provider to request bot access for that bot. Enable Supabase manual identity linking so the email-bootstrapped owner can connect Telegram from Account & Security.
-3. Generate a random webhook secret of at least 32 characters.
-4. After Railway has a stable HTTPS URL, register `<APP_ORIGIN>/api/v1/telegram/webhook` with Telegram and send the secret as `secret_token`.
-5. Configure commands: `current`, `today`, `add`, `done`, `skip`, `move`, and `help`.
+| Environment | Git source | Deploy policy | Supabase project |
+| --- | --- | --- | --- |
+| staging | `develop` | automatic after `beta-gate` | Goalflow staging only |
+| production | `main` | explicit release promotion only | Goalflow production only |
 
-The webhook verifies `X-Telegram-Bot-Api-Secret-Token`, deduplicates update IDs, rate-limits requests, bounds voice files, transcribes in memory, and does not retain audio.
+Each Railway environment contains `goalflow-web-api` and the one-shot
+`goalflow-maintenance` cron. `.railway/railway.ts` is the source-controlled
+infrastructure definition; the retired `railway.json` mechanism must not be
+used. Follow `.railway/README.md` to plan and apply it.
 
-## 3. Railway
+The private Railway project exists with its default, empty `production`
+environment. An empty persistent `staging` environment must still be created;
+do not duplicate production or copy its variables.
 
-Connect the GitHub repository and use `railway.json`. Configure every applicable variable from `.env.example`. Required production secrets are Supabase URL/keys, Telegram credentials, owner email, and the 32-byte backup key. AI and voice remain unavailable until their server keys are configured.
+## Supabase
 
-Generate the backup key with a password manager or a cryptographic random-byte tool. Store it outside Supabase as well; encrypted snapshots cannot be restored without it.
+Create completely separate staging and production projects. Do not repurpose
+another application’s project. Apply every file in `supabase/migrations` in
+filename order from an empty database. Existing migration files are immutable;
+fixes are new forward-only migrations and must be added to
+`MIGRATION_SHA256_MANIFEST.json`.
 
-Set both browser-safe Supabase variables and server variables. Set Turnstile site and secret keys together. Never put service-role, bot, AI, OpenAI, or backup keys in any `VITE_` variable.
+Use current key conventions:
 
-## 4. Owner and beta activation
+- `SUPABASE_PUBLISHABLE_KEY` may be referenced by browser/native builds.
+- `SUPABASE_SECRET_KEY` is Railway-server-only and must never use a `VITE_`
+  name or enter an Android/macOS bundle.
+- Legacy anon/service-role variable names remain compatibility aliases only.
 
-1. Create and verify `mris@tuta.io` once in Supabase Auth administration, then sign in through the owner magic-link flow. Browser magic links never create users.
-2. Open Settings, add a recovery email if needed, and enroll an authenticator. Reauthenticate to confirm an `aal2` session.
-3. Create a beta code in Settings. Its plaintext is displayed once; only its SHA-256 hash is stored.
-4. Test Telegram signup with a separate account. Reusing or using an expired/revoked code must fail.
+Before deployment, verify extensions, grants, functions, triggers, RLS and
+storage policies, then run two-user hosted isolation tests. A server operation
+using the secret key must still authorize the immutable authenticated user UUID
+explicitly because that key bypasses RLS.
 
-## 5. Launch gates
+Configure each project’s Site URL and redirect allowlist to exact HTTPS origins.
+Staging and production URLs must never appear in the other project’s allowlist.
+Configure reliable custom SMTP before testing registration, email verification,
+or password recovery. Public registration may be enabled only with the
+application approval/invite gate active.
 
-- CI passes TypeScript, unit/property tests, client/server builds, production startup, dependency audit, client secret scanning, and the Android Gradle test/lint/debug-APK job.
-- Install and update work in Chrome and Safari; iOS safe areas and offline shell are verified.
-- Current remains unavailable until overdue work is resolved and today's order is confirmed.
-- Two devices can edit offline, reconnect, synchronize, and review a conflict without either version disappearing.
-- Telegram text and voice capture create correctly scheduled tasks; voice audio is absent after processing.
-- Every original Goalflow module is accessible and AI consent is off by default.
-- Run an encrypted export/restore preview and a server snapshot restore drill before owner launch.
+## Railway variables
 
-## 6. Reproducible release commands
+Define these as environment-level shared variables independently in staging and
+production:
 
-From a clean checkout:
+- `APP_ORIGIN`
+- `OWNER_USER_ID`
+- `SUPABASE_URL`
+- `SUPABASE_PUBLISHABLE_KEY`
+- `SUPABASE_SECRET_KEY`
+- `BACKUP_MASTER_KEY`
+
+`BACKUP_MASTER_KEY` must decode to exactly 32 random bytes and must be retained
+outside both Railway and Supabase. Losing it makes application backups
+unrecoverable. Never copy a staging key into production or vice versa.
+
+Optional server features remain explicitly disabled until separately proven:
+
+- `TELEGRAM_ENABLED=false`
+- `AI_ENABLED=false`
+- `VOICE_ENABLED=false`
+- `TURNSTILE_ENABLED=false`
+
+The web service uses `BACKUPS_ENABLED=false`; the maintenance service uses
+`BACKUPS_ENABLED=true`. Railway schedules `npm run maintenance` once daily. The
+command exits nonzero if configuration, backup, upload, metadata finalization,
+or retention fails.
+
+## Boot and promotion checks
+
+- `/api/v1/health/live` proves only that the process is alive.
+- `/api/v1/health/ready` returns 200 only after the production configuration and
+  minimal Supabase dependency probes succeed.
+- Configure Railway’s deployment health check to the readiness endpoint.
+- Never promote a deployment based on liveness alone.
+- Keep the production GitHub trigger disabled. Promote only the exact `main`
+  commit with a successful `beta-gate` and record the resulting deployment ID.
+
+## Release verification
+
+From a clean Node 22 checkout:
 
 ```bash
 npm ci
 npm run verify:release
-npm run android:sync
-npm run android:test
-npm run android:lint
-npm run android:assembleDebug
+npm run test:migrations:postgres
 ```
 
-`verify:release` runs TypeScript, the full Vitest suite including property tests, production web/server builds, a production health check, the client secret scan, and the high-severity dependency audit. Android builds need Java 21 and a working Android SDK; the CI Android job exercises the production and isolated test variants and uploads both debug APKs.
+The full GitHub `beta-gate` additionally owns Chromium/WebKit, legacy Android,
+native Android, migration execution, complete-history secret scanning, and—once
+credentials exist—hosted staging auth/RLS/sync checks. A local pass is never a
+substitute for those hosted checks.
 
-The isolated test variant is built with `npm run android:sync:test` and `npm run android:assembleTestDebug`. It accepts only the compile-time test code `123456`, uses the application ID `com.mariusschober.goalflow.test`, stores data locally, and must never be used as a production authentication path.
+Signed Android artifacts are created only by the protected manual release
+workflow. It requires all signing secrets and an expected certificate SHA-256
+fingerprint. Ordinary CI artifacts are explicitly test-only and unsigned/debug.
 
-## 7. Restore drill
+## Restore safety
 
-Quarterly, select a recent object from the private `goalflow-backups` bucket, decrypt it offline with the separately held `BACKUP_MASTER_KEY`, verify the embedded SHA-256 checksum against `backup_metadata`, and restore into staging. Confirm tasks, habits, goals, advanced-module sync records, daily plans, and current-task order before recording the drill as successful.
-
-Do not restore auth sessions, passwords, MFA secrets, invite plaintext, deployment secrets, AI keys, or raw Telegram voice data; these are intentionally absent.
+Run destructive restore tests only in staging with synthetic accounts. Require a
+pre-restore snapshot, dry run, explicit confirmation, checksum/authentication
+verification, and post-restore row/ID/sync checks. A partial database or storage
+step must remain marked failed and must never be reported as a successful
+restore.
