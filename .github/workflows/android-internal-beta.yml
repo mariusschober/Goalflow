@@ -58,6 +58,7 @@ jobs:
     needs: verify-candidate
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    environment: internal-beta
     env:
       ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
       ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}

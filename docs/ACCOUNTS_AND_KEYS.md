@@ -102,8 +102,9 @@ The keystore must be generated and retained outside the repository. The
 staging public values already listed above. It can run only for an exact
 `integration/beta` commit with a successful push `beta-gate`; it verifies one
 expected signer and uploads an APK plus verified checksum and provenance without
-creating a GitHub release. The production release workflow remains restricted
-to an exact successful `main` push.
+creating a GitHub release. Its build job is scoped to the `internal-beta`
+GitHub environment. The production release workflow remains restricted to an
+exact successful `main` push and its separate `production-release` environment.
 
 Do not reuse the historical temporary test signer mentioned in old evidence
 snapshots. No keystore or private-key file is tracked anywhere in Git history,

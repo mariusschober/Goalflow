@@ -20,6 +20,7 @@ describe('Android internal beta workflow', () => {
   });
 
   it('requires staging-only public configuration and one expected signer', () => {
+    expect(workflow).toContain('environment: internal-beta');
     expect(workflow).toContain('GOALFLOW_STAGING_APP_ORIGIN');
     expect(workflow).toContain('GOALFLOW_STAGING_SUPABASE_URL');
     expect(workflow).toContain('GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY');
