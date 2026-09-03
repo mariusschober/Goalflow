@@ -48,7 +48,6 @@ const environmentSchema = z.object({
   TURNSTILE_SECRET_KEY: optionalString(),
   BACKUPS_ENABLED: enabledFlag,
   BACKUP_MASTER_KEY: optionalString(z.string().min(32)),
-  BACKUP_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(2),
   LOG_LEVEL: z.enum(["debug", "info", "warn", "error"]).default("info")
 });
 

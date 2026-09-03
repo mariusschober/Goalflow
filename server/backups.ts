@@ -179,25 +179,3 @@ export const runEncryptedBackups = async (config: AppConfig, admin: SupabaseClie
   }
   return completed;
 };
-
-export const startBackupScheduler = (config: AppConfig, admin?: SupabaseClient): (() => void) => {
-  if (config.BACKUPS_ENABLED !== 'true' || !admin || !config.BACKUP_MASTER_KEY) return () => undefined;
-  let lastRun = '';
-  let running = false;
-  const tick = async () => {
-    const now = new Date();
-    const day = now.toISOString().slice(0, 10);
-    if (running || lastRun === day || now.getUTCHours() !== config.BACKUP_HOUR_UTC) return;
-    running = true;
-    try {
-      const count = await runEncryptedBackups(config, admin);
-      lastRun = day;
-      console.log(JSON.stringify({ level: 'info', event: 'backup.completed', userCount: count }));
-    } catch (error) {
-      console.error(JSON.stringify({ level: 'error', event: 'backup.failed', category: error instanceof Error ? error.name : 'unknown' }));
-    } finally { running = false; }
-  };
-  const interval = setInterval(() => void tick(), 15 * 60_000);
-  void tick();
-  return () => clearInterval(interval);
-};
