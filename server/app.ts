@@ -11,6 +11,7 @@ import { createLogger } from "./logger";
 import { createAiRouter } from "./routes/ai";
 import { createTaskRouter } from "./routes/tasks";
 import { createTelegramRouter } from "./routes/telegram";
+import { createTelegramMiniRouter } from "./routes/telegramMini";
 import { createTelegramAuthRouter } from "./routes/telegramAuth";
 import { createEmailAuthRouter } from "./routes/emailAuth";
 import { createSyncRouter } from "./routes/sync";
@@ -92,7 +93,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
   app.use(helmet({
     contentSecurityPolicy: {
       directives: {
-        defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(localOnly ? ["'unsafe-inline'"] : []), "https://challenges.cloudflare.com"], styleSrc: ["'self'", "'unsafe-inline'"],
+        defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(localOnly ? ["'unsafe-inline'"] : []), "https://challenges.cloudflare.com", "https://telegram.org"], styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
         mediaSrc: ["'self'", "blob:", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com"],
@@ -132,7 +133,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
   app.get("/api/v1/health", ready);
 
   app.use("/api/v1/auth", createEmailAuthRouter(config, admin), createTelegramAuthRouter(config, admin));
-  app.use("/api/v1/telegram", createTelegramRouter(config, admin, speech, logger));
+  app.use("/api/v1/telegram", createTelegramRouter(config, admin, speech, logger), createTelegramMiniRouter(config, admin, logger));
   app.get("/api/v1/session", auth, (request, response) => response.json({
     user: {
       id: request.user!.id,
@@ -151,6 +152,10 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
 
   if (config.NODE_ENV === "production") {
     const clientPath = path.resolve(process.cwd(), "dist/client");
+    const miniPath = path.resolve(process.cwd(), "dist/mini");
+    app.use("/mini", express.static(miniPath, { index: "index.html", maxAge: "1y", immutable: true, setHeaders(response, filePath) {
+      if (filePath.endsWith("index.html")) response.setHeader("cache-control", "no-cache");
+    }}));
     app.use(express.static(clientPath, { index: false, maxAge: "1y", immutable: true, setHeaders(response, filePath) {
       if (filePath.endsWith("index.html") || filePath.endsWith("sw.js") || filePath.endsWith("manifest.webmanifest")) response.setHeader("cache-control", "no-cache");
     }}));

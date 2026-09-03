@@ -2,6 +2,7 @@ import { readFile, readdir, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const clientRoot = path.resolve('dist/client');
+const miniRoot = path.resolve('dist/mini');
 
 const requireFile = async (relativePath, minimumBytes = 1) => {
   const target = path.join(clientRoot, relativePath);
@@ -37,6 +38,15 @@ for (const [src, sizes] of [['/icons/icon-192.png', '192x192'], ['/icons/icon-51
 
 await requireFile('index.html', 100);
 await requireFile('sw.js', 100);
+const miniIndex = path.join(miniRoot, 'index.html');
+const miniIndexMetadata = await stat(miniIndex);
+if (!miniIndexMetadata.isFile() || miniIndexMetadata.size < 100) {
+  throw new Error('Telegram Mini App index.html must be a built file of at least 100 bytes.');
+}
+const miniIndexContents = await readFile(miniIndex, 'utf8');
+if (!miniIndexContents.includes('https://telegram.org/js/telegram-web-app.js')) {
+  throw new Error('Telegram Mini App must load the official Telegram Web App bridge.');
+}
 
 const javascriptFiles = [];
 const collectJavascript = async directory => {
@@ -47,6 +57,7 @@ const collectJavascript = async directory => {
   }
 };
 await collectJavascript(clientRoot);
+await collectJavascript(miniRoot);
 
 const javascript = (await Promise.all(javascriptFiles.map(file => readFile(file, 'utf8')))).join('\n');
 for (const forbidden of ['__storageService', '__STORES', '123456']) {
@@ -59,6 +70,7 @@ console.log(JSON.stringify({
   status: 'PASS',
   manifest: exactFields,
   requiredIcons: 2,
+  telegramMiniApp: 'present',
   javascriptFiles: javascriptFiles.length,
   testBackdoors: 'absent'
 }));

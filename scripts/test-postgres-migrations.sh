@@ -38,7 +38,8 @@ for migration in \
   "${repository_root}/supabase/migrations/202609030001_access_boundary_hardening.sql" \
   "${repository_root}/supabase/migrations/202609030002_account_lifecycle.sql" \
   "${repository_root}/supabase/migrations/202609030003_backup_restore_hardening.sql" \
-  "${repository_root}/supabase/migrations/202609030004_telegram_webhook_claims.sql"; do
+  "${repository_root}/supabase/migrations/202609030004_telegram_webhook_claims.sql" \
+  "${repository_root}/supabase/migrations/202609030005_telegram_mini_sessions.sql"; do
   psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null
@@ -52,4 +53,4 @@ telegram_assertions="${repository_root}/scripts/migration-telegram-assertions.sq
 psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${telegram_assertions}" >/dev/null
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${telegram_assertions}" >/dev/null
 
-echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","backupDryRun":"PASS","quotaRewind":"DENIED","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","inviteActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS","telegramWebhookClaims":"PASS"}'
+echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","backupDryRun":"PASS","quotaRewind":"DENIED","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","inviteActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS","telegramWebhookClaims":"PASS","telegramMiniSessions":"PASS"}'

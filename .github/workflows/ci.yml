@@ -2,7 +2,7 @@ name: Beta Gate
 
 on:
   push:
-    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**", "feat/macos-beta"]
+    branches: [main, develop, goalflow-production, "reconcile/**", "integration/**", "feat/**", "fix/**", "chore/**"]
   pull_request:
     branches: [main, develop, goalflow-production, "reconcile/**", "integration/**"]
 
@@ -264,6 +264,7 @@ jobs:
       - run: npm run verify:migrations
       - run: node scripts/verify-migration-hashes.mjs
       - run: npm run build:client
+      - run: npm run build:mini
       - run: npm run build:server
       - name: Verify production startup
         run: npm run verify:server

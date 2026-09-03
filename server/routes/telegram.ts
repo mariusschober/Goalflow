@@ -18,7 +18,7 @@ export const createTelegramRouter = (
 ) => {
   const router = Router();
   const processor = processorOverride ?? (database ? createTelegramProcessor(config, database, speech, logger) : undefined);
-  router.use(rateLimit({
+  const webhookLimiter = rateLimit({
     windowMs: 60_000,
     limit: 120,
     standardHeaders: "draft-8",
@@ -26,8 +26,8 @@ export const createTelegramRouter = (
     handler: (_request, response) => response.status(429).json({
       error: { code: "telegram_rate_limited", message: "Too many Telegram requests. Try again shortly." }
     })
-  }));
-  router.post("/webhook", async (request, response) => {
+  });
+  router.post("/webhook", webhookLimiter, async (request, response) => {
     if (config.TELEGRAM_ENABLED !== "true" || !config.TELEGRAM_WEBHOOK_SECRET || !config.TELEGRAM_BOT_TOKEN || !processor || !database) {
       response.status(503).json({ error: { code: "telegram_not_configured", message: "Telegram is not configured." } }); return;
     }

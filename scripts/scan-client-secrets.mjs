@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const root = path.resolve('dist/client');
+const roots = [path.resolve('dist/client'), path.resolve('dist/mini')];
 const forbiddenNames = [
   'SUPABASE_SECRET_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
@@ -23,7 +23,7 @@ const visit = async directory => {
   }
 };
 
-await visit(root);
+for (const root of roots) await visit(root);
 const findings = [];
 for (const file of files) {
   const content = await readFile(file, 'utf8');
