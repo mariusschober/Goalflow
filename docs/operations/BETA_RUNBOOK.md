@@ -61,6 +61,8 @@ For each staging run, retain the maintenance invocation ID and verify:
 - exactly one new `backup_metadata` row reaches `complete`;
 - its object exists in the private `goalflow-backups` bucket;
 - `byte_size`, checksum, and `encryption_version` match the object;
+- the maintenance command read the uploaded ciphertext back byte-for-byte and
+  authenticated/decrypted it before marking metadata `complete`;
 - an upload/finalization fault leaves no object reported as complete;
 - retention deletes one object at a time; an uncertain storage deletion leaves
   that metadata row `failed` and exits nonzero, never falsely `complete`.

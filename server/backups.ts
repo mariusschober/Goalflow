@@ -335,6 +335,21 @@ export const createEncryptedBackupForUser = async (
   });
   if (uploadError) throw uploadError;
 
+  // An upload response alone is not proof that the exact encrypted object can
+  // be read durably. Read it back and verify both the ciphertext bytes and the
+  // authenticated plaintext before exposing complete metadata.
+  const { data: uploadedObject, error: downloadError } = await admin.storage
+    .from('goalflow-backups').download(objectPath);
+  if (downloadError || !uploadedObject) {
+    throw downloadError ?? new Error('Uploaded backup could not be read back for verification.');
+  }
+  const verifiedEncrypted = Buffer.from(await uploadedObject.arrayBuffer());
+  if (verifiedEncrypted.length !== encrypted.length
+    || !crypto.timingSafeEqual(verifiedEncrypted, encrypted)) {
+    throw new Error('Uploaded backup bytes did not match the encrypted backup.');
+  }
+  decryptServerBackup(verifiedEncrypted, config.BACKUP_MASTER_KEY, checksum, userId);
+
   const { data: completedMetadata, error: completeError } = await admin.from('backup_metadata')
     .update({ status: 'complete' })
     .eq('user_id', userId).eq('object_path', objectPath).eq('status', 'failed')

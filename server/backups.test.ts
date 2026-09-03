@@ -103,6 +103,10 @@ describe('server backup restore boundary', () => {
               events.push('object-upload');
               uploaded = bytes;
               return { error: null };
+            },
+            async download() {
+              events.push('object-readback');
+              return { data: new Blob([uploaded!]), error: null };
             }
           };
         }
@@ -117,7 +121,7 @@ describe('server backup restore boundary', () => {
       { metadataKind: 'daily', pathKind: 'pre-restore' }
     );
 
-    expect(events).toEqual(['metadata-failed', 'object-upload', 'metadata-complete']);
+    expect(events).toEqual(['metadata-failed', 'object-upload', 'object-readback', 'metadata-complete']);
     expect(inserted).toMatchObject({ status: 'failed', checksum: created.checksum, encryption_version: 2 });
     expect(created.encryptionVersion).toBe(2);
     expect(created.objectPath).toContain('/pre-restore/');
@@ -157,6 +161,49 @@ describe('server backup restore boundary', () => {
       admin,
       '00000000-0000-4000-8000-000000000001'
     )).rejects.toThrow('storage unavailable');
+    expect(statuses).toEqual(['failed']);
+  });
+
+  it('does not finalize metadata when uploaded bytes cannot be verified', async () => {
+    const statuses: unknown[] = [];
+    let uploaded: Buffer | undefined;
+    const admin = {
+      async rpc(name: string) {
+        return name === 'goalflow_backup_protocol_version'
+          ? { data: 2, error: null }
+          : { data: { tasks: [] }, error: null };
+      },
+      from() {
+        return {
+          async insert(row: Record<string, unknown>) {
+            statuses.push(row.status);
+            return { error: null };
+          },
+          update() {
+            throw new Error('metadata must not be finalized');
+          }
+        };
+      },
+      storage: {
+        from: () => ({
+          async upload(_path: string, bytes: Buffer) {
+            uploaded = bytes;
+            return { error: null };
+          },
+          async download() {
+            const corrupted = Buffer.from(uploaded!);
+            corrupted[corrupted.length - 1] ^= 1;
+            return { data: new Blob([corrupted]), error: null };
+          }
+        })
+      }
+    } as unknown as SupabaseClient;
+
+    await expect(createEncryptedBackupForUser(
+      { BACKUP_MASTER_KEY: key.toString('hex') } as AppConfig,
+      admin,
+      '00000000-0000-4000-8000-000000000001'
+    )).rejects.toThrow('did not match');
     expect(statuses).toEqual(['failed']);
   });
 
