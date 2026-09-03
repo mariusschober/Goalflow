@@ -81,6 +81,114 @@ do $$
 declare
   target_user constant uuid := '11111111-1111-4111-8111-111111111111';
   other_user constant uuid := '44444444-4444-4444-8444-444444444444';
+  capture_id constant uuid := '35353535-3535-4535-8535-353535353535';
+  failed_capture_id constant uuid := '36363636-3636-4636-8636-363636363636';
+  mutation_id constant uuid := '37373737-3737-4737-8737-373737373737';
+  failed_mutation_id constant uuid := '38383838-3838-4838-8838-383838383838';
+  task_payload jsonb;
+  first_response jsonb;
+  retry_response jsonb;
+  denied boolean := false;
+begin
+  insert into public.telegram_captures (
+    id, user_id, telegram_chat_id, kind, title, transcript,
+    schedule_precision, scheduled_for, state, expires_at
+  ) values (
+    capture_id, target_user, 4242, 'text', 'Atomic Telegram task',
+    '{"goalflowTelegramCapture":1}', 'day', '2099-01-06', 'pending',
+    clock_timestamp() + interval '15 minutes'
+  );
+  task_payload := jsonb_build_object(
+    'taskId', capture_id,
+    'title', 'Atomic Telegram task',
+    'notes', '',
+    'tags', jsonb_build_array('telegram'),
+    'schedulePrecision', 'day',
+    'scheduledFor', '2099-01-06',
+    'plannedOrder', 0,
+    'isFrog', false,
+    'beforeFrog', false,
+    'source', 'telegram',
+    'estimatedMinutes', 30
+  );
+  first_response := public.goalflow_confirm_telegram_capture(
+    target_user, capture_id, mutation_id, '2099-01-06', task_payload
+  );
+  if first_response->>'id' <> capture_id::text
+    or first_response->>'user_id' <> target_user::text
+    or first_response->>'source' <> 'telegram'
+    or (select state from public.telegram_captures where id = capture_id) <> 'confirmed'
+    or not exists (
+      select 1 from public.tasks
+      where id = capture_id and user_id = target_user and title = 'Atomic Telegram task'
+    ) then
+    raise exception 'Telegram capture and task were not committed atomically';
+  end if;
+  retry_response := public.goalflow_confirm_telegram_capture(
+    target_user, capture_id, mutation_id, '2099-01-06', task_payload
+  );
+  if retry_response <> first_response
+    or (select count(*) from public.tasks where id = capture_id) <> 1
+    or (select count(*) from public.task_events where task_id = capture_id and event_type = 'created') <> 1 then
+    raise exception 'Telegram capture retry was not idempotent';
+  end if;
+
+  begin
+    perform public.goalflow_confirm_telegram_capture(
+      other_user, capture_id, mutation_id, '2099-01-06', task_payload
+    );
+  exception when others then
+    denied := true;
+  end;
+  if not denied then raise exception 'Telegram capture crossed the account boundary'; end if;
+
+  insert into public.telegram_captures (
+    id, user_id, telegram_chat_id, kind, title, transcript,
+    schedule_precision, scheduled_for, state, expires_at
+  ) values (
+    failed_capture_id, target_user, 4242, 'text', 'Must remain pending',
+    null, 'day', '2099-01-06', 'pending', clock_timestamp() + interval '15 minutes'
+  );
+  begin
+    perform public.goalflow_confirm_telegram_capture(
+      target_user,
+      failed_capture_id,
+      failed_mutation_id,
+      '2099-01-06',
+      jsonb_build_object(
+        'taskId', failed_capture_id,
+        'title', 'Different title',
+        'schedulePrecision', 'day',
+        'scheduledFor', '2099-01-06',
+        'source', 'telegram'
+      )
+    );
+  exception when others then
+    denied := true;
+  end;
+  if (select state from public.telegram_captures where id = failed_capture_id) <> 'pending'
+    or exists (select 1 from public.tasks where id = failed_capture_id) then
+    raise exception 'Failed Telegram confirmation left partial durable state';
+  end if;
+
+  if has_function_privilege(
+    'authenticated',
+    'public.goalflow_confirm_telegram_capture(uuid,uuid,uuid,date,jsonb)',
+    'EXECUTE'
+  ) or not has_function_privilege(
+    'service_role',
+    'public.goalflow_confirm_telegram_capture(uuid,uuid,uuid,date,jsonb)',
+    'EXECUTE'
+  ) then
+    raise exception 'Telegram capture confirmation RPC privilege boundary is invalid';
+  end if;
+end;
+$$;
+
+do $$
+declare
+  target_user constant uuid := '11111111-1111-4111-8111-111111111111';
+  other_user constant uuid := '44444444-4444-4444-8444-444444444444';
   session_id constant uuid := '34343434-3434-4434-8434-343434343434';
   token_hash constant text := repeat('d', 64);
   init_hash constant text := repeat('e', 64);

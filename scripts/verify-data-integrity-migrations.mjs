@@ -13,6 +13,7 @@ const telegramAuth = migrations.find(item => item.file === '202608310001_telegra
 const accessBoundary = migrations.find(item => item.file === '202609030001_access_boundary_hardening.sql');
 const accountLifecycle = migrations.find(item => item.file === '202609030002_account_lifecycle.sql');
 const backupHardening = migrations.find(item => item.file === '202609030003_backup_restore_hardening.sql');
+const telegramCaptureConfirmation = migrations.find(item => item.file === '202609030007_telegram_capture_confirmation.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
@@ -20,6 +21,7 @@ assert(telegramAuth, 'Telegram auth state PKCE migration is missing.');
 assert(accessBoundary, 'Access-boundary hardening migration is missing.');
 assert(accountLifecycle, 'Account lifecycle migration is missing.');
 assert(backupHardening, 'Backup/restore hardening migration is missing.');
+assert(telegramCaptureConfirmation, 'Atomic Telegram capture confirmation migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -138,6 +140,17 @@ assert(
     && backupHardening.sql.includes('revoke all on function public.restore_goalflow_backup(uuid, jsonb)')
     && backupHardening.sql.includes('greatest(current_usage.request_count, excluded.request_count)'),
   'Per-user backup protocol metadata, dry-run validation, or non-rewindable quota recovery is incomplete.'
+);
+assert(
+  telegramCaptureConfirmation.sql.includes('goalflow_confirm_telegram_capture')
+    && telegramCaptureConfirmation.sql.includes('for update')
+    && telegramCaptureConfirmation.sql.includes("status = 'active'")
+    && telegramCaptureConfirmation.sql.includes('goalflow_create_task_idempotent')
+    && telegramCaptureConfirmation.sql.includes("set state = 'confirmed'")
+    && telegramCaptureConfirmation.sql.includes('get diagnostics changed_rows = row_count')
+    && telegramCaptureConfirmation.sql.includes('revoke all on function public.goalflow_confirm_telegram_capture')
+    && telegramCaptureConfirmation.sql.includes('to service_role'),
+  'Telegram task creation and capture confirmation are not atomic and server-only.'
 );
 
 process.stdout.write(JSON.stringify({
