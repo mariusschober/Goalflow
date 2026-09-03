@@ -178,7 +178,11 @@ const AppWrapper: React.FC = () => {
       window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
       window.location.reload();
     }}
-    onCancel={() => { void authService.logout().then(() => window.location.assign('/')); }}
+    onCancel={() => {
+      void authService.logout()
+        .then(() => window.location.assign('/'))
+        .catch(error => setActivationError(error instanceof Error ? error.message : 'Sign out could not be verified.'));
+    }}
   />;
   if (!session && !localUser) return <Auth activationError={activationError} />;
   if (session && account && !mfaReady) return <MfaGate
@@ -199,6 +203,8 @@ const AppWrapper: React.FC = () => {
           void authService.logout().then(() => {
             setSession(null);
             setAccount(null);
+          }).catch(error => {
+            setActivationError(error instanceof Error ? error.message : 'Sign out could not be verified.');
           });
         }
       }} />

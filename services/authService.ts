@@ -110,7 +110,8 @@ export const supabase = supabaseUrl && supabasePublicKey
 export const getSession = async (): Promise<Session | null> => {
   if (localDemo) return null;
   if (!supabase) return null;
-  const { data } = await supabase.auth.getSession();
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
   return data.session;
 };
 
@@ -422,9 +423,13 @@ export const authenticatedFetchForUser = async (
 };
 
 export const logout = async (): Promise<void> => {
-  if (supabase) await supabase.auth.signOut({ scope: 'local' });
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut({ scope: 'local' });
+  if (error) throw error;
 };
 
 export const logoutEverywhere = async (): Promise<void> => {
-  if (supabase) await supabase.auth.signOut({ scope: 'global' });
+  if (!supabase) return;
+  const { error } = await supabase.auth.signOut({ scope: 'global' });
+  if (error) throw error;
 };
