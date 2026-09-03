@@ -161,6 +161,19 @@ class NativeSyncEngine(
                         ?: record?.optString("entity_type")?.takeIf(String::isNotBlank)
                     val recordEntityId = record?.optString("entityId")?.takeIf(String::isNotBlank)
                         ?: record?.optString("entity_id")?.takeIf(String::isNotBlank)
+                    val recordDeviceIdValue = record?.let {
+                        when {
+                            it.has("deviceId") -> it.opt("deviceId")
+                            it.has("device_id") -> it.opt("device_id")
+                            else -> null
+                        }
+                    }
+                    val recordDeviceId = when (recordDeviceIdValue) {
+                        null, JSONObject.NULL -> null
+                        is String -> recordDeviceIdValue.takeIf(String::isNotBlank)
+                            ?: throw NativeSyncProtocolException("Sync push response contains an invalid record device identity.")
+                        else -> throw NativeSyncProtocolException("Sync push response contains an invalid record device identity.")
+                    }
                     val recordVersion = record?.let {
                         if (!it.has("version")) null else safeLong(it.opt("version"), "accepted record version")
                     }
@@ -186,6 +199,7 @@ class NativeSyncEngine(
                             serverDeletedAt = recordDeletedAt,
                             recordEntityType = recordEntityType,
                             recordEntityId = recordEntityId,
+                            recordDeviceId = recordDeviceId,
                             recordVersion = recordVersion,
                             recordServerVersion = recordServerVersion,
                             recordPayload = recordPayload,

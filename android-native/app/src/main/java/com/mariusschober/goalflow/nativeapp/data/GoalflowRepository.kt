@@ -47,6 +47,7 @@ data class NativePushResult(
     val serverDeletedAt: String? = null,
     val recordEntityType: String? = null,
     val recordEntityId: String? = null,
+    val recordDeviceId: String? = null,
     val recordVersion: Long? = null,
     val recordServerVersion: Long? = null,
     val recordPayload: String? = null,
@@ -1927,6 +1928,7 @@ class GoalflowRepository(
                 require(
                     result.recordEntityType == batch.firstOrNull { it.mutationId == result.mutationId }?.entityType
                         && result.recordEntityId == batch.firstOrNull { it.mutationId == result.mutationId }?.entityId
+                        && result.recordDeviceId == batch.firstOrNull { it.mutationId == result.mutationId }?.deviceId
                         && result.recordVersion == batch.firstOrNull { it.mutationId == result.mutationId }?.version
                         && result.recordServerVersion == result.serverVersion
                         && result.recordPayload != null

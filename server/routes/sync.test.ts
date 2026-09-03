@@ -20,6 +20,7 @@ const receipt = () => ({
   record: {
     entity_type: mutation.entityType,
     entity_id: mutation.entityId,
+    device_id: mutation.deviceId,
     version: mutation.version,
     server_version: 7,
     payload: mutation.payload,
@@ -51,6 +52,7 @@ describe('sync API durable acceptance boundary', () => {
 
   it.each([
     ['entity identity', { entity_id: 'task-2' }],
+    ['device identity', { device_id: 'device-b' }],
     ['local version', { version: 2 }],
     ['server version', { server_version: 8 }],
     ['payload', { payload: { id: 'task-1', title: 'wrong' } }],
@@ -86,6 +88,7 @@ describe('sync API durable acceptance boundary', () => {
           record: {
             entity_type: input.target_entity_type,
             entity_id: entityId,
+            device_id: input.target_device_id,
             version: input.target_version,
             server_version: order.length,
             payload: input.target_payload,

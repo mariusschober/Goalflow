@@ -60,6 +60,7 @@ export const assertDurableReceipt = (mutation: z.infer<typeof syncMutationSchema
   if (!isRecord(record)
     || record.entity_type !== mutation.entityType
     || record.entity_id !== mutation.entityId
+    || record.device_id !== mutation.deviceId
     || Number(record.version) !== mutation.version
     || Number(record.server_version) !== Number(value.serverVersion)
     || canonicalJson(record.payload) !== canonicalJson(mutation.payload)
