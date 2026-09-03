@@ -83,8 +83,12 @@ or retention fails.
   minimal Supabase dependency probes succeed.
 - Configure Railway’s deployment health check to the readiness endpoint.
 - Never promote a deployment based on liveness alone.
-- Keep the production GitHub trigger disabled. Promote only the exact `main`
-  commit with a successful `beta-gate` and record the resulting deployment ID.
+- In each staging service, enable GitHub autodeploy and **Wait for CI**. In each
+  production service, explicitly disable GitHub autodeploy in Railway service
+  settings; this dashboard toggle is not inferred from the source branch.
+- Promote only after the exact commit has a successful `Beta Gate` push run on
+  `main`. Use Railway’s manual **Deploy Latest Commit** action for both the web
+  and maintenance services, then record their deployment IDs.
 
 ## Release verification
 

@@ -25,7 +25,10 @@ service after the first staging restore succeeds.
 1. Apply every `supabase/migrations/*.sql` file in lexical order to an empty
    staging project and retain the migration hashes.
 2. Deploy the exact candidate commit using `.railway/railway.ts` or equivalent
-   explicit Railway dashboard configuration.
+   explicit Railway dashboard configuration. Enable GitHub autodeploy and
+   **Wait for CI** on both staging services. Keep both production service
+   triggers disabled and use **Deploy Latest Commit** only after a successful
+   Beta Gate push run for the exact commit on `main`.
 3. Require `GET /api/v1/health/live` to return 200 and
    `GET /api/v1/health/ready` to return 200. Liveness alone is not deployable.
 4. Run the hosted account/RLS/sync matrix with two nonproduction identities.
