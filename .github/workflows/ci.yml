@@ -510,9 +510,144 @@ jobs:
           path: test-results
           if-no-files-found: error
 
+  hosted-cross-client:
+    name: hosted-cross-client
+    needs: [hosted-staging, native-android, macos]
+    if: always()
+    runs-on: macos-15
+    timeout-minutes: 40
+    env:
+      CANDIDATE_REF: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+      GOALFLOW_HOSTED_TEST_CONFIRM: staging
+      GOALFLOW_STAGING_APP_ORIGIN: ${{ secrets.GOALFLOW_STAGING_APP_ORIGIN }}
+      GOALFLOW_STAGING_SUPABASE_URL: ${{ secrets.GOALFLOW_STAGING_SUPABASE_URL }}
+      GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY }}
+      GOALFLOW_STAGING_USER_A_EMAIL: ${{ secrets.GOALFLOW_STAGING_USER_A_EMAIL }}
+      GOALFLOW_STAGING_USER_A_PASSWORD: ${{ secrets.GOALFLOW_STAGING_USER_A_PASSWORD }}
+      GOALFLOW_STAGING_USER_A_ID: ${{ secrets.GOALFLOW_STAGING_USER_A_ID }}
+      GOALFLOW_STAGING_USER_B_EMAIL: ${{ secrets.GOALFLOW_STAGING_USER_B_EMAIL }}
+      GOALFLOW_STAGING_USER_B_PASSWORD: ${{ secrets.GOALFLOW_STAGING_USER_B_PASSWORD }}
+      GOALFLOW_STAGING_USER_B_ID: ${{ secrets.GOALFLOW_STAGING_USER_B_ID }}
+      GOALFLOW_CROSS_CLIENT_STATE_FILE: ${{ runner.temp }}/goalflow-cross-client-state.json
+    steps:
+      - name: Require complete cross-client configuration on release candidates
+        id: preflight
+        run: |
+          set -euo pipefail
+          for result in \
+            "hosted-staging=${{ needs.hosted-staging.result }}" \
+            "native-android=${{ needs.native-android.result }}" \
+            "macos=${{ needs.macos.result }}"; do
+            case "$result" in
+              *=success) ;;
+              *) echo "Cross-client prerequisite failed: $result" >&2; exit 1 ;;
+            esac
+          done
+          names=(
+            GOALFLOW_STAGING_APP_ORIGIN
+            GOALFLOW_STAGING_SUPABASE_URL
+            GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY
+            GOALFLOW_STAGING_USER_A_EMAIL
+            GOALFLOW_STAGING_USER_A_PASSWORD
+            GOALFLOW_STAGING_USER_A_ID
+            GOALFLOW_STAGING_USER_B_EMAIL
+            GOALFLOW_STAGING_USER_B_PASSWORD
+            GOALFLOW_STAGING_USER_B_ID
+          )
+          missing=0
+          for name in "${names[@]}"; do
+            if [ -z "${!name:-}" ]; then missing=$((missing + 1)); fi
+          done
+          if [ "$missing" -gt 0 ] && [ "$missing" -lt "${#names[@]}" ]; then
+            echo "Cross-client staging configuration is partial; refusing to run ambiguously." >&2
+            exit 1
+          fi
+          if [ "$missing" -eq "${#names[@]}" ]; then
+            case "$CANDIDATE_REF" in
+              main|develop|integration/*)
+                echo "Hosted cross-client proof is mandatory for $CANDIDATE_REF." >&2
+                exit 1
+                ;;
+              *)
+                echo "run=false" >> "$GITHUB_OUTPUT"
+                echo "Hosted cross-client proof is not configured for this short-lived branch."
+                exit 0
+                ;;
+            esac
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - if: steps.preflight.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - if: steps.preflight.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.preflight.outputs.run == 'true'
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install cross-client test dependencies
+        if: steps.preflight.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          npm ci
+          chmod +x android-native/gradlew
+          npx playwright install chromium
+      - name: Seed one durable task through the hosted browser
+        id: seed
+        if: steps.preflight.outputs.run == 'true'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: seed
+        run: npm run test:hosted:cross-client-browser
+      - name: Pull and edit the browser task through production Android sync
+        if: steps.preflight.outputs.run == 'true'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: android
+        run: |
+          set -euo pipefail
+          ./android-native/gradlew -p android-native testProductionDebugUnitTest \
+            --tests 'com.mariusschober.goalflow.nativeapp.sync.NativeSyncEngineTest.hostedBrowserRecordConvergesThroughProductionTransport' \
+            -PgoalflowApiOrigin="$GOALFLOW_STAGING_APP_ORIGIN" \
+            -PgoalflowSupabaseUrl="$GOALFLOW_STAGING_SUPABASE_URL" \
+            -PgoalflowSupabasePublishableKey="$GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY"
+      - name: Verify the Android edit through the hosted browser
+        if: steps.preflight.outputs.run == 'true'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: verify-android
+        run: npm run test:hosted:cross-client-browser
+      - name: Pull and edit the Android task through production macOS sync
+        if: steps.preflight.outputs.run == 'true'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: macos
+        run: |
+          set -euo pipefail
+          xcodebuild test \
+            -project macos-native/GoalflowMac.xcodeproj \
+            -scheme GoalflowMac \
+            -configuration Debug \
+            -destination 'platform=macOS' \
+            -derivedDataPath "$RUNNER_TEMP/goalflow-hosted-cross-client" \
+            -only-testing:GoalflowMacTests/HostedCrossClientSyncTests/testProductionTransportEditsAndroidRecord \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Verify the macOS edit through the hosted browser
+        if: steps.preflight.outputs.run == 'true'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: verify-macos
+        run: npm run test:hosted:cross-client-browser
+      - name: Delete and verify the staging fixture
+        if: always() && steps.preflight.outputs.run == 'true' && steps.seed.outcome != 'skipped'
+        env:
+          GOALFLOW_CROSS_CLIENT_PHASE: cleanup
+        run: npm run test:hosted:cross-client-browser
+
   android-internal-beta:
     name: android-internal-beta
-    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging]
+    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]
     if: github.event_name == 'push' && github.ref == 'refs/heads/integration/beta'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -644,13 +779,13 @@ jobs:
 
   beta-gate:
     name: beta-gate
-    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, android-internal-beta]
+    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client, android-internal-beta]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all required jobs succeeded
         run: |
-          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }} hosted-staging=${{ needs.hosted-staging.result }} android-internal-beta=${{ needs.android-internal-beta.result }}"
+          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }} hosted-staging=${{ needs.hosted-staging.result }} hosted-cross-client=${{ needs.hosted-cross-client.result }} android-internal-beta=${{ needs.android-internal-beta.result }}"
           if [ "${{ needs.verify.result }}" != "success" ]; then echo "verify failed: ${{ needs.verify.result }}" >&2; exit 1; fi
           if [ "${{ needs.secrets.result }}" != "success" ]; then echo "secrets failed: ${{ needs.secrets.result }}" >&2; exit 1; fi
           if [ "${{ needs.migrations.result }}" != "success" ]; then echo "migrations failed: ${{ needs.migrations.result }}" >&2; exit 1; fi
@@ -659,6 +794,7 @@ jobs:
           if [ "${{ needs.web-release.result }}" != "success" ]; then echo "web-release failed: ${{ needs.web-release.result }}" >&2; exit 1; fi
           if [ "${{ needs.macos.result }}" != "success" ]; then echo "macos failed: ${{ needs.macos.result }}" >&2; exit 1; fi
           if [ "${{ needs.hosted-staging.result }}" != "success" ]; then echo "hosted-staging failed: ${{ needs.hosted-staging.result }}" >&2; exit 1; fi
+          if [ "${{ needs.hosted-cross-client.result }}" != "success" ]; then echo "hosted-cross-client failed: ${{ needs.hosted-cross-client.result }}" >&2; exit 1; fi
           if [ "${{ github.event_name }}" = "push" ] && [ "${{ github.ref }}" = "refs/heads/integration/beta" ]; then
             if [ "${{ needs.android-internal-beta.result }}" != "success" ]; then
               echo "android-internal-beta failed: ${{ needs.android-internal-beta.result }}" >&2

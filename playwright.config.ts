@@ -4,7 +4,7 @@ export default defineConfig({
   testDir: 'tests/e2e',
   // Hosted staging uses real accounts and has a separate fail-closed config.
   // Never let the local synthetic server accidentally collect that journey.
-  testIgnore: '**/hosted-staging.spec.ts',
+  testIgnore: ['**/hosted-staging.spec.ts', '**/hosted-cross-client.spec.ts'],
   timeout: 45_000,
   expect: { timeout: 7_000 },
   fullyParallel: false,

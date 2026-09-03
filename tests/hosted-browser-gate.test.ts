@@ -8,7 +8,8 @@ describe('hosted browser release gate', () => {
   const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
 
   it('cannot run against the local synthetic Playwright server', () => {
-    expect(localConfig).toContain("testIgnore: '**/hosted-staging.spec.ts'");
+    expect(localConfig).toContain("'**/hosted-staging.spec.ts'");
+    expect(localConfig).toContain("'**/hosted-cross-client.spec.ts'");
     expect(hostedConfig).toContain("testMatch: '**/hosted-staging.spec.ts'");
     expect(hostedConfig).not.toContain('webServer:');
     expect(hostedConfig).toContain("GOALFLOW_HOSTED_TEST_CONFIRM !== 'staging'");
