@@ -76,6 +76,28 @@ const validBackupKey = (value: string | undefined): boolean => {
   }
 };
 
+const legacySupabaseRole = (value: string): string | undefined => {
+  const segments = value.split(".");
+  if (segments.length !== 3 || segments.some(segment => !segment)) return undefined;
+  try {
+    const payload = JSON.parse(Buffer.from(segments[1], "base64url").toString("utf8")) as { role?: unknown };
+    return typeof payload.role === "string" ? payload.role : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+const isSupabasePublicKey = (value: string): boolean =>
+  value.startsWith("sb_publishable_") || legacySupabaseRole(value) === "anon";
+
+const isSupabaseServerKey = (value: string): boolean =>
+  value.startsWith("sb_secret_") || legacySupabaseRole(value) === "service_role";
+
+const isExactOrigin = (value: string): boolean => {
+  const url = new URL(value);
+  return value.replace(/\/$/, "") === url.origin;
+};
+
 /**
  * Safe machine-readable reasons used in logs and tests. Health responses expose
  * only ready/not_ready, never configuration details or credential material.
@@ -84,10 +106,19 @@ export const productionConfigurationProblems = (config: AppConfig): string[] => 
   if (config.NODE_ENV !== "production") return [];
   const problems: string[] = [];
   if (new URL(config.APP_ORIGIN).protocol !== "https:") problems.push("public_origin_must_use_https");
+  if (!isExactOrigin(config.APP_ORIGIN)) problems.push("public_origin_must_be_exact");
   if (config.ENABLE_LOCAL_DEMO === "true") problems.push("local_demo_forbidden");
   if (!config.SUPABASE_URL) problems.push("supabase_url_missing");
-  if (!supabasePublicKey(config)) problems.push("supabase_public_key_missing");
-  if (!supabaseServerKey(config)) problems.push("supabase_server_key_missing");
+  else {
+    if (new URL(config.SUPABASE_URL).protocol !== "https:") problems.push("supabase_url_must_use_https");
+    if (!isExactOrigin(config.SUPABASE_URL)) problems.push("supabase_url_must_be_exact");
+  }
+  const publicKey = supabasePublicKey(config);
+  const serverKey = supabaseServerKey(config);
+  if (!publicKey) problems.push("supabase_public_key_missing");
+  else if (!isSupabasePublicKey(publicKey)) problems.push("supabase_public_key_invalid");
+  if (!serverKey) problems.push("supabase_server_key_missing");
+  else if (!isSupabaseServerKey(serverKey)) problems.push("supabase_server_key_invalid");
   if (!config.OWNER_USER_ID) problems.push("owner_user_id_missing");
 
   if (config.TELEGRAM_ENABLED === "true") {

@@ -15,6 +15,12 @@ const productionEnvironment = (): NodeJS.ProcessEnv => ({
   OWNER_USER_ID: "00000000-0000-4000-8000-000000000001"
 });
 
+const legacyKey = (role: "anon" | "service_role"): string => [
+  Buffer.from(JSON.stringify({ alg: "HS256", typ: "JWT" })).toString("base64url"),
+  Buffer.from(JSON.stringify({ role })).toString("base64url"),
+  "synthetic-signature"
+].join(".");
+
 describe("production environment contract", () => {
   it("reports every missing core dependency instead of treating production as ready", () => {
     const config = readConfig({ NODE_ENV: "production", APP_ORIGIN: "http://localhost:3000" });
@@ -41,12 +47,39 @@ describe("production environment contract", () => {
       ...productionEnvironment(),
       SUPABASE_PUBLISHABLE_KEY: "",
       SUPABASE_SECRET_KEY: "",
-      SUPABASE_ANON_KEY: "legacy-public",
-      SUPABASE_SERVICE_ROLE_KEY: "legacy-server"
+      SUPABASE_ANON_KEY: legacyKey("anon"),
+      SUPABASE_SERVICE_ROLE_KEY: legacyKey("service_role")
     });
-    expect(supabasePublicKey(legacy)).toBe("legacy-public");
-    expect(supabaseServerKey(legacy)).toBe("legacy-server");
+    expect(supabasePublicKey(legacy)).toBe(legacyKey("anon"));
+    expect(supabaseServerKey(legacy)).toBe(legacyKey("service_role"));
     expect(productionConfigurationProblems(legacy)).toEqual([]);
+  });
+
+  it("rejects swapped, malformed, or insecure Supabase production settings", () => {
+    const swapped = readConfig({
+      ...productionEnvironment(),
+      SUPABASE_URL: "http://example.supabase.co/rest/v1",
+      SUPABASE_PUBLISHABLE_KEY: "sb_secret_test_value",
+      SUPABASE_SECRET_KEY: legacyKey("anon")
+    });
+    expect(productionConfigurationProblems(swapped)).toEqual([
+      "supabase_url_must_use_https",
+      "supabase_url_must_be_exact",
+      "supabase_public_key_invalid",
+      "supabase_server_key_invalid"
+    ]);
+
+    const malformed = readConfig({
+      ...productionEnvironment(),
+      APP_ORIGIN: "https://beta.goalflow.example/unexpected",
+      SUPABASE_PUBLISHABLE_KEY: "not-a-supabase-key",
+      SUPABASE_SECRET_KEY: "not-a-supabase-key"
+    });
+    expect(productionConfigurationProblems(malformed)).toEqual([
+      "public_origin_must_be_exact",
+      "supabase_public_key_invalid",
+      "supabase_server_key_invalid"
+    ]);
   });
 
   it("requires credentials only for explicitly enabled optional features", () => {
