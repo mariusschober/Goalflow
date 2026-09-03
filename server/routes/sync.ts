@@ -76,6 +76,27 @@ export const assertDurableReceipt = (mutation: z.infer<typeof syncMutationSchema
 
 type SyncMutation = z.infer<typeof syncMutationSchema>;
 
+export const resolveCloudConflictRecord = async (
+  database: SupabaseClient,
+  userId: string,
+  conflictId: string,
+  mutationId: string
+): Promise<{ resolved: true; conflictId: string; mutationId: string } | null> => {
+  const { data, error } = await database.from('sync_conflicts')
+    .update({ resolved_at: new Date().toISOString() })
+    .eq('user_id', userId)
+    .eq('id', conflictId)
+    .eq('mutation_id', mutationId)
+    .select('id,mutation_id,resolved_at')
+    .maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  if (data.id !== conflictId || data.mutation_id !== mutationId || typeof data.resolved_at !== 'string') {
+    throw new Error('Conflict resolution did not prove the exact durable server row.');
+  }
+  return { resolved: true, conflictId, mutationId };
+};
+
 /**
  * Preserve client dependency order. Earlier calls may commit before a later
  * call fails, so the client retains the whole batch and safely replays the
@@ -230,17 +251,30 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
   router.post('/sync/conflicts/resolve', async (request, response) => {
     try {
       const database = requireDatabase(admin);
-      const input = z.object({ mutationId: z.string().uuid(), choice: z.enum(['local', 'cloud']) }).parse(request.body);
+      const input = z.object({
+        conflictId: z.string().uuid(),
+        mutationId: z.string().uuid(),
+        choice: z.enum(['local', 'cloud'])
+      }).parse(request.body);
       // Keeping the local version is only complete once its retry is accepted
       // by push_sync_mutation. Leave the server conflict visible until then.
       if (input.choice === 'local') {
         response.status(204).end();
         return;
       }
-      const { error } = await database.from('sync_conflicts').update({ resolved_at: new Date().toISOString() })
-        .eq('user_id', request.user!.id).eq('mutation_id', input.mutationId).is('resolved_at', null);
-      if (error) throw error;
-      response.status(204).end();
+      const acknowledgment = await resolveCloudConflictRecord(
+        database,
+        request.user!.id,
+        input.conflictId,
+        input.mutationId
+      );
+      if (!acknowledgment) {
+        response.status(404).json({
+          error: { code: 'conflict_not_found', message: 'The exact synchronization conflict was not found.' }
+        });
+        return;
+      }
+      response.json(acknowledgment);
     } catch (error) {
       invalidRequest(response, error);
     }

@@ -414,7 +414,8 @@ export const startCloudSync = (userKey: string): (() => void) => {
 export const resolveLocalConflict = async (
   userKey: string,
   conflictId: string,
-  choice: 'local' | 'cloud'
+  choice: 'local' | 'cloud',
+  dependencies: CloudSyncDependencies = dependenciesForUser(userKey)
 ): Promise<void> => {
   const conflict = await storageService.getConflict(userKey, conflictId);
   if (!conflict) return;
@@ -424,14 +425,24 @@ export const resolveLocalConflict = async (
     window.dispatchEvent(new Event('online'));
     return;
   }
-  if (conflict.mutationId) {
+  if (UUID_PATTERN.test(conflict.id)) {
+    if (!conflict.mutationId || !UUID_PATTERN.test(conflict.mutationId)) {
+      throw new SyncProtocolError('The server conflict identity is invalid. Both versions remain preserved.');
+    }
     const response = await fetchSyncWithRetry('/api/v1/sync/conflicts/resolve', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ mutationId: conflict.mutationId, choice: 'cloud' })
-    }, dependenciesForUser(userKey));
-    if (!response.ok) {
-      throw new SyncHttpError('The server conflict could not be resolved. Both versions remain preserved.', response.status, 'conflict_resolution_failed');
+      body: JSON.stringify({ conflictId: conflict.id, mutationId: conflict.mutationId, choice: 'cloud' })
+    }, dependencies);
+    const acknowledgment = await parseJson<{
+      resolved?: boolean;
+      conflictId?: string;
+      mutationId?: string;
+    }>(response, 'The server conflict could not be resolved. Both versions remain preserved.');
+    if (acknowledgment.resolved !== true
+      || acknowledgment.conflictId !== conflict.id
+      || acknowledgment.mutationId !== conflict.mutationId) {
+      throw new SyncProtocolError('The server did not acknowledge the exact conflict. Both versions remain preserved.');
     }
   }
   const meta = await storageService.resolveConflictWithCloud(userKey, conflictId);

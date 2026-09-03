@@ -182,16 +182,24 @@ final class SyncEngine: @unchecked Sendable {
             let transportUserId = (try await transport.currentUserId()).lowercased()
             guard transportUserId == boundUserId.lowercased() else { throw SyncError.accountMismatch }
             let body = try JSONSerialization.data(withJSONObject: [
+                "conflictId": conflict.id,
                 "mutationId": conflict.mutationId,
                 "choice": "cloud"
             ], options: [])
-            let (_, response) = try await requestWithRetry(
+            let (data, response) = try await requestWithRetry(
                 path: "/api/v1/sync/conflicts/resolve",
                 method: "POST",
                 body: body
             )
             guard (200..<300).contains(response.statusCode) else {
                 throw SyncError.validation("The server conflict could not be resolved (HTTP \(response.statusCode)). Both versions remain preserved.")
+            }
+            guard data.count <= 64 * 1024,
+                  let acknowledgment = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  strictJSONBoolean(acknowledgment["resolved"]) == true,
+                  acknowledgment["conflictId"] as? String == conflict.id,
+                  acknowledgment["mutationId"] as? String == conflict.mutationId else {
+                throw SyncError.validation("The server did not acknowledge the exact conflict. Both versions remain preserved.")
             }
         }
 

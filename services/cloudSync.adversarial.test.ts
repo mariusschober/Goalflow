@@ -1,8 +1,13 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { fetchSyncWithRetry, synchronizeCloudOnce, type CloudSyncDependencies } from './cloudSync';
+import {
+  fetchSyncWithRetry,
+  resolveLocalConflict,
+  synchronizeCloudOnce,
+  type CloudSyncDependencies
+} from './cloudSync';
 import { storageService, STORES } from './storage';
-import { normalizeSyncMeta } from './syncProtocol';
+import { emptySyncMeta, normalizeSyncMeta } from './syncProtocol';
 
 class TestLocalStorage {
   private values = new Map<string, string>();
@@ -296,6 +301,58 @@ describe('adversarial cloud synchronization', () => {
     await expect(synchronizeCloudOnce(key, invalidDependencies)).rejects.toThrow(/cursor was not advanced/i);
     expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).cursor).toBe(0);
     expect(await storageService.get(STORES.TASKS, key)).toBeUndefined();
+  });
+
+  it('preserves both conflict sides when the server acknowledges a different row', async () => {
+    const key = `conflict-ack-mismatch-${crypto.randomUUID()}`;
+    const conflictId = '99999999-9999-4999-8999-999999999999';
+    const mutationId = '88888888-8888-4888-8888-888888888888';
+    const localTask = task('local choice', 'conflicted-task');
+    const cloudTask = task('cloud choice', 'conflicted-task');
+    const meta = emptySyncMeta();
+    meta.conflicts = [{
+      id: conflictId,
+      kind: 'push-rejected',
+      entityType: 'tasks',
+      entityId: 'conflicted-task',
+      mutationId,
+      localPayload: localTask,
+      localDeletedAt: null,
+      localHistory: [{
+        mutationId,
+        payload: localTask,
+        deletedAt: null,
+        updatedAt: '2026-08-27T00:00:00.000Z',
+        version: 1
+      }],
+      serverPayload: cloudTask,
+      serverMissing: false,
+      serverDeletedAt: null,
+      serverVersion: 2,
+      createdAt: '2026-08-27T00:00:01.000Z',
+      status: 'unresolved'
+    }];
+    await storageService.set(STORES.SYNC, key, meta, 'cloud');
+    await storageService.set(STORES.TASKS, key, [localTask], 'cloud');
+    let submitted: Record<string, unknown> | undefined;
+    const mismatchDependencies: CloudSyncDependencies = {
+      ...dependencies(new DurableFakeServer()),
+      fetch: async (_input, init) => {
+        submitted = JSON.parse(String(init?.body));
+        return Response.json({
+          resolved: true,
+          conflictId: '77777777-7777-4777-8777-777777777777',
+          mutationId
+        });
+      }
+    };
+
+    await expect(resolveLocalConflict(key, conflictId, 'cloud', mismatchDependencies))
+      .rejects.toThrow(/exact conflict/i);
+    expect(submitted).toEqual({ conflictId, mutationId, choice: 'cloud' });
+    expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).conflicts)
+      .toHaveLength(1);
+    expect(await storageService.get(STORES.TASKS, key)).toEqual([localTask]);
   });
 
   it('rejects duplicated acknowledgement bodies without removing the outbox', async () => {

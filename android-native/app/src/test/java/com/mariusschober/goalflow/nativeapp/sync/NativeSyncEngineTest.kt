@@ -6,6 +6,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.mariusschober.goalflow.nativeapp.data.GoalflowDatabase
 import com.mariusschober.goalflow.nativeapp.data.GoalflowJson
 import com.mariusschober.goalflow.nativeapp.data.GoalflowRepository
+import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import kotlinx.coroutines.test.runTest
@@ -357,6 +358,45 @@ class NativeSyncEngineTest {
 
         assertNull(database.taskDao().get(remote.id))
         assertNull(repository.syncMetadata("_cursor"))
+    }
+
+    @Test
+    fun `cloud conflict requires an exact durable server acknowledgement`() = runTest {
+        val conflict = SyncConflictEntity(
+            id = "99999999-9999-4999-8999-999999999999",
+            entityType = "tasks",
+            entityId = "00000000-0000-4000-8000-000000000004",
+            mutationId = "88888888-8888-4888-8888-888888888888",
+            localPayload = "{\"id\":\"00000000-0000-4000-8000-000000000004\",\"title\":\"local\"}",
+            serverPayload = "{\"id\":\"00000000-0000-4000-8000-000000000004\",\"title\":\"cloud\"}",
+            serverVersion = 2,
+            createdAt = "2026-09-03T00:00:00Z"
+        )
+        database.syncConflictDao().insert(conflict)
+        var submitted: JSONObject? = null
+        val engine = engine(NativeSyncTransport { path, _, _, body ->
+            if (path != "/api/v1/sync/conflicts/resolve") throw AssertionError("Unexpected request: $path")
+            submitted = JSONObject(body!!)
+            NativeHttpResponse(
+                200,
+                JSONObject()
+                    .put("resolved", true)
+                    .put("conflictId", "77777777-7777-4777-8777-777777777777")
+                    .put("mutationId", conflict.mutationId)
+                    .toString()
+            )
+        })
+
+        try {
+            engine.resolveConflictWithCloud(conflict)
+            fail("A mismatched server acknowledgement must remain visible")
+        } catch (_: NativeSyncProtocolException) {
+            // Both sides remain in Room.
+        }
+
+        assertEquals(conflict.id, submitted?.getString("conflictId"))
+        assertEquals(conflict.mutationId, submitted?.getString("mutationId"))
+        assertEquals(conflict, database.syncConflictDao().get(conflict.id))
     }
 
     private fun engine(

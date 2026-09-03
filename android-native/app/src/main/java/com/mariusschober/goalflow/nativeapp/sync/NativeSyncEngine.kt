@@ -80,7 +80,13 @@ class NativeSyncEngine(
     private val retryPolicy: NativeSyncRetryPolicy = NativeSyncRetryPolicy()
 ) {
     suspend fun resolveConflictWithCloud(conflict: SyncConflictEntity) = withContext(Dispatchers.IO) {
-        if (cloudAvailable() && conflict.mutationId != null) {
+        val serverLedgerConflict = runCatching { java.util.UUID.fromString(conflict.id) }.isSuccess
+        if (serverLedgerConflict) {
+            if (!cloudAvailable()) {
+                throw NativeSyncProtocolException("The server conflict cannot be resolved while cloud access is unavailable; both versions remain preserved.")
+            }
+            val mutationId = conflict.mutationId?.takeIf { it.matches(UUID_PATTERN) }
+                ?: throw NativeSyncProtocolException("The server conflict identity is invalid; both versions remain preserved.")
             val session = sessionProvider.read() ?: throw AuthenticationExpiredDuringSync()
             if (session.expiresAtMillis <= System.currentTimeMillis() + 60_000L) {
                 throw AuthenticationExpiredDuringSync()
@@ -91,11 +97,23 @@ class NativeSyncEngine(
                 "/api/v1/sync/conflicts/resolve",
                 "POST",
                 JSONObject()
-                    .put("mutationId", conflict.mutationId)
+                    .put("conflictId", conflict.id)
+                    .put("mutationId", mutationId)
                     .put("choice", "cloud")
                     .toString()
             )
             ensureSuccessful(response, "The server conflict could not be resolved; both versions remain preserved.")
+            val acknowledgment = parseObject(
+                response.body,
+                "The server conflict response was invalid; both versions remain preserved."
+            )
+            if (acknowledgment.opt("resolved") !is Boolean
+                || !acknowledgment.getBoolean("resolved")
+                || acknowledgment.optString("conflictId") != conflict.id
+                || acknowledgment.optString("mutationId") != mutationId
+            ) {
+                throw NativeSyncProtocolException("The server did not acknowledge the exact conflict; both versions remain preserved.")
+            }
         }
         repository.resolveConflictWithCloud(conflict.id)
     }

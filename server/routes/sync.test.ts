@@ -1,6 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { describe, expect, it, vi } from 'vitest';
-import { applySyncMutationsSequentially, assertDurableReceipt, syncMutationSchema } from './sync';
+import {
+  applySyncMutationsSequentially,
+  assertDurableReceipt,
+  resolveCloudConflictRecord,
+  syncMutationSchema
+} from './sync';
 
 const mutation = {
   mutationId: '11111111-1111-4111-8111-111111111111',
@@ -129,5 +134,47 @@ describe('sync API durable acceptance boundary', () => {
     await expect(applySyncMutationsSequentially(database, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', mutations))
       .rejects.toThrow('database unavailable');
     expect(rpc).toHaveBeenCalledTimes(1);
+  });
+
+  it('acknowledges only the exact user-owned conflict row', async () => {
+    const conflictId = '22222222-2222-4222-8222-222222222222';
+    const mutationId = '33333333-3333-4333-8333-333333333333';
+    const chain: any = {};
+    chain.update = vi.fn(() => chain);
+    chain.eq = vi.fn(() => chain);
+    chain.select = vi.fn(() => chain);
+    chain.maybeSingle = vi.fn(async () => ({
+      error: null,
+      data: { id: conflictId, mutation_id: mutationId, resolved_at: '2026-09-03T00:00:00.000Z' }
+    }));
+    const database = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+
+    await expect(resolveCloudConflictRecord(
+      database,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      conflictId,
+      mutationId
+    )).resolves.toEqual({ resolved: true, conflictId, mutationId });
+    expect(chain.eq.mock.calls).toEqual([
+      ['user_id', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+      ['id', conflictId],
+      ['mutation_id', mutationId]
+    ]);
+  });
+
+  it('does not acknowledge a conflict update that matched no row', async () => {
+    const chain: any = {};
+    chain.update = vi.fn(() => chain);
+    chain.eq = vi.fn(() => chain);
+    chain.select = vi.fn(() => chain);
+    chain.maybeSingle = vi.fn(async () => ({ error: null, data: null }));
+    const database = { from: vi.fn(() => chain) } as unknown as SupabaseClient;
+
+    await expect(resolveCloudConflictRecord(
+      database,
+      'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      '22222222-2222-4222-8222-222222222222',
+      '33333333-3333-4333-8333-333333333333'
+    )).resolves.toBeNull();
   });
 });

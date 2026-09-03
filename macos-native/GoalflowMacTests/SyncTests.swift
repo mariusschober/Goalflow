@@ -646,7 +646,7 @@ final class ServerConflictTests: XCTestCase {
         XCTAssertNotNil(meta.lastSuccessfulSync)
     }
 
-    func test_cloud_resolution_failure_preserves_local_and_cloud_sides() async throws {
+    func test_cloud_resolution_without_exact_ack_preserves_local_and_cloud_sides() async throws {
         let suite = "goalflow.sync.resolve-failure.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
@@ -665,10 +665,20 @@ final class ServerConflictTests: XCTestCase {
         ).conflicts
         try metaStore.save(meta)
         let transport = MockSyncTransport()
-        transport.conflictHandler = { path, method, _ in
+        transport.conflictHandler = { path, method, body in
             XCTAssertTrue(path.hasSuffix("/resolve"))
             XCTAssertEqual(method, "POST")
-            return (Data(), HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 422, httpVersion: nil, headerFields: nil)!)
+            let submitted = try XCTUnwrap(
+                JSONSerialization.jsonObject(with: XCTUnwrap(body)) as? [String: Any]
+            )
+            XCTAssertEqual(submitted["conflictId"] as? String, self.conflictId)
+            XCTAssertEqual(submitted["mutationId"] as? String, self.mutationId)
+            let data = try JSONSerialization.data(withJSONObject: [
+                "resolved": true,
+                "conflictId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+                "mutationId": self.mutationId
+            ])
+            return (data, HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }
         let engine = SyncEngine(
             metaStore: metaStore,
@@ -683,7 +693,7 @@ final class ServerConflictTests: XCTestCase {
             try await engine.resolveConflict(id: self.conflictId, useLocal: false)
             XCTFail("A rejected server resolution must not be reported as successful.")
         } catch {
-            XCTAssertTrue(error.localizedDescription.contains("422"))
+            XCTAssertTrue(error.localizedDescription.contains("exact conflict"))
         }
         XCTAssertEqual(try metaStore.load().conflicts.map(\.id), [conflictId])
         let stored = try XCTUnwrap((try bridge.loadValues()["tasks"] as? [[String: Any]])?.first)
