@@ -8,7 +8,7 @@
    ```bash
    export SUPABASE_URL=https://<ref>.supabase.co SUPABASE_ANON_KEY=eyJ... API_ORIGIN=https://app.goalflow.com
    xcodebuild archive -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -configuration Release -archivePath build/GoalflowMac.xcarchive CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_ENTITLEMENTS="GoalflowMac/GoalflowMac.entitlements"
-   ./scripts/package-dmg.sh 1.0.1 "$TEAM_ID" "$APPLE_ID"  # expects notarytool keychain profile goalflow-notary
+   ./scripts/package-dmg.sh 1.0.1 "$TEAM_ID" goalflow-notary
    codesign -d --entitlements :- build/Export/GoalflowMac.app | grep -q app-sandbox
    xcrun notarytool submit build/GoalflowMac-1.0.1.dmg --keychain-profile goalflow-notary --wait && xcrun stapler staple build/GoalflowMac-*.dmg && spctl --assess --type open build/Export/GoalflowMac.app
    ```

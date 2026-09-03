@@ -19,7 +19,7 @@ xcodegen generate --spec macos-native/project.yml --project macos-native
 xcodebuild -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -configuration Debug -destination platform=macOS build
 xcodebuild test -project macos-native/GoalflowMac.xcodeproj -scheme GoalflowMac -destination platform=macOS  # 135 tests
 # ad-hoc: CODE_SIGN_IDENTITY="-" DEVELOPMENT_TEAM="" (keep for local)
-# archive: export SUPABASE_URL=... SUPABASE_ANON_KEY=... && ./scripts/package-dmg.sh 1.0.1 TEAMID APPLE_ID
+# archive: export SUPABASE_URL=... SUPABASE_ANON_KEY=... && ./scripts/package-dmg.sh 1.0.1 TEAMID goalflow-notary
 ```
 
 **CI:** `.github/workflows/ci.yml` has no macOS job yet — `feature/macos-execution-companion` push does not trigger Android/web gates. Future `macos` job will run `xcodegen` + `xcodebuild test -enableThreadSanitizer -enableAddressSanitizer`.
