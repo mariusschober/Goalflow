@@ -35,6 +35,71 @@ final class StableJsonTests: XCTestCase {
             "{\"disabled\":false,\"enabled\":true,\"one\":1,\"zero\":0}"
         )
     }
+
+    func test_any_codable_preserves_nested_null_across_repeated_round_trips() throws {
+        let original = AnyCodable(["deletedAt": NSNull(), "nested": [NSNull()]])
+        let first = try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode(original))
+        let second = try JSONDecoder().decode(AnyCodable.self, from: JSONEncoder().encode(first))
+        XCTAssertEqual(stableJson(second.value), "{\"deletedAt\":null,\"nested\":[null]}")
+    }
+}
+
+final class TaskWireAdapterTests: XCTestCase {
+    func test_browser_task_payload_round_trips_without_losing_shared_or_unknown_fields() throws {
+        let createdAt = 1_788_393_600_123
+        let updatedAt = 1_788_393_660_456
+        let payload: [String: Any] = [
+            "id": "task-1",
+            "title": "Shared task",
+            "description": "Browser notes",
+            "completed": true,
+            "lifecycleStatus": "completed",
+            "isFrog": true,
+            "createdAt": createdAt,
+            "updatedAt": updatedAt,
+            "completedAt": updatedAt,
+            "duration": 45,
+            "actualDuration": 42,
+            "hashtags": ["focus", "beta"],
+            "dateAssigned": "2026-09-03",
+            "schedulePrecision": "day",
+            "scheduledFor": "2026-09-03",
+            "plannedOrder": 3,
+            "frogFailures": 2,
+            "beforeFrog": false,
+            "source": "manual",
+            "version": 7,
+            "flowState": "flow",
+            "futureField": ["preserve": true]
+        ]
+
+        let task = try GoalflowTask(syncDictionary: payload)
+        XCTAssertEqual(task.notes, "Browser notes")
+        XCTAssertEqual(task.tags, ["focus", "beta"])
+        XCTAssertEqual(task.status, .completed)
+        XCTAssertEqual(task.durationMinutes, 45)
+        XCTAssertEqual(task.flowState, .flow)
+        XCTAssertEqual(task.actualDurationMinutes, 42)
+
+        let roundTrip = try task.toSyncDictionary()
+        XCTAssertEqual(roundTrip["description"] as? String, "Browser notes")
+        XCTAssertEqual(roundTrip["hashtags"] as? [String], ["focus", "beta"])
+        XCTAssertEqual(roundTrip["completed"] as? Bool, true)
+        XCTAssertEqual(roundTrip["lifecycleStatus"] as? String, "completed")
+        XCTAssertEqual(roundTrip["duration"] as? Int, 45)
+        XCTAssertEqual(strictJSONInteger(roundTrip["createdAt"]), createdAt)
+        XCTAssertEqual(strictJSONInteger(roundTrip["updatedAt"]), updatedAt)
+        XCTAssertEqual(stableJson(roundTrip["futureField"]), "{\"preserve\":true}")
+    }
+
+    func test_ambiguous_boolean_does_not_become_a_completion() {
+        let payload: [String: Any] = [
+            "id": "task-1", "title": "Shared task", "completed": 1,
+            "createdAt": 1_788_393_600_000, "updatedAt": 1_788_393_600_000,
+            "dateAssigned": "2026-09-03", "version": 1
+        ]
+        XCTAssertThrowsError(try GoalflowTask(syncDictionary: payload))
+    }
 }
 
 final class SyncMetaTests: XCTestCase {
@@ -137,7 +202,7 @@ final class SyncMetaTests: XCTestCase {
         let meta = try metaStore.load()
         XCTAssertEqual(meta.outbox.count, 1)
         XCTAssertEqual(meta.outbox.first?.entityId, task.id)
-        XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(try task.toDictionary()))
+        XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(try task.toSyncDictionary()))
     }
 
     func test_pending_local_commit_recovers_after_interrupted_write() throws {

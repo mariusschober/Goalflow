@@ -62,12 +62,12 @@ final class HardeningTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
     }
 
-    func test_store_bridge_13_stores() throws {
+    func test_store_bridge_all_shared_stores() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
         let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: UserDefaults(suiteName: UUID().uuidString)!)
-        // Write 13 stores via bridge
+        // Write every shared store via the same durable bridge.
         let task = try GoalflowTask(id: "1", title: "T", scheduledFor: "2026-09-01").toDictionary()
         let values: [String: Any] = [
             "tasks": [task],
@@ -82,7 +82,15 @@ final class HardeningTests: XCTestCase {
             "amalgam": "hello",
             "tracking": ["t":1],
             "circadian": ["score":50],
-            "settings": ["theme":"dark"]
+            "settings": ["theme":"dark"],
+            "task_events": [[
+                "id": "11111111-1111-4111-8111-111111111111",
+                "taskId": "22222222-2222-4222-8222-222222222222",
+                "eventType": "completed",
+                "localDate": "2026-09-01",
+                "metadata": [String: Any](),
+                "createdAt": "2026-09-01T10:00:00.000Z"
+            ]]
         ]
         try bridge.saveValues(values)
         let loaded = try bridge.loadValues()
@@ -91,6 +99,44 @@ final class HardeningTests: XCTestCase {
         XCTAssertNotNil(loaded["truenorth"])
         XCTAssertNotNil(loaded["stats"])
         XCTAssertNotNil(loaded["settings"])
+        XCTAssertNotNil(loaded["task_events"])
+    }
+
+    func test_store_bridge_normalizes_browser_task_shape_for_native_use() throws {
+        let suite = "goalflow.bridge.web-task.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: defaults)
+        try bridge.saveValues(["tasks": [[
+            "id": "shared-task",
+            "title": "From browser",
+            "description": "Preserved notes",
+            "completed": false,
+            "isFrog": false,
+            "createdAt": 1_788_393_600_000,
+            "updatedAt": 1_788_393_600_000,
+            "duration": 30,
+            "hashtags": ["shared"],
+            "dateAssigned": "2026-09-03",
+            "schedulePrecision": "day",
+            "version": 4
+        ]]])
+
+        let taskStore = LocalTaskStore(
+            fileURL: tmp.appendingPathComponent("goalflow.tasks.json"),
+            defaults: defaults,
+            syncMetaStore: SyncMetaStore(fileURL: tmp.appendingPathComponent("sync.json"), defaults: defaults),
+            deviceIdStore: DeviceIdStore(defaults: defaults)
+        )
+        let task = try XCTUnwrap(taskStore.loadAll().first)
+        XCTAssertEqual(task.title, "From browser")
+        XCTAssertEqual(task.notes, "Preserved notes")
+        XCTAssertEqual(task.tags, ["shared"])
+        XCTAssertEqual(task.durationMinutes, 30)
+        XCTAssertEqual(task.version, 4)
     }
 
     func test_store_bridge_deletes_singleton_replica() throws {

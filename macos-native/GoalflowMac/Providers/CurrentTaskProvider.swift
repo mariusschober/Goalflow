@@ -44,8 +44,8 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
     func saveAll(_ tasks: [GoalflowTask]) throws {
         let sorted = tasks.sorted(by: goalflowTaskComparator)
         let previous = try loadAll()
-        let previousValue: Any? = try previous.map { try $0.toDictionary() }
-        let nextValue: Any? = try sorted.map { try $0.toDictionary() }
+        let previousValue: Any? = try previous.map { try $0.toSyncDictionary() }
+        let nextValue: Any? = try sorted.map { try $0.toSyncDictionary() }
         let transaction = try buildStagedLocalTransaction(
             storeName: "tasks",
             userKey: "unbound-local-workspace",

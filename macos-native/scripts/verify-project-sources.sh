@@ -8,8 +8,8 @@ project_file="$repo_root/macos-native/GoalflowMac.xcodeproj/project.pbxproj"
 missing=0
 while IFS= read -r source; do
   name="${source##*/}"
-  if ! rg -Fq "/* $name" "$project_file"; then
-    echo "Checked-in Xcode project omits $source" >&2
+  if ! rg -F "/* $name in Sources */" "$project_file" | awk 'END { exit(NR < 2) }'; then
+    echo "Checked-in Xcode project does not compile $source" >&2
     missing=1
   fi
 done < <(cd "$repo_root" && rg --files macos-native/GoalflowMac macos-native/GoalflowMacTests -g '*.swift' | sort)

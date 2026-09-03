@@ -43,7 +43,19 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
                 writes.append(DurableLocalWrite(fileName: mapping.file, walKey: mapping.walKey, data: nil))
                 continue
             }
-            let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+            let data: Data
+            if store == "tasks" {
+                guard let records = value as? [[String: Any]] else {
+                    throw SyncError.validation("The server returned malformed task data. Nothing was applied.")
+                }
+                let tasks = try records.map { try GoalflowTask(syncDictionary: $0) }
+                    .sorted(by: goalflowTaskComparator)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                data = try encoder.encode(tasks)
+            } else {
+                data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+            }
             try validateDomainData(data, store: store)
             writes.append(DurableLocalWrite(fileName: mapping.file, walKey: mapping.walKey, data: data))
         }
@@ -87,6 +99,29 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
                       plans.allSatisfy({ isRealDay($0.localDate) && Set($0.taskIds).count == $0.taskIds.count }) else {
                     throw SyncError.validation("The server returned invalid daily plan data. Nothing was applied.")
                 }
+            case "task_events":
+                guard let events = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                      events.allSatisfy({ event in
+                          guard let id = event["id"] as? String, UUID(uuidString: id) != nil,
+                                let taskId = (event["taskId"] ?? event["task_id"]) as? String, UUID(uuidString: taskId) != nil,
+                                let eventType = (event["eventType"] ?? event["event_type"] ?? event["type"]) as? String,
+                                ["created", "completed", "skipped", "rescheduled", "promoted_to_frog", "broken_down", "dropped", "restored"].contains(eventType),
+                                let localDate = (event["localDate"] ?? event["local_date"]) as? String,
+                                isRealDay(localDate) else { return false }
+                          let createdAt = event["createdAt"] ?? event["created_at"]
+                          if let text = createdAt as? String {
+                              let fractional = ISO8601DateFormatter()
+                              fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                              return fractional.date(from: text) != nil || ISO8601DateFormatter().date(from: text) != nil
+                          }
+                          if let number = createdAt as? NSNumber,
+                             CFGetTypeID(number) != CFBooleanGetTypeID() {
+                              return number.doubleValue.isFinite && number.doubleValue >= 0
+                          }
+                          return false
+                      }) else {
+                    throw SyncError.validation("The server returned invalid task event history. Nothing was applied.")
+                }
             default:
                 break
             }
@@ -110,6 +145,7 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
         ("amalgam.json", "amalgam", "goalflow.amalgam.v1"),
         ("tracking.json", "tracking", "goalflow.tracking.v1"),
         ("circadian.json", "circadian", "goalflow.circadian.v1"),
-        ("settings.json", "settings", "goalflow.settings.v1")
+        ("settings.json", "settings", "goalflow.settings.v1"),
+        ("taskEvents.json", "task_events", "goalflow.task_events.v1")
     ]
 }

@@ -190,9 +190,13 @@ final class SyncEngine: @unchecked Sendable {
                 guard ids.count == snapshot.count, Set(ids).count == snapshot.count else {
                     throw SyncError.validation("The cloud snapshot contains invalid or duplicate identities. Both versions remain preserved.")
                 }
-                for record in snapshot {
-                    guard let recordId = record["id"] as? String, !recordId.isEmpty else {
+                for snapshotRecord in snapshot {
+                    guard let recordId = snapshotRecord["id"] as? String, !recordId.isEmpty else {
                         throw SyncError.validation("The cloud snapshot contains an invalid identity. Both versions remain preserved.")
+                    }
+                    var record = snapshotRecord
+                    if conflict.entityType == "tasks", record["version"] == nil {
+                        record["version"] = max(meta.versions[syncEntityKey("tasks", recordId)]?.local ?? 0, 1)
                     }
                     if let index = records.firstIndex(where: { ($0["id"] as? String) == recordId }) {
                         records[index] = record
@@ -210,6 +214,9 @@ final class SyncEngine: @unchecked Sendable {
                     throw SyncError.validation("The cloud conflict identity does not match the selected entity. Nothing was applied.")
                 }
                 record["id"] = conflict.entityId
+                if conflict.entityType == "tasks", record["version"] == nil {
+                    record["version"] = max(meta.versions[key]?.local ?? 0, 1)
+                }
                 if let index = records.firstIndex(where: { ($0["id"] as? String) == conflict.entityId }) {
                     records[index] = record
                 } else {

@@ -93,13 +93,41 @@ func applyRemotePage(_ input: SyncMeta, currentValues: [String: Any], records: [
         if rec.serverVersion > currentServer {
             // Upsert
             if RECORD_LEVEL_STORES.contains(rec.entityType) {
-                // Payload is a single record
                 var currentArr = values[rec.entityType] as? [[String: Any]] ?? []
-                if let del = rec.deletedAt, !del.isEmpty {
+                if rec.entityId == "singleton", let snapshot = rec.payload.value as? [[String: Any]] {
+                    let ids = snapshot.compactMap { $0["id"] as? String }
+                    guard ids.count == snapshot.count, Set(ids).count == snapshot.count else {
+                        throw SyncError.validation("A legacy remote snapshot contains invalid or duplicate identities. The cursor was not advanced.")
+                    }
+                    if rec.deletedAt?.isEmpty == false {
+                        currentArr = []
+                    } else {
+                        for var record in snapshot {
+                            guard let recordId = record["id"] as? String, !recordId.isEmpty else {
+                                throw SyncError.validation("A legacy remote snapshot contains an invalid identity. The cursor was not advanced.")
+                            }
+                            if rec.entityType == "tasks" {
+                                if record["version"] == nil { record["version"] = rec.version }
+                                if record["updatedAt"] == nil, let updatedAt = rec.updatedAt { record["updatedAt"] = updatedAt }
+                            }
+                            if let index = currentArr.firstIndex(where: { ($0["id"] as? String) == recordId }) {
+                                currentArr[index] = record
+                            } else {
+                                currentArr.append(record)
+                            }
+                        }
+                    }
+                } else if let del = rec.deletedAt, !del.isEmpty {
                     currentArr.removeAll { ($0["id"] as? String) == rec.entityId }
                 } else {
-                    var payloadDict = rec.payload.value as? [String: Any] ?? [:]
+                    guard var payloadDict = rec.payload.value as? [String: Any] else {
+                        throw SyncError.validation("A remote record payload is invalid. The cursor was not advanced.")
+                    }
                     payloadDict["id"] = rec.entityId
+                    if rec.entityType == "tasks" {
+                        if payloadDict["version"] == nil { payloadDict["version"] = rec.version }
+                        if payloadDict["updatedAt"] == nil, let updatedAt = rec.updatedAt { payloadDict["updatedAt"] = updatedAt }
+                    }
                     if let idx = currentArr.firstIndex(where: { ($0["id"] as? String) == rec.entityId }) {
                         currentArr[idx] = payloadDict
                     } else {
@@ -126,4 +154,4 @@ func applyRemotePage(_ input: SyncMeta, currentValues: [String: Any], records: [
     return (meta, values, Array(changedStores))
 }
 
-let supportedStores: Set<String> = ["tasks","goals","habits","stats","progress","hashtags","accountability","truenorth","amalgam","tracking","circadian","settings","daily_plans"]
+let supportedStores: Set<String> = ["tasks","goals","habits","stats","progress","hashtags","accountability","truenorth","amalgam","tracking","circadian","settings","daily_plans","task_events"]

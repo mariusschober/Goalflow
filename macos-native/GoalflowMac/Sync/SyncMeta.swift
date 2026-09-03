@@ -1,7 +1,7 @@
 import Foundation
 
 let SYNC_META_SCHEMA_VERSION = 3
-let RECORD_LEVEL_STORES: Set<String> = ["tasks","goals","habits","truenorth","daily_plans"]
+let RECORD_LEVEL_STORES: Set<String> = ["tasks","goals","habits","truenorth","daily_plans","task_events"]
 let LEGACY_MUTATION_NAMESPACE = "384d2580-c159-4f6a-97d4-f4e94809538b"
 
 struct VersionPair: Codable, Equatable, Sendable { var local: Int; var server: Int? }
@@ -76,8 +76,8 @@ struct AnyCodable: Codable, Equatable, Sendable {
         if let d = try? c.decode(Double.self) { value = d; return }
         if let b = try? c.decode(Bool.self) { value = b; return }
         if let s = try? c.decode(String.self) { value = s; return }
-        if let a = try? c.decode([AnyCodable].self) { value = a.map(\.value); return }
-        if let d = try? c.decode([String: AnyCodable].self) { value = d.mapValues(\.value); return }
+        if let a = try? c.decode([AnyCodable].self) { value = a.map { $0.value ?? NSNull() }; return }
+        if let d = try? c.decode([String: AnyCodable].self) { value = d.mapValues { $0.value ?? NSNull() }; return }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "AnyCodable cannot decode")
     }
 

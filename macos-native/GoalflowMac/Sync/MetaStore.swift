@@ -354,7 +354,8 @@ final class SyncMetaStore: @unchecked Sendable {
         "goalflow.amalgam.v1",
         "goalflow.tracking.v1",
         "goalflow.circadian.v1",
-        "goalflow.settings.v1"
+        "goalflow.settings.v1",
+        "goalflow.task_events.v1"
     ]
 
     // MARK: - Normalize
