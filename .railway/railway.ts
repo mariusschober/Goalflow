@@ -1,4 +1,4 @@
-import { defineRailway, fn, github, project, service } from 'railway/iac';
+import { defineRailway, github, project, service } from 'railway/iac';
 
 /**
  * Apply this definition separately to the persistent `staging` and
@@ -51,7 +51,7 @@ export default defineRailway(ctx => {
     }
   });
 
-  const maintenance = fn('goalflow-maintenance', {
+  const maintenance = service('goalflow-maintenance', {
     source,
     build: {
       builder: 'RAILPACK',
