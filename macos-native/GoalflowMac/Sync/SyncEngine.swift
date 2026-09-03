@@ -1,5 +1,33 @@
 import Foundation
 
+func parsePushReceiptRecord(_ value: Any?) -> RemoteRecord? {
+    guard let object = value as? [String: Any],
+          let entityType = (object["entityType"] ?? object["entity_type"]) as? String,
+          !entityType.isEmpty,
+          let entityId = (object["entityId"] ?? object["entity_id"]) as? String,
+          !entityId.isEmpty,
+          object.keys.contains("payload") else { return nil }
+    let version = finiteVersion(object["version"])
+    let serverVersion = finiteVersion(object["serverVersion"] ?? object["server_version"])
+    guard version > 0, serverVersion > 0 else { return nil }
+    let deviceValue = object["deviceId"] ?? object["device_id"]
+    let updatedValue = object["updatedAt"] ?? object["updated_at"]
+    let deletedValue = object["deletedAt"] ?? object["deleted_at"]
+    guard deviceValue == nil || deviceValue is NSNull || deviceValue is String,
+          updatedValue == nil || updatedValue is NSNull || updatedValue is String,
+          deletedValue == nil || deletedValue is NSNull || deletedValue is String else { return nil }
+    return RemoteRecord(
+        entityType: entityType,
+        entityId: entityId,
+        version: version,
+        serverVersion: serverVersion,
+        deviceId: deviceValue as? String,
+        payload: AnyCodable(object["payload"]),
+        updatedAt: updatedValue as? String,
+        deletedAt: deletedValue as? String
+    )
+}
+
 private actor SyncGate {
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
@@ -183,19 +211,7 @@ final class SyncEngine: @unchecked Sendable {
                     throw SyncError.validation("Sync push result invalid. Pending mutations were not changed.")
                 }
                 if accepted && sv == 0 { throw SyncError.validation("Sync push result invalid. Pending mutations were not changed.") }
-                let rec: RemoteRecord? = {
-                    guard let recObj = r["record"] as? [String: Any] else { return nil }
-                    return RemoteRecord(
-                        entityType: recObj["entityType"] as? String ?? "",
-                        entityId: recObj["entityId"] as? String ?? "",
-                        version: recObj["version"] as? Int ?? 0,
-                        serverVersion: recObj["serverVersion"] as? Int ?? 0,
-                        deviceId: recObj["deviceId"] as? String,
-                        payload: AnyCodable(recObj["payload"]),
-                        updatedAt: recObj["updatedAt"] as? String,
-                        deletedAt: recObj["deletedAt"] as? String
-                    )
-                }()
+                let rec = parsePushReceiptRecord(r["record"])
                 let pr = PushResult(
                     mutationId: mid,
                     accepted: accepted,

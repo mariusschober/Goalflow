@@ -84,21 +84,60 @@ struct AnyCodable: Codable, Equatable, Sendable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.singleValueContainer()
         guard let v = value else { try c.encodeNil(); return }
-        switch v {
-        case let b as Bool: try c.encode(b)
-        case let i as Int: try c.encode(i)
-        case let d as Double: try c.encode(d)
-        case let s as String: try c.encode(s)
-        case let a as [Any]: try c.encode(a.map { AnyCodable($0) })
-        case let d as [String: Any]: try c.encode(d.mapValues { AnyCodable($0) })
-        default:
-            // Try JSONSerialization fallback
-            if let data = try? JSONSerialization.data(withJSONObject: v, options: []),
-               let obj = try? JSONSerialization.jsonObject(with: data, options: []) {
-                try c.encode(AnyCodable(obj))
+        // On Darwin, `Any` values backed by NSNumber bridge across Bool and Int.
+        // Match exact Swift types first, then inspect Foundation numbers by CF type.
+        // A cast-only switch can encode integer 0/1 as false/true and corrupt an
+        // outbox payload while it is written to disk.
+        if type(of: v) == Bool.self, let b = v as? Bool {
+            try c.encode(b)
+        } else if type(of: v) == Int.self, let i = v as? Int {
+            try c.encode(i)
+        } else if type(of: v) == Int8.self, let i = v as? Int8 {
+            try c.encode(i)
+        } else if type(of: v) == Int16.self, let i = v as? Int16 {
+            try c.encode(i)
+        } else if type(of: v) == Int32.self, let i = v as? Int32 {
+            try c.encode(i)
+        } else if type(of: v) == Int64.self, let i = v as? Int64 {
+            try c.encode(i)
+        } else if type(of: v) == UInt.self, let i = v as? UInt {
+            try c.encode(i)
+        } else if type(of: v) == UInt8.self, let i = v as? UInt8 {
+            try c.encode(i)
+        } else if type(of: v) == UInt16.self, let i = v as? UInt16 {
+            try c.encode(i)
+        } else if type(of: v) == UInt32.self, let i = v as? UInt32 {
+            try c.encode(i)
+        } else if type(of: v) == UInt64.self, let i = v as? UInt64 {
+            try c.encode(i)
+        } else if type(of: v) == Double.self, let d = v as? Double {
+            try c.encode(d)
+        } else if type(of: v) == Float.self, let d = v as? Float {
+            try c.encode(d)
+        } else if let n = v as? NSNumber {
+            if CFGetTypeID(n) == CFBooleanGetTypeID() {
+                try c.encode(n.boolValue)
+            } else if ["f", "d"].contains(String(cString: n.objCType)) {
+                try c.encode(n.doubleValue)
             } else {
-                try c.encodeNil()
+                try c.encode(n.int64Value)
             }
+        } else if let s = v as? String {
+            try c.encode(s)
+        } else if v is NSNull {
+            try c.encodeNil()
+        } else if let a = v as? [Any] {
+            try c.encode(a.map { AnyCodable($0) })
+        } else if let d = v as? [String: Any] {
+            try c.encode(d.mapValues { AnyCodable($0) })
+        } else {
+            throw EncodingError.invalidValue(
+                v,
+                EncodingError.Context(
+                    codingPath: encoder.codingPath,
+                    debugDescription: "AnyCodable refuses to silently replace an unsupported value with null"
+                )
+            )
         }
     }
 

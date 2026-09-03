@@ -30,6 +30,10 @@ final class StableJsonTests: XCTestCase {
         XCTAssertEqual(object["one"] as? Int, 1)
         XCTAssertEqual(object["enabled"] as? Bool, true)
         XCTAssertEqual(object["disabled"] as? Bool, false)
+        XCTAssertEqual(
+            stableJson(decoded.value),
+            "{\"disabled\":false,\"enabled\":true,\"one\":1,\"zero\":0}"
+        )
     }
 }
 
@@ -271,6 +275,28 @@ final class ReadyOutboxTests: XCTestCase {
 }
 
 final class ApplyPushResultsTests: XCTestCase {
+    func test_server_snake_case_receipt_preserves_exact_record() throws {
+        let payload: [String: Any] = ["id": "task-1", "version": 1]
+        let record = try XCTUnwrap(parsePushReceiptRecord([
+            "entity_type": "tasks",
+            "entity_id": "task-1",
+            "version": 1,
+            "server_version": 7,
+            "device_id": "device-a",
+            "payload": payload,
+            "updated_at": "2026-09-03T00:00:00.000Z",
+            "deleted_at": NSNull()
+        ]))
+        XCTAssertEqual(record.entityType, "tasks")
+        XCTAssertEqual(record.entityId, "task-1")
+        XCTAssertEqual(record.version, 1)
+        XCTAssertEqual(record.serverVersion, 7)
+        XCTAssertEqual(record.deviceId, "device-a")
+        XCTAssertEqual(stableJson(record.payload.value), stableJson(payload))
+        XCTAssertEqual(record.updatedAt, "2026-09-03T00:00:00.000Z")
+        XCTAssertNil(record.deletedAt)
+    }
+
     func test_accepted_proves_and_clears() throws {
         var meta = emptySyncMeta()
         let m = SyncMutation(mutationId: "m1", deviceId: "d", entityType: "tasks", entityId: "1", baseServerVersion: nil, version: 1, payload: AnyCodable(["id":"1","title":"A"]), updatedAt: "now", deletedAt: nil, dependsOnMutationId: nil, resolvesConflictId: nil, attemptedAt: nil)
@@ -287,6 +313,22 @@ final class ApplyPushResultsTests: XCTestCase {
         let m = SyncMutation(mutationId: "m1", deviceId: "d", entityType: "tasks", entityId: "1", baseServerVersion: nil, version: 1, payload: AnyCodable(["id":"1","title":"A"]), updatedAt: "now", deletedAt: nil, dependsOnMutationId: nil, resolvesConflictId: nil, attemptedAt: nil)
         meta.outbox = [m]
         let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 11, deviceId: "d", payload: AnyCodable(["id":"1","title":"B"]), updatedAt: "now", deletedAt: nil)
+        let res = PushResult(mutationId: "m1", accepted: true, serverVersion: 11, replayMismatch: nil, serverMissing: nil, conflictId: nil, record: rec)
+        XCTAssertThrowsError(try applyPushResults(meta, batch: [m], results: [res]))
+    }
+    func test_accepted_receipt_with_different_timestamp_throws() {
+        var meta = emptySyncMeta()
+        let m = SyncMutation(mutationId: "m1", deviceId: "d", entityType: "tasks", entityId: "1", baseServerVersion: nil, version: 1, payload: AnyCodable(["id":"1"]), updatedAt: "2026-09-03T00:00:00.000Z", deletedAt: nil, dependsOnMutationId: nil, resolvesConflictId: nil, attemptedAt: nil)
+        meta.outbox = [m]
+        let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 11, deviceId: "d", payload: AnyCodable(["id":"1"]), updatedAt: "2026-09-03T00:00:01.000Z", deletedAt: nil)
+        let res = PushResult(mutationId: "m1", accepted: true, serverVersion: 11, replayMismatch: nil, serverMissing: nil, conflictId: nil, record: rec)
+        XCTAssertThrowsError(try applyPushResults(meta, batch: [m], results: [res]))
+    }
+    func test_accepted_receipt_with_different_device_throws() {
+        var meta = emptySyncMeta()
+        let m = SyncMutation(mutationId: "m1", deviceId: "device-a", entityType: "tasks", entityId: "1", baseServerVersion: nil, version: 1, payload: AnyCodable(["id":"1"]), updatedAt: "now", deletedAt: nil, dependsOnMutationId: nil, resolvesConflictId: nil, attemptedAt: nil)
+        meta.outbox = [m]
+        let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 11, deviceId: "device-b", payload: AnyCodable(["id":"1"]), updatedAt: "now", deletedAt: nil)
         let res = PushResult(mutationId: "m1", accepted: true, serverVersion: 11, replayMismatch: nil, serverMissing: nil, conflictId: nil, record: rec)
         XCTAssertThrowsError(try applyPushResults(meta, batch: [m], results: [res]))
     }
