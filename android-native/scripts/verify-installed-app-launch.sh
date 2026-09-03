@@ -58,20 +58,42 @@ grep -Fq 'Starting: Intent' <<<"$start_output" || {
 
 last_process='absent'
 last_resumed='other'
+last_ui='absent'
 last_frames='unavailable'
+remote_ui="/data/local/tmp/goalflow-${result_label}.xml"
+last_activity_output=''
+last_ui_output=''
 for ((attempt = 1; attempt <= attempts; attempt += 1)); do
   process_output="$("$timeout_bin" 5 "${adb_command[@]}" shell pidof "$package_name" 2>/dev/null | tr -d '\r' || true)"
   activity_output="$("$timeout_bin" 5 "${adb_command[@]}" shell dumpsys activity activities 2>/dev/null | tr -d '\r' || true)"
+  last_activity_output="$activity_output"
   resumed_output="$(grep -E 'mResumedActivity|topResumedActivity|ResumedActivity' <<<"$activity_output" || true)"
-  gfx_output="$("$timeout_bin" 5 "${adb_command[@]}" shell dumpsys gfxinfo "$package_name" 2>/dev/null | tr -d '\r' || true)"
-  frames="$(sed -n -E 's/^[[:space:]]*Total frames rendered:[[:space:]]*([0-9]+).*/\1/p' <<<"$gfx_output" | head -n 1)"
 
   [[ "$process_output" =~ ^[0-9]+([[:space:]][0-9]+)*$ ]] && last_process='present' || last_process='absent'
   grep -Fq "$component" <<<"$resumed_output" && last_resumed='expected' || last_resumed='other'
-  [[ "$frames" =~ ^[0-9]+$ ]] && last_frames="$frames" || last_frames='unavailable'
 
-  if [[ "$last_process" == present && "$last_resumed" == expected && "$last_frames" =~ ^[0-9]+$ && "$last_frames" -gt 0 ]]; then
-    echo "${result_label}_FRAMES=$last_frames"
+  last_ui='absent'
+  last_ui_output=''
+  if [[ "$last_process" == present && "$last_resumed" == expected ]]; then
+    "$timeout_bin" 15 "${adb_command[@]}" shell uiautomator dump "$remote_ui" >/dev/null 2>&1 || true
+    last_ui_output="$("$timeout_bin" 5 "${adb_command[@]}" shell cat "$remote_ui" 2>/dev/null | tr -d '\r' || true)"
+    "$timeout_bin" 5 "${adb_command[@]}" shell rm -f "$remote_ui" >/dev/null 2>&1 || true
+    if grep -Fq "package=\"$package_name\"" <<<"$last_ui_output" && {
+      grep -Fq 'text="Current"' <<<"$last_ui_output" ||
+        grep -Fq 'content-desc="Current"' <<<"$last_ui_output" ||
+        grep -Fq 'text="Capture"' <<<"$last_ui_output" ||
+        grep -Fq 'content-desc="Capture a scheduled commitment"' <<<"$last_ui_output"
+    }; then
+      last_ui='expected'
+    fi
+  fi
+
+  if [[ "$last_process" == present && "$last_resumed" == expected && "$last_ui" == expected ]]; then
+    gfx_output="$("$timeout_bin" 5 "${adb_command[@]}" shell dumpsys gfxinfo "$package_name" 2>/dev/null | tr -d '\r' || true)"
+    frames="$(sed -n -E 's/^[[:space:]]*Total frames rendered:[[:space:]]*([0-9]+).*/\1/p' <<<"$gfx_output" | head -n 1)"
+    [[ "$frames" =~ ^[0-9]+$ ]] && last_frames="$frames" || last_frames='unavailable'
+    echo "${result_label}_UI=PASS"
+    echo "${result_label}_GFX_FRAMES=$last_frames"
     echo "$result_label=PASS"
     exit 0
   fi
@@ -81,5 +103,12 @@ for ((attempt = 1; attempt <= attempts; attempt += 1)); do
   fi
 done
 
-echo "$result_label=FAIL (cold-started component was not live, resumed, and rendered; process=$last_process resumed=$last_resumed frames=$last_frames)" >&2
+if [[ -n "${GOALFLOW_LAUNCH_DIAGNOSTICS_DIR:-}" ]]; then
+  mkdir -p "$GOALFLOW_LAUNCH_DIAGNOSTICS_DIR"
+  printf '%s\n' "$last_activity_output" >"$GOALFLOW_LAUNCH_DIAGNOSTICS_DIR/${result_label}-activity.txt"
+  printf '%s\n' "$last_ui_output" >"$GOALFLOW_LAUNCH_DIAGNOSTICS_DIR/${result_label}-ui.xml"
+  "$timeout_bin" 10 "${adb_command[@]}" exec-out screencap -p \
+    >"$GOALFLOW_LAUNCH_DIAGNOSTICS_DIR/${result_label}-screen.png" 2>/dev/null || true
+fi
+echo "$result_label=FAIL (cold-started component did not expose the expected visible UI; process=$last_process resumed=$last_resumed ui=$last_ui)" >&2
 exit 1

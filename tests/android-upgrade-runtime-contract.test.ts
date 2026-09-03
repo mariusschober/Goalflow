@@ -68,14 +68,17 @@ describe('installed Android upgrade instrumentation contract', () => {
     expect(launchCurrent).toBeGreaterThan(installUpgrade);
   });
 
-  it('requires a live resumed process and rendered frame for every APK launch', () => {
+  it('requires a live resumed process and visible Goalflow semantics for every APK launch', () => {
     expect(launchVerifier).toContain('shell am force-stop "$package_name"');
     expect(launchVerifier).toContain('shell pidof "$package_name"');
     expect(launchVerifier).toContain('shell dumpsys activity activities');
-    expect(launchVerifier).toContain('Total frames rendered:');
-    expect(launchVerifier).toContain('"$last_frames" -gt 0');
+    expect(launchVerifier).toContain('shell uiautomator dump "$remote_ui"');
+    expect(launchVerifier).toContain('package=\\"$package_name\\"');
+    expect(launchVerifier).toContain("text=\"Current\"");
+    expect(launchVerifier).toContain('${result_label}_UI=PASS');
     expect(upgrade).toContain('verify-installed-app-launch.sh');
     expect(apkDiagnostic).toContain('verify-installed-app-launch.sh');
     expect(workflow).toContain('Run installed app launch regression test');
+    expect(workflow).toContain('Upload native launch diagnostics on failure');
   });
 });

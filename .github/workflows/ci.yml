@@ -278,6 +278,13 @@ jobs:
           disable-animations: true
           working-directory: ${{ github.workspace }}
           script: GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 android-native/scripts/run-emulator-gate.sh
+      - name: Upload native launch diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-launch-diagnostics
+          path: android-native/build/launch-diagnostics
+          if-no-files-found: warn
       - name: Upload native production debug APK (TEST-ONLY, not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

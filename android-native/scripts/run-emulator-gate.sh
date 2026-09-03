@@ -11,6 +11,7 @@ set -euo pipefail
 
 workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 native_root="$workspace/android-native"
+export GOALFLOW_LAUNCH_DIAGNOSTICS_DIR="$native_root/build/launch-diagnostics"
 current_apk="$native_root/app/build/outputs/apk/production/debug/app-production-debug.apk"
 current_test_apk="$native_root/app/build/outputs/apk/androidTest/production/debug/app-production-debug-androidTest.apk"
 old_apk="${GOALFLOW_UPGRADE_FROM_APK:?GOALFLOW_UPGRADE_FROM_APK is required}"
