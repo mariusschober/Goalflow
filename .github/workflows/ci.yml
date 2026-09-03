@@ -306,12 +306,14 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-      - name: Verify public configuration and project specification
+      - name: Verify macOS public configuration
+        run: macos-native/scripts/verify-public-config.sh
+      - name: Validate macOS property lists
         run: |
-          macos-native/scripts/verify-public-config.sh
           plutil -lint macos-native/GoalflowMac/Resources/Info.plist
           plutil -lint macos-native/GoalflowMac/Resources/PrivacyInfo.xcprivacy
-          ruby -e 'require "yaml"; YAML.safe_load(File.read("macos-native/project.yml"), aliases: true)'
+      - name: Parse XcodeGen project specification
+        run: ruby -e 'require "yaml"; abort unless YAML.parse_file("macos-native/project.yml")'
       - name: Record Xcode toolchain
         run: |
           xcodebuild -version
