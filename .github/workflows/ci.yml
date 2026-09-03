@@ -175,7 +175,7 @@ jobs:
           key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-native-
-      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-signing-strict.sh
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/run-emulator-gate.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-signing-strict.sh
       - name: Prove release signing checks fail closed
         run: bash android-native/scripts/test-signing-gate.sh
       - name: Prove Android rejects Supabase server secrets
@@ -270,16 +270,7 @@ jobs:
           heap-size: 512M
           disable-animations: true
           working-directory: ${{ github.workspace }}
-          script: |
-            set -eu
-            sleep 45
-            apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"
-            [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }
-            GOALFLOW_APK_LABEL=TEST-ONLY GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 DIAGNOSE_APK_INSTALL=1 \
-              android-native/scripts/diagnose-apk.sh "$apk"
-            ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
-            GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 android-native/scripts/test-upgrade-matrix.sh \
-              "$GOALFLOW_UPGRADE_FROM_APK" "$apk" "$GOALFLOW_UPGRADE_SEED_TEST_APK"
+          script: GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 android-native/scripts/run-emulator-gate.sh
       - name: Upload native production debug APK (TEST-ONLY, not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
