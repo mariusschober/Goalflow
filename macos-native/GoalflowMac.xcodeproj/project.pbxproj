@@ -75,6 +75,7 @@
 		E78C949924887CD6318461D3 /* BreakTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0660F5AC970BC266A22A532D /* BreakTimer.swift */; };
 		F0B4F0EE32D6B024CDB46009 /* ExecutionTimer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 515E9C93B6B9719CF468116B /* ExecutionTimer.swift */; };
 		FF21BC7017A6812FB051FF56 /* BreakSessionStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AE465DAECF78F1FB607F6C2 /* BreakSessionStore.swift */; };
+		F11111111111111111111111 /* ServerConflicts.swift in Sources */ = {isa = PBXBuildFile; fileRef = F22222222222222222222222 /* ServerConflicts.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -113,6 +114,7 @@
 		4DB08E5F433C83D224127157 /* GoalflowMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GoalflowMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4E6E296D6144E2B16A2FC290 /* CaptureViewModelTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureViewModelTests.swift; sourceTree = "<group>"; };
 		515E9C93B6B9719CF468116B /* ExecutionTimer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExecutionTimer.swift; sourceTree = "<group>"; };
+		F22222222222222222222222 /* ServerConflicts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ServerConflicts.swift; sourceTree = "<group>"; };
 		52F46B3249801BD9B2327764 /* CalendarTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarTests.swift; sourceTree = "<group>"; };
 		53C75DBC4EC9F9F6F1F35195 /* PlanningGateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanningGateTests.swift; sourceTree = "<group>"; };
 		58D45D76DA066E7FF0450514 /* SupabaseAuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SupabaseAuthService.swift; sourceTree = "<group>"; };
@@ -222,6 +224,7 @@
 				9D11DA133D93873AC0CCF5E5 /* BuildStaging.swift */,
 				26786E4B8BE81D0946D4A057 /* DeviceIdStore.swift */,
 				857271F477F350F3B8A66FD2 /* MetaStore.swift */,
+				F22222222222222222222222 /* ServerConflicts.swift */,
 				90CDF2DDC8C0C9352CAA9476 /* StableJson.swift */,
 				E0E49AF6CC845F30FF52FE51 /* StoreBridge.swift */,
 				0D447AE73CA40CF76B0091F8 /* SyncEngine.swift */,
@@ -485,6 +488,7 @@
 				8CB8C706BA3E0D4177D7C91C /* MetaStore.swift in Sources */,
 				E33A2F5E018C1A3E23D586C6 /* PlanningGate.swift in Sources */,
 				3512EA68100890F4C6ECF0E1 /* SchedulingBridge.swift in Sources */,
+				F11111111111111111111111 /* ServerConflicts.swift in Sources */,
 				35FAEC6A5897AD684C0D1C65 /* SignInView.swift in Sources */,
 				4FD20CA5625CFF5BC872F1BE /* SoundGateway.swift in Sources */,
 				566A505B84C586DA156FA942 /* StableJson.swift in Sources */,

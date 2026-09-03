@@ -314,6 +314,8 @@ jobs:
           plutil -lint macos-native/GoalflowMac/Resources/PrivacyInfo.xcprivacy
       - name: Parse XcodeGen project specification
         run: ruby -e 'require "yaml"; abort unless YAML.parse_file("macos-native/project.yml")'
+      - name: Verify checked-in Xcode source membership
+        run: bash macos-native/scripts/verify-project-sources.sh
       - name: Record Xcode toolchain
         run: |
           xcodebuild -version
