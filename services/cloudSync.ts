@@ -128,6 +128,7 @@ const defaultSleep = (delayMs: number): Promise<void> =>
   new Promise(resolve => globalThis.setTimeout(resolve, delayMs));
 
 const retryableStatus = (status: number): boolean => status >= 500 || RETRYABLE_STATUS.has(status);
+const responseWithoutBody = (status: number): boolean => status === 204 || status === 205 || status === 304;
 
 /** Bounded, jittered retry for idempotent sync requests and mutation-ID pushes. */
 export const fetchSyncWithRetry = async (
@@ -155,7 +156,14 @@ export const fetchSyncWithRetry = async (
     );
     try {
       const response = await dependencies.fetch(input, { ...init, signal: controller.signal });
-      if (!retryableStatus(response.status) || attempt + 1 >= maximumAttempts) return response;
+      if (!retryableStatus(response.status) || attempt + 1 >= maximumAttempts) {
+        const body = responseWithoutBody(response.status) ? null : await response.arrayBuffer();
+        return new Response(body, {
+          status: response.status,
+          statusText: response.statusText,
+          headers: response.headers
+        });
+      }
       await response.body?.cancel().catch(() => undefined);
       lastError = new SyncHttpError('Synchronization service is temporarily unavailable.', response.status, 'sync_retryable');
     } catch (error) {

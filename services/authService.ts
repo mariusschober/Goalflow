@@ -68,9 +68,42 @@ export const apiUrl = (input: RequestInfo | URL): RequestInfo | URL => {
   return `${apiOrigin}${raw.startsWith('/') ? raw : `/${raw}`}`;
 };
 
+const responseWithoutBody = (status: number): boolean => status === 204 || status === 205 || status === 304;
+
+/** Keeps the deadline active until the complete API response is locally readable. */
+export const fetchApiWithTimeout = async (
+  input: RequestInfo | URL,
+  init: RequestInit = {},
+  timeoutMs = 15_000,
+  fetcher: typeof fetch = globalThis.fetch
+): Promise<Response> => {
+  const parentSignal = init.signal;
+  if (parentSignal?.aborted) throw parentSignal.reason ?? new DOMException('Request stopped.', 'AbortError');
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort(parentSignal?.reason);
+  parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+  const timeout = globalThis.setTimeout(
+    () => controller.abort(new DOMException('Request timed out.', 'TimeoutError')),
+    Math.max(250, Math.min(120_000, timeoutMs))
+  );
+  try {
+    const response = await fetcher(apiUrl(input), { ...init, signal: controller.signal });
+    const body = responseWithoutBody(response.status) ? null : await response.arrayBuffer();
+    return new Response(body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers
+    });
+  } finally {
+    globalThis.clearTimeout(timeout);
+    parentSignal?.removeEventListener('abort', abortFromParent);
+  }
+};
+
 export const supabase = supabaseUrl && supabasePublicKey
   ? createClient(supabaseUrl, supabasePublicKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      global: { fetch: (input, init) => fetchApiWithTimeout(input, init) }
     })
   : undefined;
 
@@ -126,7 +159,7 @@ export const registerWithEmail = async (
 ): Promise<{ verificationRequired: boolean }> => {
   if (!supabase) throw new Error('Authentication is not configured.');
   const normalizedEmail = email.trim().toLowerCase();
-  const preflight = await fetch(apiUrl('/api/v1/auth/email/preflight'), {
+  const preflight = await fetchApiWithTimeout('/api/v1/auth/email/preflight', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ email: normalizedEmail, code: inviteCode.trim(), captchaToken })
@@ -192,7 +225,7 @@ export const activateEmailSignup = async (session: Session): Promise<void> => {
     clearPendingEmailActivation();
     throw new SessionValidationError('This verification link has no valid beta activation. Start signup again.', 400, 'activation_rejected');
   }
-  const response = await fetch(apiUrl('/api/v1/auth/email/activate'), {
+  const response = await fetchApiWithTimeout('/api/v1/auth/email/activate', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
     body: '{}'
@@ -215,7 +248,7 @@ export const activateEmailSignup = async (session: Session): Promise<void> => {
 };
 
 export const validateServerSession = async (session: Session): Promise<ServerAccount> => {
-  const response = await fetch(apiUrl('/api/v1/session'), {
+  const response = await fetchApiWithTimeout('/api/v1/session', {
     headers: { authorization: `Bearer ${session.access_token}` }
   });
   const result = await response.json() as {
@@ -261,7 +294,7 @@ export const beginTelegramSignup = async (inviteCode: string, captchaToken = '')
   const state = generateState();
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await pkceChallenge(codeVerifier);
-  const response = await fetch(apiUrl('/api/v1/auth/telegram/preflight'), {
+  const response = await fetchApiWithTimeout('/api/v1/auth/telegram/preflight', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ code: inviteCode, captchaToken, state, codeChallenge, codeChallengeMethod: 'S256' })
@@ -329,7 +362,7 @@ export const disableTelegramBotAccess = async (): Promise<void> => {
 
 export const activateOwnerTelegramLink = async (session: Session): Promise<void> => {
   if (sessionStorage.getItem('goalflow_owner_telegram_link') !== 'pending') return;
-  const response = await fetch(apiUrl('/api/v1/account/telegram/link'), {
+  const response = await fetchApiWithTimeout('/api/v1/account/telegram/link', {
     method: 'POST',
     headers: { authorization: `Bearer ${session.access_token}` }
   });
@@ -345,7 +378,7 @@ export const activateTelegramSignup = async (session: Session): Promise<boolean>
   const attemptToken = sessionStorage.getItem('goalflow_telegram_attempt');
   const oauthState = sessionStorage.getItem('goalflow_telegram_state');
   if (!attemptToken) return !session.user.email;
-  const response = await fetch(apiUrl('/api/v1/auth/telegram/activate'), {
+  const response = await fetchApiWithTimeout('/api/v1/auth/telegram/activate', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
     body: JSON.stringify({ attemptToken, oauthState: oauthState ?? undefined })
@@ -372,7 +405,7 @@ export const authenticatedFetch = async (input: RequestInfo | URL, init: Request
   if (!token) throw new Error('A signed-in session is required.');
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${token}`);
-  return fetch(apiUrl(input), { ...init, headers });
+  return fetchApiWithTimeout(input, { ...init, headers });
 };
 
 export const authenticatedFetchForUser = async (
@@ -385,7 +418,7 @@ export const authenticatedFetchForUser = async (
   assertSessionMatchesUser(session, expectedUserId);
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${session.access_token}`);
-  return fetch(apiUrl(input), { ...init, headers });
+  return fetchApiWithTimeout(input, { ...init, headers });
 };
 
 export const logout = async (): Promise<void> => {

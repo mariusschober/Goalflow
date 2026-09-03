@@ -56,6 +56,27 @@ describe('bounded synchronization transport', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps the request deadline active after headers until the body completes', async () => {
+    vi.useFakeTimers();
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => ({
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': 'application/json' }),
+      arrayBuffer: () => new Promise<ArrayBuffer>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+      })
+    } as Response)) as CloudSyncDependencies['fetch'];
+    const request = fetchSyncWithRetry('/sync', {}, dependencies(fetch, {
+      maxAttempts: 1,
+      requestTimeoutMs: 250
+    }));
+    const rejection = expect(request).rejects.toMatchObject({ name: 'TimeoutError' });
+
+    await vi.advanceTimersByTimeAsync(250);
+    await rejection;
+    expect(fetch).toHaveBeenCalledOnce();
+  });
+
   it('honors caller cancellation before any network attempt', async () => {
     const controller = new AbortController();
     controller.abort(new DOMException('signed out', 'AbortError'));
