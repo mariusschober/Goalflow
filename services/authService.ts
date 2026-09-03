@@ -363,7 +363,7 @@ export const activateTelegramSignup = async (session: Session): Promise<boolean>
 
 export const getLocalDemoUser = (): string | null => {
   if (testBuild) return 'test@goalflow.local';
-  return localDemo ? (import.meta.env.VITE_OWNER_EMAIL || 'mris@tuta.io') : null;
+  return localDemo ? (import.meta.env.VITE_OWNER_EMAIL || 'owner@goalflow.local') : null;
 };
 
 export const authenticatedFetch = async (input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> => {
