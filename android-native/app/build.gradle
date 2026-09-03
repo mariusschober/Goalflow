@@ -181,6 +181,10 @@ android {
     testOptions {
         unitTests.includeAndroidResources = true
         unitTests.all {
+            // Robolectric otherwise downloads SDK jars at test runtime from repo1.maven.org.
+            // Use Maven Central's canonical endpoint so a repo1 rate limit cannot fan out
+            // into dozens of false application-test failures.
+            systemProperty "robolectric.dependency.repo.url", "https://repo.maven.apache.org/maven2"
             testLogging {
                 exceptionFormat = "full"
             }
