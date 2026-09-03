@@ -279,7 +279,7 @@ heads is a production release merely because it exists.
 | `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
 | `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
 | `feat/telegram-beta` | `4d36dc11a9bf4e83d6dbb882c4c94e9de7ee4eb3` | 9 commits after `feat/macos-beta` | Selective bot/Mini App transplant plus additive-migration and PostgreSQL verification hardening; feature remains disabled pending live verification |
-| `chore/railway-beta-gate` | `57c3a5922f3d40603babcbcf8d8756efc4af7966` | 8 commits after `feat/telegram-beta` | Repository-backed Railway cron, hosted staging proof harness, fail-closed release promotion, complete Android migration fixtures, and retained macOS beta artifact |
+| `chore/railway-beta-gate` | `8c9c6f74f6fbaa873884102cbb3d89104fa90a5e` | 12 commits after `feat/telegram-beta` | Repository-backed Railway cron, protocol and real-browser hosted staging proof, fail-closed release promotion, complete Android migration fixtures, retained macOS beta artifact, and removal of obsolete release guidance |
 
 Useful `sol/web-production-24h` behavior is replaced by current WebKit and
 production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
@@ -344,15 +344,26 @@ ebd512c test(android): emit complete migration fixture SQL
 59a7ded fix(macos): fail closed during packaging
 27b1330 ci(macos): retain an honest beta artifact
 57c3a59 docs(ops): make Railway promotion explicit
+2b093c6 fix(auth): keep demo identity synthetic
+2a01fdb docs(beta): retire obsolete release instructions
+5a85896 docs(reconciliation): record operational beta tranche
+8c9c6f7 test(staging): prove hosted browser convergence
 ```
 
 The hosted harness requires an explicit staging guard and two distinct expected
 Supabase UUIDs. It proves real sign-in, refresh, ownership isolation, forged
 owner rejection, duplicate-delivery convergence, lost-acknowledgment retry,
-conflict handling, tombstones, malformed-token errors, and remote global
-logout when the nine staging secrets exist. A partial secret set fails on every
-branch; a wholly absent set may skip only on short-lived `feat/*`, `fix/*`, or
-`chore/*` branches. It fails closed on `main`, `develop`, and `integration/*`.
+conflict handling, tombstones, isolated account export, safe account-deletion
+refusal, malformed-token errors, remote global logout, and an independently
+authenticated second user-A session when the nine staging secrets exist.
+Commit `8c9c6f7` adds a separate production-origin Playwright gate: two user-A
+browser profiles must converge across UI create/edit/delete operations while a
+user-B browser must never render that task. Each mutation requires a newly
+observed `syncing` to `synced` cycle; a pre-existing green status is not accepted
+as acknowledgment. Credential-bearing browser media is disabled and only
+redacted diagnostics are retained. A partial secret set fails on every branch;
+a wholly absent set may skip only on short-lived `feat/*`, `fix/*`, or `chore/*`
+branches. It fails closed on `main`, `develop`, and `integration/*`.
 
 The Android correction in `ebd512c` does not alter a durable entity ID. The
 instrumentation fixture used unparenthesized Kotlin `+ if (...) ... else ...`
@@ -362,11 +373,38 @@ fragment now emits complete SQL while retaining exact assertions for IDs,
 timestamps, tombstones, outbox dependencies, conflicts, events, and account
 binding.
 
+GitHub Actions run
+[`33772320743`](https://github.com/mariusschober/Goalflow/actions/runs/33772320743)
+at exact commit `ebd512c` is the hosted proof for that correction. Its
+`native-android` job completed successfully: APK zip/alignment/signature
+diagnostics passed, the test-only APK installed cleanly and rendered its first
+frame, and `connectedProductionDebugAndroidTest` finished all 7 tests on the
+API-30 emulator with zero skipped and zero failed. The same run's migrations,
+verify, web-release (Chromium and WebKit), legacy Android, and macOS jobs also
+passed. The aggregate gate correctly remained red solely because the historical
+Firebase/GCP credential still lacks owner disposition; hosted staging was an
+allowed absent-configuration preflight on this short-lived branch, not a live
+Supabase pass.
+
+GitHub Actions run
+[`33773461445`](https://github.com/mariusschober/Goalflow/actions/runs/33773461445)
+at exact commit `57c3a59` completed the macOS unit and release-build job and
+retained artifact `goalflow-macos-ad-hoc-beta` (artifact ID `9900689841`,
+1,148,508 compressed bytes). The job verified the ad-hoc code signature and the
+archive's SHA-256 checksum before upload and recorded the source commit and
+non-notarized signing mode. This is a development-signed beta candidate, not a
+notarized production release and not hosted-sync evidence.
+
 Local `npm run verify:release` at `57c3a59` passed 37 test files / 213 tests,
 TypeScript, all production builds, production boot and maintenance fail-closed
 checks, client scans, PWA artifact validation, and the high-severity dependency
 audit. This is local evidence only; it does not satisfy hosted staging,
 emulator, signing, credential, backup/restore, or live Telegram gates.
+At `8c9c6f7`, `npm run lint` and the complete unit/property suite pass with 38
+test files / 217 tests. The hosted command was separately shown to reject a
+missing staging guard, and the ordinary Playwright configuration lists only its
+eight Chromium/WebKit synthetic journeys. The live hosted browser journey
+remains unexecuted until staging exists.
 
 `feature/chrome-execution-companion` remains unported and tagged as post-beta.
 No historical remote branch has been deleted.

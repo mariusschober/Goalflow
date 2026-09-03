@@ -42,9 +42,17 @@ belong only to Goalflow staging; never reuse production credentials:
   `GOALFLOW_STAGING_USER_B_ID`.
 
 Both identities must have active `beta` profiles. `npm run
-test:hosted:staging` additionally requires the explicit non-secret guard
-`GOALFLOW_HOSTED_TEST_CONFIRM=staging`. It creates uniquely identified test
-tasks and finishes them as tombstones; it never targets production.
+test:hosted:staging` and `npm run test:hosted:browser` additionally require the
+explicit non-secret guard `GOALFLOW_HOSTED_TEST_CONFIRM=staging`. The protocol
+harness creates uniquely identified test tasks and finishes them as tombstones.
+The browser harness signs in through the real UI with two independent user-A
+browser profiles and one user-B profile, then creates, edits, synchronizes, and
+deletes a uniquely named task. Neither harness may target production.
+
+The hosted browser configuration deliberately retains no trace, video,
+screenshot, or HTML action report because those artifacts could capture the
+real test password. CI retains only explicitly redacted console, page-error,
+and network-status diagnostics.
 
 Only the publishable key may enter `VITE_SUPABASE_PUBLISHABLE_KEY` or a native
 application configuration. The secret key must exist only in the corresponding

@@ -31,7 +31,12 @@ service after the first staging restore succeeds.
    Beta Gate push run for the exact commit on `main`.
 3. Require `GET /api/v1/health/live` to return 200 and
    `GET /api/v1/health/ready` to return 200. Liveness alone is not deployable.
-4. Run the hosted account/RLS/sync matrix with two nonproduction identities.
+4. Run `npm run test:hosted:staging` and then `npm run
+   test:hosted:browser` with two nonproduction identities. The first command
+   proves API ownership, account export, safe deletion refusal, idempotency,
+   conflict/tombstone behavior, refresh, revocation, and two authenticated
+   sessions. The second proves create/edit/delete convergence between two real
+   browser profiles for user A while a user-B browser remains isolated.
 5. Promote the same source and independently configured production variables
    only after every staging gate passes.
 
