@@ -278,7 +278,8 @@ heads is a production release merely because it exists.
 | --- | --- | --- | --- |
 | `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
 | `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
-| `feat/telegram-beta` | `26629c1ff22165b710a45a94a728fdc87af09861` | 6 commits after `feat/macos-beta` | Selective bot/Mini App transplant; feature remains disabled pending live verification |
+| `feat/telegram-beta` | `4d36dc11a9bf4e83d6dbb882c4c94e9de7ee4eb3` | 9 commits after `feat/macos-beta` | Selective bot/Mini App transplant plus additive-migration and PostgreSQL verification hardening; feature remains disabled pending live verification |
+| `chore/railway-beta-gate` | `57c3a5922f3d40603babcbcf8d8756efc4af7966` | 8 commits after `feat/telegram-beta` | Repository-backed Railway cron, hosted staging proof harness, fail-closed release promotion, complete Android migration fixtures, and retained macOS beta artifact |
 
 Useful `sol/web-production-24h` behavior is replaced by current WebKit and
 production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
@@ -306,6 +307,9 @@ f1c5da3 fix(telegram): enforce account-bound bot access
 06024e7 feat(telegram): parse explicit rich schedules safely
 3d86b55 feat(db): confirm Telegram captures atomically
 26629c1 feat(telegram): preserve capture intent durably
+c03e51e docs(reconciliation): record selective beta ports
+cebd65f test(db): sequence Telegram unlink verification
+4d36dc1 ci: freeze additive Telegram migration names
 ```
 
 The historical `202609010001_telegram_rich_capture.sql` was deliberately not
@@ -319,6 +323,50 @@ transaction. New additive migration
 checks active ownership, creates or replays the deterministic task, and marks
 the capture confirmed atomically. Duplicate Telegram delivery and two
 intentionally identical messages therefore remain distinct concepts.
+
+The PostgreSQL unlink regression did not justify another schema migration. Its
+test combined a mutating RPC with a state read in one boolean expression even
+though PostgreSQL does not guarantee subexpression evaluation order. Commit
+`cebd65f` stores the RPC result before inspecting durable state, proving the
+existing transaction instead of changing production data semantics. Commit
+`4d36dc1` adds migrations `202609030004` through `202609030007` to the frozen
+hash ledger; no previously applied migration was edited.
+
+The first operational beta-gate tranche is represented by these exact remote
+commits:
+
+```text
+ec44e00 fix(ops): model maintenance as repository cron
+772a254 test(staging): add hosted isolation and sync proof
+851fb2c ci: require hosted proof on release candidates
+ebd512c test(android): emit complete migration fixture SQL
+5381121 fix(release): require main-specific beta proof
+59a7ded fix(macos): fail closed during packaging
+27b1330 ci(macos): retain an honest beta artifact
+57c3a59 docs(ops): make Railway promotion explicit
+```
+
+The hosted harness requires an explicit staging guard and two distinct expected
+Supabase UUIDs. It proves real sign-in, refresh, ownership isolation, forged
+owner rejection, duplicate-delivery convergence, lost-acknowledgment retry,
+conflict handling, tombstones, malformed-token errors, and remote global
+logout when the nine staging secrets exist. A partial secret set fails on every
+branch; a wholly absent set may skip only on short-lived `feat/*`, `fix/*`, or
+`chore/*` branches. It fails closed on `main`, `develop`, and `integration/*`.
+
+The Android correction in `ebd512c` does not alter a durable entity ID. The
+instrumentation fixture used unparenthesized Kotlin `+ if (...) ... else ...`
+expressions, causing versions 3 and later to emit only an INSERT column list
+and fail with SQLite `incomplete input`. Parenthesizing each conditional
+fragment now emits complete SQL while retaining exact assertions for IDs,
+timestamps, tombstones, outbox dependencies, conflicts, events, and account
+binding.
+
+Local `npm run verify:release` at `57c3a59` passed 37 test files / 213 tests,
+TypeScript, all production builds, production boot and maintenance fail-closed
+checks, client scans, PWA artifact validation, and the high-severity dependency
+audit. This is local evidence only; it does not satisfy hosted staging,
+emulator, signing, credential, backup/restore, or live Telegram gates.
 
 `feature/chrome-execution-companion` remains unported and tagged as post-beta.
 No historical remote branch has been deleted.
@@ -337,3 +385,18 @@ No historical remote branch has been deleted.
 5. Synthetic tests can qualify code for hosted testing but cannot establish the
    hosted account-isolation, cross-client, backup, or restore claims required
    for beta release.
+
+## Release blockers at this capture
+
+- Complete-history scanning intentionally remains red for the historical
+  Firebase/GCP client key until its Google Cloud disposition and usage review
+  are recorded in `docs/security/HISTORICAL_CREDENTIAL_ACTIONS.md`.
+- No isolated Goalflow Supabase staging project, Railway staging deployment, or
+  two hosted test identities exist yet. The connected unrelated Supabase
+  project must not be repurposed.
+- Android release signing material and its expected certificate fingerprint are
+  absent, so no authorized signed APK exists.
+- Telegram remains disabled because no real test bot has completed the live
+  webhook/replay/linking/cross-user matrix.
+- No staging backup upload and destructive restore drill has run. Synthetic
+  crypto and PostgreSQL migration tests are not represented as that proof.
