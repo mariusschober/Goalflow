@@ -545,10 +545,14 @@ final class ApplyRemotePageTests: XCTestCase {
     }
     func test_upsert_when_no_pending() throws {
         var meta = emptySyncMeta()
-        let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 1, deviceId: "other", payload: AnyCodable(["id":"1","title":"Remote"]), updatedAt: "now", deletedAt: nil)
+        let updatedAt = "2026-09-03T12:00:00.000Z"
+        let rec = RemoteRecord(entityType: "tasks", entityId: "1", version: 1, serverVersion: 1, deviceId: "other", payload: AnyCodable(["id":"1","title":"Remote"]), updatedAt: updatedAt, deletedAt: nil)
         let res = try applyRemotePage(meta, currentValues: [:], records: [rec], nextCursor: 1, ownDeviceId: "d", now: "now")
         XCTAssertTrue(res.meta.conflicts.isEmpty)
-        XCTAssertEqual(stableJson(res.values["tasks"]), stableJson([["id":"1","title":"Remote"] as [String: Any]]))
+        XCTAssertEqual(
+            stableJson(res.values["tasks"]),
+            stableJson([["id":"1","title":"Remote","updatedAt":updatedAt,"version":1] as [String: Any]])
+        )
     }
 }
 
