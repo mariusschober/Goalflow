@@ -156,7 +156,7 @@ jobs:
   native-android:
     needs: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -214,6 +214,24 @@ jobs:
           fi
           echo "Unsigned native production release compiled and verified: $apk"
       - run: ./android-native/gradlew -p android-native assembleSandboxDebug
+      - name: Build preserved v2 upgrade fixture (TEST-ONLY)
+        run: |
+          set -euo pipefail
+          old_source="$RUNNER_TEMP/goalflow-native-v2-source"
+          git worktree add --detach "$old_source" 763460aa45a1173839fb31c2950f20a08abaacc3^
+          fixture_dir="$old_source/android-native/app/src/androidTest/java/com/mariusschober/goalflow/nativeapp/data"
+          mkdir -p "$fixture_dir"
+          cp android-native/upgrade-fixtures/PriorInstallUpgradeSeedTest.kt "$fixture_dir/"
+          "$old_source/android-native/gradlew" -p "$old_source/android-native" \
+            assembleProductionDebug assembleProductionDebugAndroidTest
+          old_apk="$(find "$old_source/android-native/app/build/outputs/apk/production/debug" \
+            -type f -name '*.apk' -print -quit)"
+          old_test_apk="$(find "$old_source/android-native/app/build/outputs/apk/androidTest/production/debug" \
+            -type f -name '*.apk' -print -quit)"
+          [ -n "$old_apk" ] && [ -f "$old_apk" ] || { echo "Preserved v2 APK was not produced." >&2; exit 1; }
+          [ -n "$old_test_apk" ] && [ -f "$old_test_apk" ] || { echo "Preserved v2 seed test APK was not produced." >&2; exit 1; }
+          echo "GOALFLOW_UPGRADE_FROM_APK=$old_apk" >> "$GITHUB_ENV"
+          echo "GOALFLOW_UPGRADE_SEED_TEST_APK=$old_test_apk" >> "$GITHUB_ENV"
       - name: Upload native Room schemas
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -248,8 +266,15 @@ jobs:
           disable-animations: true
           working-directory: ${{ github.workspace }}
           script: |
+            set -euo pipefail
             sleep 45
-            apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"; [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }; GOALFLOW_APK_LABEL=TEST-ONLY GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 DIAGNOSE_APK_INSTALL=1 android-native/scripts/diagnose-apk.sh "$apk" && ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
+            apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"
+            [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK path handoff is invalid inside emulator action." >&2; exit 1; }
+            GOALFLOW_APK_LABEL=TEST-ONLY GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 DIAGNOSE_APK_INSTALL=1 \
+              android-native/scripts/diagnose-apk.sh "$apk"
+            ./android-native/gradlew -p android-native :app:connectedProductionDebugAndroidTest
+            GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 android-native/scripts/test-upgrade-matrix.sh \
+              "$GOALFLOW_UPGRADE_FROM_APK" "$apk" "$GOALFLOW_UPGRADE_SEED_TEST_APK"
       - name: Upload native production debug APK (TEST-ONLY, not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
