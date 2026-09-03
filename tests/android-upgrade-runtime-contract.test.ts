@@ -45,4 +45,20 @@ describe('installed Android upgrade instrumentation contract', () => {
     expect(emulatorGate).not.toContain('connectedProductionDebugAndroidTest');
     expect(workflow).toContain('Run instrumentation APK runner regression test');
   });
+
+  it('models process death between the preserved seed and cold-launch upgrade', () => {
+    const uninstallSeed = upgrade.indexOf('uninstall "$test_package"');
+    const stopPreserved = upgrade.indexOf('shell am force-stop "$old_package"', uninstallSeed);
+    const launchPreserved = upgrade.indexOf('shell am start -W -n "$old_package/', stopPreserved);
+    const stopBeforeUpgrade = upgrade.indexOf('shell am force-stop "$old_package"', stopPreserved + 1);
+    const installUpgrade = upgrade.indexOf('install -r "$new_apk"', stopBeforeUpgrade);
+
+    expect(uninstallSeed).toBeGreaterThan(-1);
+    expect(stopPreserved).toBeGreaterThan(uninstallSeed);
+    expect(launchPreserved).toBeGreaterThan(stopPreserved);
+    expect(stopBeforeUpgrade).toBeGreaterThan(launchPreserved);
+    expect(installUpgrade).toBeGreaterThan(stopBeforeUpgrade);
+    expect(upgrade).toContain('UPGRADE_MATRIX=FAIL (preserved-version cold launch failed)');
+    expect(upgrade).toContain('UPGRADE_MATRIX=FAIL (upgraded application cold launch failed)');
+  });
 });

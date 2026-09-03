@@ -81,12 +81,21 @@ grep -Fq 'OK (1 test)' <<<"$seed_output" || {
   exit 1
 }
 "${adb_command[@]}" uninstall "$test_package" >/dev/null
+"${adb_command[@]}" shell am force-stop "$old_package"
 old_launch="$("${adb_command[@]}" shell am start -W -n "$old_package/com.mariusschober.goalflow.nativeapp.MainActivity")"
-grep -Fq 'Status: ok' <<<"$old_launch" || { printf '%s\n' "$old_launch" >&2; exit 1; }
+grep -Fq 'Status: ok' <<<"$old_launch" || {
+  printf '%s\n' "$old_launch" >&2
+  echo 'UPGRADE_MATRIX=FAIL (preserved-version cold launch failed)' >&2
+  exit 1
+}
 "${adb_command[@]}" shell am force-stop "$old_package"
 "${adb_command[@]}" install -r "$new_apk" >/dev/null
 new_launch="$("${adb_command[@]}" shell am start -W -n "$new_package/com.mariusschober.goalflow.nativeapp.MainActivity")"
-grep -Fq 'Status: ok' <<<"$new_launch" || { printf '%s\n' "$new_launch" >&2; exit 1; }
+grep -Fq 'Status: ok' <<<"$new_launch" || {
+  printf '%s\n' "$new_launch" >&2
+  echo 'UPGRADE_MATRIX=FAIL (upgraded application cold launch failed)' >&2
+  exit 1
+}
 "${adb_command[@]}" shell am force-stop "$new_package"
 
 probe_dir="$(mktemp -d)"
