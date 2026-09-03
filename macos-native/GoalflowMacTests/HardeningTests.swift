@@ -301,6 +301,44 @@ final class HardeningTests: XCTestCase {
         XCTAssertEqual(result.delays, [250_000_000])
     }
 
+    func test_sync_rejects_fractional_pull_cursor_without_advancing() async throws {
+        let suite = "goalflow.sync.fractional-cursor.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = MockSyncTransport()
+        transport.pullHandler = { _ in
+            let data = try JSONSerialization.data(withJSONObject: [
+                "records": [], "nextCursor": 0.5, "hasMore": false
+            ])
+            let response = HTTPURLResponse(
+                url: URL(string: "https://example.com")!, statusCode: 200,
+                httpVersion: nil, headerFields: nil
+            )!
+            return (data, response)
+        }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: FileSyncStoreBridge(baseDir: directory, defaults: defaults)
+        )
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
+
+        do {
+            try await engine.synchronize()
+            XCTFail("A fractional cursor must not be coerced or committed.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("cursor"))
+        }
+        let meta = try metaStore.load()
+        XCTAssertEqual(meta.cursor, 0)
+        XCTAssertNil(meta.lastSuccessfulSync)
+    }
+
     func test_a11y_labels_exist() {
         // Check that ExecutionPanelView has accessibility identifiers via view inspection (static)
         // We can instantiate ViewModel and check that header has expected labels via View hierarchy is hard,

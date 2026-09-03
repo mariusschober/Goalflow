@@ -272,6 +272,32 @@ describe('adversarial cloud synchronization', () => {
     expect(await storageService.get(STORES.TASK_EVENTS, key)).toEqual([event]);
   });
 
+  it('rejects a pull record without its durable timestamp before advancing the cursor', async () => {
+    const key = `missing-pull-timestamp-${crypto.randomUUID()}`;
+    const invalidDependencies: CloudSyncDependencies = {
+      ...dependencies(new DurableFakeServer()),
+      fetch: async input => {
+        const path = String(input);
+        if (path.includes('/sync/pull')) {
+          return Response.json({
+            records: [{
+              entityType: 'tasks', entityId: 'remote-task', version: 1, serverVersion: 1,
+              deviceId: 'device-b', payload: task('not durable', 'remote-task'), deletedAt: null
+            }],
+            nextCursor: 1,
+            hasMore: false
+          });
+        }
+        if (path.endsWith('/sync/conflicts')) return Response.json({ conflicts: [] });
+        return new Response(null, { status: 404 });
+      }
+    };
+
+    await expect(synchronizeCloudOnce(key, invalidDependencies)).rejects.toThrow(/cursor was not advanced/i);
+    expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).cursor).toBe(0);
+    expect(await storageService.get(STORES.TASKS, key)).toBeUndefined();
+  });
+
   it('rejects duplicated acknowledgement bodies without removing the outbox', async () => {
     const key = `duplicate-response-${crypto.randomUUID()}`;
     const server = new DurableFakeServer();

@@ -362,6 +362,16 @@ final class ApplyPushResultsTests: XCTestCase {
         XCTAssertNil(record.deletedAt)
     }
 
+    func test_receipt_parser_rejects_boolean_and_fractional_versions() {
+        let base: [String: Any] = [
+            "entity_type": "tasks", "entity_id": "task-1", "device_id": "device-a",
+            "version": 1, "server_version": 7, "payload": ["id": "task-1"],
+            "updated_at": "2026-09-03T00:00:00.000Z", "deleted_at": NSNull()
+        ]
+        XCTAssertNil(parsePushReceiptRecord(base.merging(["version": true]) { _, replacement in replacement }))
+        XCTAssertNil(parsePushReceiptRecord(base.merging(["server_version": 7.5]) { _, replacement in replacement }))
+    }
+
     func test_accepted_proves_and_clears() throws {
         var meta = emptySyncMeta()
         let m = SyncMutation(mutationId: "m1", deviceId: "d", entityType: "tasks", entityId: "1", baseServerVersion: nil, version: 1, payload: AnyCodable(["id":"1","title":"A"]), updatedAt: "now", deletedAt: nil, dependsOnMutationId: nil, resolvesConflictId: nil, attemptedAt: nil)

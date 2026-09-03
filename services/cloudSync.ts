@@ -107,6 +107,23 @@ const parseJson = async <T>(response: Response, failureMessage: string): Promise
   return body as T;
 };
 
+const isValidWireInstant = (value: unknown): value is string =>
+  typeof value === 'string' && value.length > 0 && Number.isFinite(Date.parse(value));
+
+const isValidRemoteWireRecord = (value: unknown): value is RemoteSyncRecord => {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.entityType === 'string' && record.entityType.length > 0
+    && typeof record.entityId === 'string' && record.entityId.length > 0
+    && Number.isSafeInteger(record.version) && Number(record.version) > 0
+    && Number.isSafeInteger(record.serverVersion) && Number(record.serverVersion) > 0
+    && typeof record.deviceId === 'string' && record.deviceId.length > 0
+    && Object.prototype.hasOwnProperty.call(record, 'payload')
+    && isValidWireInstant(record.updatedAt)
+    && Object.prototype.hasOwnProperty.call(record, 'deletedAt')
+    && (record.deletedAt === null || isValidWireInstant(record.deletedAt));
+};
+
 const defaultSleep = (delayMs: number): Promise<void> =>
   new Promise(resolve => globalThis.setTimeout(resolve, delayMs));
 
@@ -229,7 +246,8 @@ export const synchronizeCloudOnce = async (
       || !Array.isArray(body.records)
       || typeof body.nextCursor !== 'number'
       || !Number.isSafeInteger(body.nextCursor)
-      || typeof body.hasMore !== 'boolean') {
+      || typeof body.hasMore !== 'boolean'
+      || body.records.some(record => !isValidRemoteWireRecord(record))) {
       throw new SyncProtocolError('Sync pull response was invalid. The local cursor was not advanced.');
     }
     const nextCursor = body.nextCursor;

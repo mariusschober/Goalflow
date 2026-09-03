@@ -249,11 +249,14 @@ class NativeSyncEngine(
                     val entityId = record.opt("entityId")
                     val version = record.opt("version")
                     val serverVersion = record.opt("serverVersion")
+                    val deviceId = record.opt("deviceId")
+                    val updatedAt = record.opt("updatedAt")
                     if (entityType !is String || entityType.isBlank()
                         || entityId !is String || entityId.isBlank()
                         || version !is Number || serverVersion !is Number
-                        || (record.has("deviceId") && record.opt("deviceId") !is String)
-                        || (record.has("updatedAt") && record.opt("updatedAt") !is String)
+                        || deviceId !is String || deviceId.isBlank()
+                        || updatedAt !is String || runCatching { Instant.parse(updatedAt) }.isFailure
+                        || !record.has("deletedAt")
                         || (record.has("deletedAt") && !record.isNull("deletedAt") && record.opt("deletedAt") !is String)
                     ) {
                         throw NativeSyncProtocolException("Sync pull response contains an ambiguous record.")
@@ -264,9 +267,9 @@ class NativeSyncEngine(
                             entityId = entityId,
                             version = safeLong(version, "remote record version"),
                             serverVersion = safeLong(serverVersion, "remote server version", allowZero = false),
-                            deviceId = record.optString("deviceId"),
+                            deviceId = deviceId,
                             payload = jsonValueText(payload),
-                            updatedAt = record.optString("updatedAt", Instant.EPOCH.toString()),
+                            updatedAt = updatedAt,
                             deletedAt = record.nullableString("deletedAt")
                         )
                     )

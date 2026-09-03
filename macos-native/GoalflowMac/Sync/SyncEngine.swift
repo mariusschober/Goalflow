@@ -7,15 +7,16 @@ func parsePushReceiptRecord(_ value: Any?) -> RemoteRecord? {
           let entityId = (object["entityId"] ?? object["entity_id"]) as? String,
           !entityId.isEmpty,
           object.keys.contains("payload") else { return nil }
-    let version = finiteVersion(object["version"])
-    let serverVersion = finiteVersion(object["serverVersion"] ?? object["server_version"])
-    guard version > 0, serverVersion > 0 else { return nil }
+    guard let version = strictJSONInteger(object["version"]), version > 0,
+          let serverVersion = strictJSONInteger(object["serverVersion"] ?? object["server_version"]), serverVersion > 0 else {
+        return nil
+    }
     let deviceValue = object["deviceId"] ?? object["device_id"]
     let updatedValue = object["updatedAt"] ?? object["updated_at"]
     let deletedValue = object["deletedAt"] ?? object["deleted_at"]
-    guard deviceValue == nil || deviceValue is NSNull || deviceValue is String,
-          updatedValue == nil || updatedValue is NSNull || updatedValue is String,
-          deletedValue == nil || deletedValue is NSNull || deletedValue is String else { return nil }
+    guard deviceValue == nil || deviceValue is NSNull || ((deviceValue as? String)?.isEmpty == false),
+          updatedValue == nil || updatedValue is NSNull || ((updatedValue as? String)?.isEmpty == false),
+          deletedValue == nil || deletedValue is NSNull || ((deletedValue as? String)?.isEmpty == false) else { return nil }
     return RemoteRecord(
         entityType: entityType,
         entityId: entityId,
@@ -26,6 +27,28 @@ func parsePushReceiptRecord(_ value: Any?) -> RemoteRecord? {
         updatedAt: updatedValue as? String,
         deletedAt: deletedValue as? String
     )
+}
+
+private func optionalStrictWireBoolean(_ object: [String: Any], key: String) throws -> Bool? {
+    guard object.keys.contains(key), let value = object[key], !(value is NSNull) else { return nil }
+    guard let parsed = strictJSONBoolean(value) else {
+        throw SyncError.validation("Sync push result contains an invalid \(key) flag. Pending mutations were not changed.")
+    }
+    return parsed
+}
+
+private func optionalStrictWireString(_ object: [String: Any], key: String) throws -> String? {
+    guard object.keys.contains(key), let value = object[key], !(value is NSNull) else { return nil }
+    guard let parsed = value as? String, !parsed.isEmpty else {
+        throw SyncError.validation("Sync push result contains an invalid \(key). Pending mutations were not changed.")
+    }
+    return parsed
+}
+
+private func validSyncInstant(_ value: String) -> Bool {
+    let fractional = ISO8601DateFormatter()
+    fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractional.date(from: value) != nil || ISO8601DateFormatter().date(from: value) != nil
 }
 
 private actor SyncGate {
@@ -295,8 +318,8 @@ final class SyncEngine: @unchecked Sendable {
             var results: [PushResult] = []
             for r in resultsArr {
                 guard let mid = r["mutationId"] as? String, !mid.isEmpty,
-                      let accepted = r["accepted"] as? Bool,
-                      let sv = r["serverVersion"] as? Int, sv >= 0 else {
+                      let accepted = strictJSONBoolean(r["accepted"]),
+                      let sv = strictJSONInteger(r["serverVersion"]), sv >= 0 else {
                     throw SyncError.validation("Sync push result invalid. Pending mutations were not changed.")
                 }
                 if accepted && sv == 0 { throw SyncError.validation("Sync push result invalid. Pending mutations were not changed.") }
@@ -305,9 +328,9 @@ final class SyncEngine: @unchecked Sendable {
                     mutationId: mid,
                     accepted: accepted,
                     serverVersion: sv,
-                    replayMismatch: r["replayMismatch"] as? Bool,
-                    serverMissing: r["serverMissing"] as? Bool,
-                    conflictId: r["conflictId"] as? String,
+                    replayMismatch: try optionalStrictWireBoolean(r, key: "replayMismatch"),
+                    serverMissing: try optionalStrictWireBoolean(r, key: "serverMissing"),
+                    conflictId: try optionalStrictWireString(r, key: "conflictId"),
                     record: rec
                 )
                 results.append(pr)
@@ -324,14 +347,10 @@ final class SyncEngine: @unchecked Sendable {
             guard (200..<300).contains(resp.statusCode) else { throw SyncError.validation("Sync pull failed HTTP \(resp.statusCode)") }
             guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let recordsArr = obj["records"] as? [[String: Any]],
-                  let nextCursorAny = obj["nextCursor"],
-                  let hasMoreVal = obj["hasMore"] as? Bool else {
+                  let nextCursor = strictJSONInteger(obj["nextCursor"]), nextCursor >= 0,
+                  let hasMoreVal = strictJSONBoolean(obj["hasMore"]) else {
                 throw SyncError.validation("Sync pull invalid cursor envelope")
             }
-            let nextCursor: Int
-            if let n = nextCursorAny as? Int { nextCursor = n }
-            else if let d = nextCursorAny as? Double { nextCursor = Int(d) }
-            else { throw SyncError.validation("Sync pull invalid cursor envelope") }
             if nextCursor < cursorBefore || (hasMoreVal && nextCursor == cursorBefore) {
                 throw SyncError.validation("Remote synchronization cursor did not make safe progress. The cursor was not advanced.")
             }
@@ -339,20 +358,29 @@ final class SyncEngine: @unchecked Sendable {
             for r in recordsArr {
                 guard let et = r["entityType"] as? String, !et.isEmpty,
                       let eid = r["entityId"] as? String, !eid.isEmpty,
+                      let ver = strictJSONInteger(r["version"]), ver > 0,
+                      let sv = strictJSONInteger(r["serverVersion"]), sv > 0,
+                      r.keys.contains("deviceId"),
+                      let deviceId = r["deviceId"] as? String, !deviceId.isEmpty,
+                      let updatedAt = r["updatedAt"] as? String, validSyncInstant(updatedAt),
+                      r.keys.contains("deletedAt"),
                       let payload = r["payload"] else {
                     throw SyncError.validation("Remote synchronization page contains invalid, stale, or duplicate information. The cursor was not advanced.")
                 }
-                let ver = (r["version"] as? Int) ?? Int((r["version"] as? Double) ?? 0)
-                let sv = (r["serverVersion"] as? Int) ?? Int((r["serverVersion"] as? Double) ?? 0)
+                let deletedValue = r["deletedAt"]
+                guard deletedValue is NSNull
+                        || ((deletedValue as? String).map(validSyncInstant) == true) else {
+                    throw SyncError.validation("Remote synchronization page contains an invalid tombstone timestamp. The cursor was not advanced.")
+                }
                 records.append(RemoteRecord(
                     entityType: et,
                     entityId: eid,
                     version: ver,
                     serverVersion: sv,
-                    deviceId: r["deviceId"] as? String,
+                    deviceId: deviceId,
                     payload: AnyCodable(payload),
-                    updatedAt: r["updatedAt"] as? String,
-                    deletedAt: r["deletedAt"] as? String
+                    updatedAt: updatedAt,
+                    deletedAt: deletedValue as? String
                 ))
             }
             let highest = records.map(\.serverVersion).max() ?? cursorBefore

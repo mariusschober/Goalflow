@@ -317,6 +317,48 @@ class NativeSyncEngineTest {
         assertNull(repository.syncMetadata("_cursor"))
     }
 
+    @Test
+    fun `pull record without durable timestamp cannot advance the cursor`() = runTest {
+        val remote = GoalflowTask(
+            id = "00000000-0000-4000-8000-000000000003",
+            title = "Missing server timestamp",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            createdAt = 1,
+            updatedAt = 2
+        )
+        val response = JSONObject()
+            .put(
+                "records",
+                JSONArray().put(
+                    JSONObject()
+                        .put("entityType", "tasks")
+                        .put("entityId", remote.id)
+                        .put("version", 1)
+                        .put("serverVersion", 1)
+                        .put("deviceId", "device-b")
+                        .put("payload", GoalflowJson.taskPayload(remote))
+                        .put("deletedAt", JSONObject.NULL)
+                )
+            )
+            .put("nextCursor", 1)
+            .put("hasMore", false)
+        val engine = engine(NativeSyncTransport { path, _, _, _ ->
+            if (path.startsWith("/api/v1/sync/pull")) NativeHttpResponse(200, response.toString())
+            else throw AssertionError("Unexpected request: $path")
+        })
+
+        try {
+            engine.synchronize()
+            fail("A record without its durable timestamp must be rejected")
+        } catch (_: NativeSyncProtocolException) {
+            // The record and cursor remain unapplied.
+        }
+
+        assertNull(database.taskDao().get(remote.id))
+        assertNull(repository.syncMetadata("_cursor"))
+    }
+
     private fun engine(
         transport: NativeSyncTransport,
         sessionProvider: NativeSessionProvider = NativeSessionProvider { validSession },
