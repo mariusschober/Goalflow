@@ -96,11 +96,22 @@ func parseNativeSessionResponse(
 }
 
 final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
-    private let service = "com.mariusschober.goalflow.mac"
-    private let sessionAccount = "session"
-    private let pendingAccount = "pending-pkce"
+    private let service: String
+    private let sessionAccount: String
+    private let pendingAccount: String
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
+
+    init(
+        service: String = "com.mariusschober.goalflow.mac",
+        sessionAccount: String = "session",
+        pendingAccount: String = "pending-pkce"
+    ) {
+        precondition(!service.isEmpty && !sessionAccount.isEmpty && !pendingAccount.isEmpty)
+        self.service = service
+        self.sessionAccount = sessionAccount
+        self.pendingAccount = pendingAccount
+    }
 
     var isAuthenticated: Bool {
         guard let session = try? read() else { return false }

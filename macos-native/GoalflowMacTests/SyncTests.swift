@@ -822,3 +822,158 @@ final class TwoDeviceTests: XCTestCase {
         XCTAssertEqual(retry.baseServerVersion, 1)
     }
 }
+
+final class HostedCrossClientSyncTests: XCTestCase {
+    func testProductionTransportEditsAndroidRecord() async throws {
+        guard ProcessInfo.processInfo.environment["GOALFLOW_HOSTED_TEST_CONFIRM"] == "staging",
+              ProcessInfo.processInfo.environment["GOALFLOW_CROSS_CLIENT_PHASE"] == "macos" else {
+            throw XCTSkip("The live transport proof runs only inside the explicit staging cross-client gate.")
+        }
+        let state = try hostedState()
+        let taskId = try XCTUnwrap(state["taskId"] as? String)
+        let androidTitle = try XCTUnwrap(state["androidTitle"] as? String)
+        let macosTitle = try XCTUnwrap(state["macosTitle"] as? String)
+        XCTAssertNotNil(UUID(uuidString: taskId))
+
+        let appOrigin = try hostedOrigin("GOALFLOW_STAGING_APP_ORIGIN")
+        let supabaseOrigin = try hostedOrigin("GOALFLOW_STAGING_SUPABASE_URL")
+        let publishableKey = try hostedEnvironment("GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY")
+        XCTAssertTrue(publishableKey.hasPrefix("sb_publishable_"), "A server credential must never enter the native gate.")
+        let configuration = MacCloudConfiguration(
+            apiOrigin: appOrigin,
+            supabaseURL: supabaseOrigin,
+            publishableKey: publishableKey,
+            environment: "staging"
+        )
+        XCTAssertTrue(configuration.isCloudConfigured, configuration.problem ?? "Cloud configuration was rejected.")
+
+        let urlConfiguration = URLSessionConfiguration.ephemeral
+        urlConfiguration.timeoutIntervalForRequest = 20
+        urlConfiguration.timeoutIntervalForResource = 25
+        let urlSession = URLSession(configuration: urlConfiguration)
+        let expectedUserId = try hostedEnvironment("GOALFLOW_STAGING_USER_A_ID").lowercased()
+        let session = try await hostedPasswordSession(
+            configuration: configuration,
+            publishableKey: publishableKey,
+            expectedUserId: expectedUserId,
+            urlSession: urlSession
+        )
+        XCTAssertEqual(session.userId, expectedUserId)
+
+        let keychain = KeychainSessionStore(
+            service: "com.mariusschober.goalflow.mac.hosted-test.\(UUID().uuidString.lowercased())"
+        )
+        defer { try? keychain.clear() }
+        try keychain.save(session)
+        XCTAssertEqual(try keychain.read(), session)
+
+        let suite = "goalflow.hosted-cross-client.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let deviceIdStore = DeviceIdStore(defaults: defaults)
+        let bridge = FileSyncStoreBridge(baseDir: directory, defaults: defaults)
+        let taskStore = LocalTaskStore(
+            fileURL: directory.appendingPathComponent("goalflow.tasks.json"),
+            defaults: defaults,
+            syncMetaStore: metaStore,
+            deviceIdStore: deviceIdStore
+        )
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: deviceIdStore,
+            transport: URLSessionSyncTransport(
+                configuration: configuration,
+                keychain: keychain,
+                urlSession: urlSession
+            ),
+            storeBridge: bridge
+        )
+
+        try await engine.bindLocalWorkspace(to: expectedUserId)
+        try await engine.synchronize()
+        var task = try XCTUnwrap(try taskStore.loadAll().first { $0.id == taskId })
+        XCTAssertEqual(task.title, androidTitle)
+
+        task.title = macosTitle
+        task.updatedAt = ISO8601DateFormatter().string(from: Date())
+        task.version += 1
+        try taskStore.updateTask(task)
+        let pending = try metaStore.load().outbox.filter { $0.entityType == "tasks" && $0.entityId == taskId }
+        XCTAssertEqual(pending.count, 1)
+        XCTAssertEqual((pending.first?.payload.value as? [String: Any])?["title"] as? String, macosTitle)
+
+        try await engine.synchronize()
+        XCTAssertFalse(try metaStore.load().outbox.contains { $0.entityId == taskId })
+        XCTAssertEqual(try taskStore.loadAll().first { $0.id == taskId }?.title, macosTitle)
+        XCTAssertNotNil(try metaStore.load().lastSuccessfulSync)
+    }
+
+    private func hostedPasswordSession(
+        configuration: MacCloudConfiguration,
+        publishableKey: String,
+        expectedUserId: String,
+        urlSession: URLSession
+    ) async throws -> NativeSession {
+        let supabaseURL = try XCTUnwrap(configuration.supabaseURL)
+        var components = try XCTUnwrap(URLComponents(url: supabaseURL, resolvingAgainstBaseURL: false))
+        components.path = "/auth/v1/token"
+        components.queryItems = [URLQueryItem(name: "grant_type", value: "password")]
+        var request = URLRequest(url: try XCTUnwrap(components.url))
+        request.httpMethod = "POST"
+        request.setValue(publishableKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(publishableKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "email": try hostedEnvironment("GOALFLOW_STAGING_USER_A_EMAIL"),
+            "password": try hostedEnvironment("GOALFLOW_STAGING_USER_A_PASSWORD")
+        ])
+        let (data, response) = try await urlSession.data(for: request)
+        let http = try XCTUnwrap(response as? HTTPURLResponse)
+        guard http.statusCode == 200 else {
+            throw SyncError.validation("Staging password authentication failed with HTTP \(http.statusCode).")
+        }
+        guard data.count <= 1024 * 1024 else {
+            throw SyncError.validation("Staging authentication returned an unsafe response size.")
+        }
+        return try parseNativeSessionResponse(
+            data,
+            configuration: configuration,
+            expectedUserId: expectedUserId
+        )
+    }
+
+    private func hostedState() throws -> [String: Any] {
+        let path = try hostedEnvironment("GOALFLOW_CROSS_CLIENT_STATE_FILE")
+        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+        guard data.count <= 16 * 1024,
+              let state = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              state["schemaVersion"] as? Int == 1 else {
+            throw SyncError.validation("The cross-client handoff state is invalid.")
+        }
+        return state
+    }
+
+    private func hostedEnvironment(_ name: String) throws -> String {
+        guard let value = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            throw SyncError.validation("Missing required hosted staging setting: \(name)")
+        }
+        return value
+    }
+
+    private func hostedOrigin(_ name: String) throws -> String {
+        let value = try hostedEnvironment(name).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        guard let components = URLComponents(string: value),
+              components.scheme == "https", components.host?.isEmpty == false,
+              components.user == nil, components.password == nil,
+              components.path.isEmpty, components.query == nil, components.fragment == nil else {
+            throw SyncError.validation("Hosted staging setting \(name) must be a credential-free HTTPS origin.")
+        }
+        return value
+    }
+}
