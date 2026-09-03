@@ -13,6 +13,7 @@ fi
 old_apk="${1:-${GOALFLOW_UPGRADE_FROM_APK:-}}"
 new_apk="${2:-android-native/app/build/outputs/apk/production/release/app-production-release.apk}"
 old_test_apk="${3:-${GOALFLOW_UPGRADE_SEED_TEST_APK:-}}"
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 [[ -n "$old_apk" && -f "$old_apk" ]] || { echo 'UPGRADE_MATRIX=FAIL (a preserved prior production APK is required)' >&2; exit 1; }
 [[ -f "$new_apk" ]] || { echo "UPGRADE_MATRIX=FAIL (new APK missing: $new_apk)" >&2; exit 1; }
 [[ -n "$old_test_apk" && -f "$old_test_apk" ]] || { echo 'UPGRADE_MATRIX=FAIL (the preserved-version seed test APK is required)' >&2; exit 1; }
@@ -46,7 +47,8 @@ old_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$old_badging")"
 new_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$new_badging")"
 test_badging="$("$aapt_bin" dump badging "$old_test_apk")"
 test_package="$(sed -n "s/^package: name='\([^']*\)'.*/\1/p" <<<"$test_badging")"
-test_target="$(sed -n "s/^instrumentation:.*targetPackage='\([^']*\)'.*/\1/p" <<<"$test_badging")"
+# Build-tools may omit instrumentation attributes from badging output. Verify
+# the installed component-to-target binding through Package Manager below.
 old_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$old_badging")"
 new_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$new_badging")"
 
@@ -54,8 +56,8 @@ new_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$new_bad
   echo "UPGRADE_MATRIX=FAIL (package mismatch: ${old_package:-unknown} -> ${new_package:-unknown}; simulation is forbidden)" >&2
   exit 1
 }
-[[ -n "$test_package" && "$test_target" == "$old_package" ]] || {
-  echo "UPGRADE_MATRIX=FAIL (seed test target mismatch: ${test_target:-unknown})" >&2
+[[ -n "$test_package" && "$test_package" != "$old_package" ]] || {
+  echo 'UPGRADE_MATRIX=FAIL (seed test package identity is missing or ambiguous)' >&2
   exit 1
 }
 [[ "$old_version" =~ ^[0-9]+$ && "$new_version" =~ ^[0-9]+$ && "$old_version" -lt "$new_version" ]] || {
@@ -66,11 +68,15 @@ new_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$new_bad
 "${adb_command[@]}" uninstall "$old_package" >/dev/null 2>&1 || true
 "${adb_command[@]}" install "$old_apk" >/dev/null
 "${adb_command[@]}" install "$old_test_apk" >/dev/null
-instrumentation_output="$("${adb_command[@]}" shell am instrument -w \
+installed_instrumentation="$("${adb_command[@]}" shell pm list instrumentation "$old_package" | tr -d '\r')"
+printf '%s\n' "$installed_instrumentation" | \
+  "$script_dir/verify-instrumentation-target.sh" \
+    "$test_package" "$old_package" androidx.test.runner.AndroidJUnitRunner
+seed_output="$("${adb_command[@]}" shell am instrument -w \
   -e class com.mariusschober.goalflow.nativeapp.data.PriorInstallUpgradeSeedTest \
   "$test_package/androidx.test.runner.AndroidJUnitRunner")"
-grep -Fq 'OK (1 test)' <<<"$instrumentation_output" || {
-  printf '%s\n' "$instrumentation_output" >&2
+grep -Fq 'OK (1 test)' <<<"$seed_output" || {
+  printf '%s\n' "$seed_output" >&2
   echo 'UPGRADE_MATRIX=FAIL (preserved-version Room seed failed)' >&2
   exit 1
 }

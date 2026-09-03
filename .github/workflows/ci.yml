@@ -175,7 +175,7 @@ jobs:
           key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-native-
-      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/run-emulator-gate.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-signing-strict.sh
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/run-emulator-gate.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-instrumentation-target.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-instrumentation-target.sh android-native/scripts/verify-signing-strict.sh
       - name: Prove release signing checks fail closed
         run: bash android-native/scripts/test-signing-gate.sh
       - name: Prove Android rejects Supabase server secrets
@@ -184,6 +184,8 @@ jobs:
         run: bash android-native/scripts/test-diagnose-apk.sh
       - name: Run APK path handoff regression test
         run: sh android-native/scripts/test-apk-path-handoff.sh
+      - name: Run installed instrumentation target regression test
+        run: sh android-native/scripts/test-instrumentation-target.sh
       - name: Run Room schema asset regression test
         run: sh android-native/scripts/test-room-schema-assets.sh
       - name: Verify Room schema hashes
