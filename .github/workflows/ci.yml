@@ -357,15 +357,86 @@ jobs:
           path: ${{ runner.temp }}/goalflow-macos-tests/Logs/Test
           if-no-files-found: ignore
 
+  hosted-staging:
+    name: hosted-staging
+    needs: [verify, migrations]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      CANDIDATE_REF: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+      GOALFLOW_HOSTED_TEST_CONFIRM: staging
+      GOALFLOW_STAGING_APP_ORIGIN: ${{ secrets.GOALFLOW_STAGING_APP_ORIGIN }}
+      GOALFLOW_STAGING_SUPABASE_URL: ${{ secrets.GOALFLOW_STAGING_SUPABASE_URL }}
+      GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY: ${{ secrets.GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY }}
+      GOALFLOW_STAGING_USER_A_EMAIL: ${{ secrets.GOALFLOW_STAGING_USER_A_EMAIL }}
+      GOALFLOW_STAGING_USER_A_PASSWORD: ${{ secrets.GOALFLOW_STAGING_USER_A_PASSWORD }}
+      GOALFLOW_STAGING_USER_A_ID: ${{ secrets.GOALFLOW_STAGING_USER_A_ID }}
+      GOALFLOW_STAGING_USER_B_EMAIL: ${{ secrets.GOALFLOW_STAGING_USER_B_EMAIL }}
+      GOALFLOW_STAGING_USER_B_PASSWORD: ${{ secrets.GOALFLOW_STAGING_USER_B_PASSWORD }}
+      GOALFLOW_STAGING_USER_B_ID: ${{ secrets.GOALFLOW_STAGING_USER_B_ID }}
+    steps:
+      - name: Require complete staging configuration on release candidates
+        id: preflight
+        run: |
+          set -euo pipefail
+          names=(
+            GOALFLOW_STAGING_APP_ORIGIN
+            GOALFLOW_STAGING_SUPABASE_URL
+            GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY
+            GOALFLOW_STAGING_USER_A_EMAIL
+            GOALFLOW_STAGING_USER_A_PASSWORD
+            GOALFLOW_STAGING_USER_A_ID
+            GOALFLOW_STAGING_USER_B_EMAIL
+            GOALFLOW_STAGING_USER_B_PASSWORD
+            GOALFLOW_STAGING_USER_B_ID
+          )
+          missing=0
+          for name in "${names[@]}"; do
+            if [ -z "${!name:-}" ]; then missing=$((missing + 1)); fi
+          done
+          if [ "$missing" -gt 0 ] && [ "$missing" -lt "${#names[@]}" ]; then
+            echo "Hosted staging configuration is partial; refusing to skip or run ambiguously." >&2
+            exit 1
+          fi
+          if [ "$missing" -eq "${#names[@]}" ]; then
+            case "$CANDIDATE_REF" in
+              main|develop|integration/*)
+                echo "Hosted staging configuration is mandatory for $CANDIDATE_REF." >&2
+                exit 1
+                ;;
+              *)
+                echo "run=false" >> "$GITHUB_OUTPUT"
+                echo "Hosted staging is not configured for this short-lived branch."
+                exit 0
+                ;;
+            esac
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+      - if: steps.preflight.outputs.run == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - if: steps.preflight.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - if: steps.preflight.outputs.run == 'true'
+        run: npm ci
+      - name: Prove hosted authentication, isolation, synchronization, and revocation
+        if: steps.preflight.outputs.run == 'true'
+        run: npm run test:hosted:staging
+
   beta-gate:
     name: beta-gate
-    needs: [verify, secrets, migrations, android, native-android, web-release, macos]
+    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all required jobs succeeded
         run: |
-          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }}"
+          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }} hosted-staging=${{ needs.hosted-staging.result }}"
           if [ "${{ needs.verify.result }}" != "success" ]; then echo "verify failed: ${{ needs.verify.result }}" >&2; exit 1; fi
           if [ "${{ needs.secrets.result }}" != "success" ]; then echo "secrets failed: ${{ needs.secrets.result }}" >&2; exit 1; fi
           if [ "${{ needs.migrations.result }}" != "success" ]; then echo "migrations failed: ${{ needs.migrations.result }}" >&2; exit 1; fi
@@ -373,4 +444,5 @@ jobs:
           if [ "${{ needs.native-android.result }}" != "success" ]; then echo "native-android failed: ${{ needs.native-android.result }}" >&2; exit 1; fi
           if [ "${{ needs.web-release.result }}" != "success" ]; then echo "web-release failed: ${{ needs.web-release.result }}" >&2; exit 1; fi
           if [ "${{ needs.macos.result }}" != "success" ]; then echo "macos failed: ${{ needs.macos.result }}" >&2; exit 1; fi
+          if [ "${{ needs.hosted-staging.result }}" != "success" ]; then echo "hosted-staging failed: ${{ needs.hosted-staging.result }}" >&2; exit 1; fi
           echo "beta-gate PASS — all required jobs succeeded"
