@@ -6,6 +6,7 @@ enum MacCloudState: Equatable {
     case authenticating
     case signedOut
     case mfaRequired
+    case workspaceLinkRequired(String)
     case connected(String)
     case disconnected(String)
     case failed(String)
@@ -42,6 +43,7 @@ final class ExecutionViewModel: ObservableObject {
     @Published var showSignIn: Bool = false
     @Published var cloudState: MacCloudState = .authenticating
     @Published var cloudError: String?
+    @Published var localError: String?
     @Published var conflicts: [LocalConflict] = []
     @Published var showConflicts: Bool = false
     private let provider: DemoCurrentTaskProvider
@@ -63,6 +65,7 @@ final class ExecutionViewModel: ObservableObject {
     private let syncMetaStore: SyncMetaStore
     private let syncEngine: SyncEngine
     private let authService: SupabaseAuthService
+    private var verifiedProfile: GoalflowSessionProfile?
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
     private var holdController: CompletionHoldController?
@@ -104,34 +107,48 @@ final class ExecutionViewModel: ObservableObject {
         }.store(in: &cancellables)
     }
     func restore() {
-        // Load context
-        goals = goalStore.loadAll()
-        amalgam = amalgamStore.load()
-        trueNorth = trueNorthStore.loadAll()
-        conflicts = syncMetaStore.load().conflicts
-        completedTodayCount = provider.completedCount(today: todayString())
-        queueCount = provider.queueCount(today: todayString())
-        // Gate
-        if gateEnabled {
+        do {
             let today = todayString()
-            let tasks = provider.taskStore.loadAll()
-            let plan = dailyPlanStore.load(for: today)
-            gate = getPlanningGate(tasks: tasks, today: today, dailyPlan: plan)
-            switch gate {
-            case .ready(let q): task = q.first
-            case .empty: task = nil
-            case .monthlyPlanningRequired, .dailyPlanningRequired: task = nil
+            let loadedGoals = try goalStore.loadAll()
+            let loadedAmalgam = try amalgamStore.load()
+            let loadedTrueNorth = try trueNorthStore.loadAll()
+            let loadedMeta = try syncMetaStore.load()
+            let loadedCompletedCount = try provider.completedCount(today: today)
+            let loadedQueueCount = try provider.queueCount(today: today)
+            let loadedGate: PlanningGate
+            let loadedTask: GoalflowTask?
+            if gateEnabled {
+                let tasks = try provider.taskStore.loadAll()
+                let plan = try dailyPlanStore.load(for: today)
+                loadedGate = getPlanningGate(tasks: tasks, today: today, dailyPlan: plan)
+                if case .ready(let queue) = loadedGate { loadedTask = queue.first }
+                else { loadedTask = nil }
+            } else {
+                loadedTask = try provider.fetchCurrent()
+                loadedGate = loadedTask.map { .ready(queue: [$0]) } ?? .empty
             }
-        } else {
-            task = provider.fetchCurrent()
-            if let task { gate = .ready(queue: [task]) } else { gate = .empty }
+            var loadedExecution = try store.load()
+            if let session = loadedExecution,
+               loadedTask?.id != session.taskId || loadedTask?.isOpen != true {
+                try store.clear()
+                loadedExecution = nil
+            }
+
+            goals = loadedGoals
+            amalgam = loadedAmalgam
+            trueNorth = loadedTrueNorth
+            conflicts = loadedMeta.conflicts
+            completedTodayCount = loadedCompletedCount
+            queueCount = loadedQueueCount
+            gate = loadedGate
+            task = loadedTask
+            execution = loadedExecution
+            localError = nil
+            configureTimer()
+            checkCalendarCollision()
+        } catch {
+            localError = "Local data needs attention: \(error.localizedDescription)"
         }
-        if let s = store.load() {
-            if let t = task, t.id == s.taskId, t.isOpen { execution = s } else { try? store.clear(); execution = nil }
-        } else { execution = nil }
-        configureTimer()
-        // Calendar collision check
-        checkCalendarCollision()
     }
 
     private func checkCalendarCollision() {
@@ -140,6 +157,14 @@ final class ExecutionViewModel: ObservableObject {
             let c = await calendarService.collision(for: t, today: todayString())
             self.calendarCollision = c
         }
+    }
+
+    private func reportLocalFailure(_ error: Error) {
+        localError = "Local change was not confirmed: \(error.localizedDescription)"
+    }
+
+    private func clearLocalFailure() {
+        localError = nil
     }
 
     func requestCalendarAccess() {
@@ -166,6 +191,13 @@ final class ExecutionViewModel: ObservableObject {
         return false
     }
 
+    var canSignOut: Bool {
+        switch cloudState {
+        case .connected, .mfaRequired, .workspaceLinkRequired: return true
+        default: return false
+        }
+    }
+
     func refreshCloudState() async {
         guard authService.isConfigured else {
             cloudState = .disconnected(authService.configurationProblem ?? "Cloud sync is not configured.")
@@ -174,18 +206,55 @@ final class ExecutionViewModel: ObservableObject {
         cloudState = .authenticating
         do {
             let profile = try await authService.validateCurrentSession()
-            cloudState = profile.requiresMFA ? .mfaRequired : .connected(profile.email)
+            verifiedProfile = profile
+            if profile.requiresMFA {
+                cloudState = .mfaRequired
+            } else {
+                switch try syncEngine.bindingState(for: profile.userId) {
+                case .unbound: cloudState = .workspaceLinkRequired(profile.email)
+                case .bound: cloudState = .connected(profile.email)
+                case .differentAccount: throw SyncError.accountMismatch
+                }
+            }
             cloudError = nil
-            if !profile.requiresMFA { triggerSyncIfNeeded() }
+            if case .connected = cloudState { triggerSyncIfNeeded() }
         } catch KeychainError.noSession {
+            verifiedProfile = nil
             cloudState = .signedOut
         } catch KeychainError.revoked {
+            verifiedProfile = nil
             cloudState = .signedOut
         } catch AuthError.revoked {
+            verifiedProfile = nil
             cloudState = .signedOut
         } catch {
             cloudState = .failed(error.localizedDescription)
             cloudError = error.localizedDescription
+        }
+    }
+
+    func linkLocalWorkspace() {
+        Task { @MainActor in
+            cloudState = .authenticating
+            do {
+                let profile = try await authService.validateCurrentSession()
+                guard !profile.requiresMFA else {
+                    verifiedProfile = profile
+                    cloudState = .mfaRequired
+                    return
+                }
+                if let expected = verifiedProfile?.userId, expected != profile.userId {
+                    throw AuthError.sessionChanged
+                }
+                try await syncEngine.bindLocalWorkspace(to: profile.userId)
+                verifiedProfile = profile
+                cloudState = .connected(profile.email)
+                cloudError = nil
+                triggerSyncIfNeeded()
+            } catch {
+                cloudState = .failed(error.localizedDescription)
+                cloudError = error.localizedDescription
+            }
         }
     }
 
@@ -206,9 +275,11 @@ final class ExecutionViewModel: ObservableObject {
         Task { @MainActor in
             do {
                 try await authService.signOut()
+                verifiedProfile = nil
                 cloudState = .signedOut
                 cloudError = nil
             } catch {
+                verifiedProfile = nil
                 cloudState = .signedOut
                 cloudError = error.localizedDescription
             }
@@ -216,54 +287,13 @@ final class ExecutionViewModel: ObservableObject {
     }
 
     func resolveConflict(id: String, useLocal: Bool) {
-        var meta = syncMetaStore.load()
-        guard let idx = meta.conflicts.firstIndex(where: { $0.id == id }) else { return }
-        let conflict = meta.conflicts[idx]
-        if useLocal {
-            // Create retry mutation with base = serverVersion, version = max+1
-            let key = syncEntityKey(conflict.entityType, conflict.entityId)
-            let cur = meta.versions[key] ?? VersionPair(local: 0, server: conflict.serverVersion)
-            let historyMax = conflict.localHistory.compactMap { ($0.value as? [String: Any])?["version"] as? Int }.max() ?? cur.local
-            let version = max(historyMax, cur.local) + 1
-            let retry = SyncMutation(
-                mutationId: UUID().uuidString,
-                deviceId: DeviceIdStore().deviceId,
-                entityType: conflict.entityType,
-                entityId: conflict.entityId,
-                baseServerVersion: conflict.serverVersion,
-                version: version,
-                payload: conflict.localPayload,
-                updatedAt: ISO8601DateFormatter().string(from: Date()),
-                deletedAt: conflict.localDeletedAt,
-                dependsOnMutationId: nil,
-                resolvesConflictId: conflict.id,
-                attemptedAt: nil
-            )
-            meta.versions[key] = VersionPair(local: version, server: conflict.serverVersion)
-            meta.outbox.append(retry)
-            meta.conflicts[idx].status = "resolving-local"
-        } else {
-            // Use cloud: apply server payload to local store
-            if conflict.entityType == "tasks", let dict = conflict.serverPayload.value as? [String: Any] {
-                var tasks = provider.taskStore.loadAll()
-                if let del = conflict.serverDeletedAt, !del.isEmpty {
-                    tasks.removeAll { $0.id == conflict.entityId }
-                } else {
-                    // Decode task from dict
-                    if let data = try? JSONSerialization.data(withJSONObject: dict),
-                       let task = try? JSONDecoder().decode(GoalflowTask.self, from: data) {
-                        if let i = tasks.firstIndex(where: { $0.id == task.id }) { tasks[i] = task } else { tasks.append(task) }
-                    }
-                }
-                try? provider.taskStore.saveAll(tasks)
-            }
-            meta.conflicts.remove(at: idx)
-            // Remove any outbox for that entity
-            meta.outbox.removeAll { $0.entityType == conflict.entityType && $0.entityId == conflict.entityId }
+        do {
+            try syncEngine.resolveConflict(id: id, useLocal: useLocal)
+            cloudError = nil
+            restore()
+        } catch {
+            cloudError = error.localizedDescription
         }
-        try? syncMetaStore.save(meta)
-        conflicts = meta.conflicts
-        restore()
     }
 
     // MARK: - Breakdown
@@ -307,7 +337,12 @@ final class ExecutionViewModel: ObservableObject {
         do {
             _ = try localBreakdown.breakdown(taskId: t.id, children: breakdownChildren)
             // Clear focus if breaking current active task
-            if execution?.taskId == t.id { try? store.clear(); execution = nil; timer.stop() }
+            if execution?.taskId == t.id {
+                try store.clear()
+                execution = nil
+                timer.stop()
+            }
+            clearLocalFailure()
             restore()
         } catch {
             breakdownError = error.localizedDescription
@@ -322,32 +357,41 @@ final class ExecutionViewModel: ObservableObject {
     }
 
     func restoreBreak() {
-        if let bs = breakStore.load() {
-            breakState = bs
-            breakTimer.configure(state: bs, clock: clock)
-            isOnBreak = true
-            breakRemaining = bs.remainingSeconds(now: clock.now())
-            breakElapsed = bs.elapsedSeconds(now: clock.now())
-            if bs.isExpired(now: clock.now()) {
-                sound.alarm(loop: true)
+        do {
+            if let bs = try breakStore.load() {
+                breakState = bs
+                breakTimer.configure(state: bs, clock: clock)
+                isOnBreak = true
+                breakRemaining = bs.remainingSeconds(now: clock.now())
+                breakElapsed = bs.elapsedSeconds(now: clock.now())
+                if bs.isExpired(now: clock.now()) {
+                    sound.alarm(loop: true)
+                }
+            } else {
+                breakState = nil
+                breakRemaining = nil
+                breakElapsed = 0
+                isOnBreak = false
             }
-        } else {
-            breakState = nil
-            breakRemaining = nil
-            breakElapsed = 0
-            isOnBreak = false
+        } catch {
+            reportLocalFailure(error)
         }
     }
 
     func startBreak(durationMinutes: Int?) {
         if let e = execution, e.isActive {
             if let paused = e.paused(at: clock.now()) {
-                try? store.save(paused)
-                execution = paused
-                timer.reflectPause(paused)
-                isPaused = true
-                remainingSeconds = paused.remainingSeconds(now: clock.now())
-                overtimeSeconds = paused.overtimeSeconds(now: clock.now())
+                do {
+                    try store.save(paused)
+                    execution = paused
+                    timer.reflectPause(paused)
+                    isPaused = true
+                    remainingSeconds = paused.remainingSeconds(now: clock.now())
+                    overtimeSeconds = paused.overtimeSeconds(now: clock.now())
+                } catch {
+                    reportLocalFailure(error)
+                    return
+                }
             }
         }
         let durationSeconds: Int? = durationMinutes.map { $0 * 60 }
@@ -360,25 +404,31 @@ final class ExecutionViewModel: ObservableObject {
             breakRemaining = bs.remainingSeconds(now: clock.now())
             breakElapsed = bs.elapsedSeconds(now: clock.now())
             breakPickerVisible = false
+            clearLocalFailure()
         } catch {
-            print("[Break] start failed:", error)
+            reportLocalFailure(error)
         }
     }
 
     func endBreakEarly() {
         guard isOnBreak else { return }
+        do { try breakStore.clear() }
+        catch {
+            reportLocalFailure(error)
+            return
+        }
         breakTimer.stop()
         isOnBreak = false
         breakState = nil
         breakRemaining = nil
         breakElapsed = 0
-        try? breakStore.clear()
         sound.stopAlarm()
         if let e = execution {
             remainingSeconds = e.remainingSeconds(now: clock.now())
             overtimeSeconds = e.overtimeSeconds(now: clock.now())
         }
         breakPickerVisible = false
+        clearLocalFailure()
     }
 
     private func handleBreakExpiredIfNeeded() {
@@ -408,21 +458,25 @@ final class ExecutionViewModel: ObservableObject {
         if execution?.isActive == true || execution?.isPaused == true { return }
         let monotonic: UInt64? = (clock as? any MonotonicClock)?.monotonicNow
         let state = ExecutionState(taskId: t.id, phase: .active, startedAt: clock.now(), startedAtMonotonic: monotonic, plannedDurationSeconds: t.plannedDurationSeconds)
-        do { try store.save(state); execution = state; timer.start(state: state) } catch { print("[Execution] ACTION persist failed:", error) }
+        do { try store.save(state); execution = state; timer.start(state: state); clearLocalFailure() }
+        catch { reportLocalFailure(error) }
     }
     func pause() {
         guard let e = execution, e.isActive else { return }
         guard let next = e.paused(at: clock.now()) else { return }
-        do { try store.save(next); execution = next; timer.reflectPause(next) } catch { print("[Execution] pause persist failed:", error) }
+        do { try store.save(next); execution = next; timer.reflectPause(next); clearLocalFailure() }
+        catch { reportLocalFailure(error) }
     }
     func resume() {
         guard let e = execution, e.isPaused else { return }
         guard let next = e.resumed(at: clock.now()) else { return }
-        do { try store.save(next); execution = next; timer.reflectResume(next) } catch { print("[Execution] resume persist failed:", error) }
+        do { try store.save(next); execution = next; timer.reflectResume(next); clearLocalFailure() }
+        catch { reportLocalFailure(error) }
     }
     func extend(by seconds: Int) {
         guard let e = execution, let next = e.extended(by: seconds) else { return }
-        do { try store.save(next); execution = next; timer.reflectExtend(next) } catch { print("[Execution] extend persist failed:", error) }
+        do { try store.save(next); execution = next; timer.reflectExtend(next); clearLocalFailure() }
+        catch { reportLocalFailure(error) }
     }
     func add5() { extend(by: 5*60) }; func add15() { extend(by: 15*60) }; func add30() { extend(by: 30*60) }
 
@@ -475,24 +529,60 @@ final class ExecutionViewModel: ObservableObject {
             withAnimation(.easeOut(duration: 0.3)) { showReward = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in self?.showReward = false; self?.flowPickerVisible = true }
             haptic(2)
-            task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString())
+            task = try provider.fetchCurrent()
+            completedTodayCount = try provider.completedCount(today: todayString())
+            queueCount = try provider.queueCount(today: todayString())
+            clearLocalFailure()
         } catch {
-            print("[Execution] completion persist failed:", error)
+            let message = "Local change was not confirmed: \(error.localizedDescription)"
             holdProgress = 0; holding = false; holdController?.cancel()
+            restore()
+            localError = message
         }
     }
     func selectFlow(_ flow: FlowState) {
         guard let id = pendingCompletedId else { flowPickerVisible = false; return }
-        do { try provider.updateFlowState(taskId: id, flow: flow) } catch { print("[Execution] flowState persist failed:", error) }
-        flowPickerVisible = false; pendingCompletedId = nil
-        task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString()); configureTimer()
+        do {
+            try provider.updateFlowState(taskId: id, flow: flow)
+            flowPickerVisible = false
+            pendingCompletedId = nil
+            clearLocalFailure()
+            restore()
+        } catch {
+            reportLocalFailure(error)
+        }
     }
     func skipFlow() {
-        flowPickerVisible = false; pendingCompletedId = nil
-        task = provider.fetchCurrent(); completedTodayCount = provider.completedCount(today: todayString()); queueCount = provider.queueCount(today: todayString()); configureTimer()
+        flowPickerVisible = false
+        pendingCompletedId = nil
+        restore()
     }
-    func toggleFrog() { guard let t = task else { return }; provider.setFrogDemo(isFrog: !t.isFrog); task = provider.fetchCurrent() }
-    func resetDemo() { try? store.clear(); provider.resetDemo(); execution = nil; task = provider.fetchCurrent(); flowPickerVisible = false; pendingCompletedId = nil; holdProgress = 0; holding = false; showReward = false; configureTimer() }
+    func toggleFrog() {
+        guard let t = task else { return }
+        do {
+            try provider.setFrogDemo(isFrog: !t.isFrog)
+            clearLocalFailure()
+            restore()
+        } catch {
+            reportLocalFailure(error)
+        }
+    }
+    func resetDemo() {
+        do {
+            try store.clear()
+            try provider.resetDemo()
+            execution = nil
+            flowPickerVisible = false
+            pendingCompletedId = nil
+            holdProgress = 0
+            holding = false
+            showReward = false
+            clearLocalFailure()
+            restore()
+        } catch {
+            reportLocalFailure(error)
+        }
+    }
     private func todayString() -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
         return f.string(from: Date())
@@ -537,8 +627,11 @@ struct ExecutionPanelView: View {
     }
 
     private var cloudNotice: String? {
+        if let localError = vm.localError, !localError.isEmpty { return localError }
         if let cloudError = vm.cloudError, !cloudError.isEmpty { return cloudError }
         switch vm.cloudState {
+        case .workspaceLinkRequired(let email):
+            return "Cloud identity \(email) is verified. Confirm the link before any local data is synchronized."
         case .disconnected(let message), .failed(let message): return message
         default: return nil
         }
@@ -554,15 +647,25 @@ struct ExecutionPanelView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
             Spacer(minLength: 4)
-            Button("Sign in") { vm.showSignIn = true }
-                .buttonStyle(.link)
-                .font(.system(size: 10, weight: .semibold))
+            if vm.localError != nil {
+                Button("Retry load") { vm.restore(); vm.restoreBreak() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10, weight: .semibold))
+            } else if case .workspaceLinkRequired = vm.cloudState {
+                Button("Link workspace") { vm.linkLocalWorkspace() }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10, weight: .semibold))
+            } else {
+                Button("Sign in") { vm.showSignIn = true }
+                    .buttonStyle(.link)
+                    .font(.system(size: 10, weight: .semibold))
+            }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.08))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Cloud synchronization unavailable. \(message)")
+        .accessibilityLabel("Goalflow needs attention. \(message)")
     }
     private var header: some View {
         HStack(spacing: 8) {
@@ -596,7 +699,7 @@ struct ExecutionPanelView: View {
                 Divider()
                 Button("Check for Updates…") { UpdaterService.shared.checkForUpdates() }
                 Divider()
-                if vm.isAuthenticated {
+                if vm.canSignOut {
                     Button("Sign out") { vm.signOut() }
                 } else {
                     Button("Sign in…") { vm.showSignIn = true }
@@ -621,6 +724,11 @@ struct ExecutionPanelView: View {
                 .font(.system(size: 10, weight: .semibold, design: .rounded))
                 .foregroundStyle(Color.orange)
                 .help("Owner cloud synchronization requires AAL2")
+        case .workspaceLinkRequired:
+            Button("Link workspace") { vm.linkLocalWorkspace() }
+                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.orange)
+                .help("No local data is uploaded until you confirm this account link")
         case .disconnected(let message), .failed(let message):
             Button(action: { vm.showSignIn = true }) {
                 Image(systemName: "icloud.slash.fill").font(.system(size: 10)).foregroundStyle(.orange)

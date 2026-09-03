@@ -97,6 +97,7 @@ func decodeBase64URL(_ value: String) -> Data? {
 }
 
 protocol SyncTransport: Sendable {
+    func currentUserId() async throws -> String
     func request(path: String, method: String, headers: [String: String], body: Data?) async throws -> (Data, HTTPURLResponse)
 }
 
@@ -137,6 +138,10 @@ final class URLSessionSyncTransport: SyncTransport, @unchecked Sendable {
             sessionConfiguration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
             self.urlSession = URLSession(configuration: sessionConfiguration)
         }
+    }
+
+    func currentUserId() async throws -> String {
+        try await keychain.currentSession(configuration: configuration, urlSession: urlSession).userId
     }
 
     func request(
@@ -185,8 +190,11 @@ final class URLSessionSyncTransport: SyncTransport, @unchecked Sendable {
 }
 
 final class MockSyncTransport: SyncTransport, @unchecked Sendable {
+    static let defaultUserId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    var userId = defaultUserId
     var pushHandler: ((Data) async throws -> (Data, HTTPURLResponse))?
     var pullHandler: ((String) async throws -> (Data, HTTPURLResponse))?
+    func currentUserId() async throws -> String { userId }
     func request(path: String, method: String, headers: [String: String], body: Data?) async throws -> (Data, HTTPURLResponse) {
         if path.hasPrefix("/api/v1/sync/push") {
             if let handler = pushHandler, let body { return try await handler(body) }

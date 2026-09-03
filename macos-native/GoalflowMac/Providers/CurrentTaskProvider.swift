@@ -1,16 +1,18 @@
 import Foundation
-protocol CurrentTaskProvider: Sendable { func fetchCurrent() -> GoalflowTask?; func allDemoTasks(today: String) -> [GoalflowTask] }
+protocol CurrentTaskProvider: Sendable {
+    func fetchCurrent() throws -> GoalflowTask?
+    func allDemoTasks(today: String) throws -> [GoalflowTask]
+}
 protocol TaskStore: Sendable {
-    func loadAll() -> [GoalflowTask]; func saveAll(_ tasks: [GoalflowTask]) throws
+    func loadAll() throws -> [GoalflowTask]; func saveAll(_ tasks: [GoalflowTask]) throws
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask
-    func updateTask(_ task: GoalflowTask) throws; func queueCount(today: String) -> Int; func completedCount(today: String) -> Int
+    func updateTask(_ task: GoalflowTask) throws; func queueCount(today: String) throws -> Int; func completedCount(today: String) throws -> Int
 }
 final class LocalTaskStore: TaskStore, @unchecked Sendable {
     let fileURL: URL; private let walKey: String; let defaults: UserDefaults
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
     private let syncMetaStore: SyncMetaStore
     private let deviceIdStore: DeviceIdStore
-    private let userKey = "localUser"
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.demo.tasks.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
         if let u = fileURL { self.fileURL = u } else {
             let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? FileManager.default.temporaryDirectory
@@ -28,51 +30,38 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         }
         self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
-    private func ensureDirectory() throws {
-        let dir = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-    }
-    func loadAll() -> [GoalflowTask] {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            if let data = try? Data(contentsOf: fileURL), let tasks = try? decoder.decode([GoalflowTask].self, from: data) { return tasks.sorted(by: goalflowTaskComparator) }
+    func loadAll() throws -> [GoalflowTask] {
+        let tasks = try syncMetaStore.loadLocalValue(fileURL: fileURL, walKey: walKey) { data in
+            try decoder.decode([GoalflowTask].self, from: data)
         }
-        if let data = defaults.data(forKey: walKey), let tasks = try? decoder.decode([GoalflowTask].self, from: data) {
-            try? saveAll(tasks); return tasks.sorted(by: goalflowTaskComparator)
+        let loaded = tasks ?? []
+        guard Set(loaded.map(\.id)).count == loaded.count,
+              loaded.allSatisfy({ !$0.id.isEmpty && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.version > 0 }) else {
+            throw SyncError.validation("Task storage contains invalid or duplicate durable identities. No task was discarded or replaced.")
         }
-        return []
+        return loaded.sorted(by: goalflowTaskComparator)
     }
     func saveAll(_ tasks: [GoalflowTask]) throws {
         let sorted = tasks.sorted(by: goalflowTaskComparator)
-        // Stage for sync before durable write (best-effort, never throw)
-        do {
-            let prevData: [GoalflowTask]
-            if FileManager.default.fileExists(atPath: fileURL.path),
-               let d = try? Data(contentsOf: fileURL),
-               let decoded = try? decoder.decode([GoalflowTask].self, from: d) {
-                prevData = decoded
-            } else if let d = defaults.data(forKey: walKey), let decoded = try? decoder.decode([GoalflowTask].self, from: d) {
-                prevData = decoded
-            } else {
-                prevData = []
-            }
-            let previousValue: Any? = prevData.map { $0.toDictionary() }
-            let nextValue: Any? = sorted.map { $0.toDictionary() }
-            if let tx = try? buildStagedLocalTransaction(storeName: "tasks", userKey: userKey, previousValue: previousValue, nextValue: nextValue, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
-                var meta = syncMetaStore.load()
-                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) {
-                    try? syncMetaStore.save(newMeta)
-                }
-            }
-        } catch { /* staging is best-effort, never block durable write */ }
+        let previous = try loadAll()
+        let previousValue: Any? = previous.map { $0.toDictionary() }
+        let nextValue: Any? = sorted.map { $0.toDictionary() }
+        let transaction = try buildStagedLocalTransaction(
+            storeName: "tasks",
+            userKey: "unbound-local-workspace",
+            previousValue: previousValue,
+            nextValue: nextValue,
+            order: nextOrder(),
+            now: ISO8601DateFormatter().string(from: Date()),
+            randomUuid: { UUID().uuidString.lowercased() }
+        )
+        let currentMeta = try syncMetaStore.load()
+        let nextMeta: SyncMeta
+        if let transaction {
+            nextMeta = try appendStagedTransactions(currentMeta, transactions: [transaction], deviceId: deviceIdStore.deviceId)
+        } else { nextMeta = currentMeta }
         let data = try encoder.encode(sorted)
-        try ensureDirectory()
-        do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
-        guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after write") }
-        if read != data { throw FocusSessionStoreError.readBackMismatch }
-        defaults.set(data, forKey: walKey)
-        guard let walRead = defaults.data(forKey: walKey), walRead == data else {
-            print("[TaskStore] WAL mirror mismatch (file authoritative)"); return
-        }
+        try syncMetaStore.commitLocalValue(fileURL: fileURL, walKey: walKey, data: data, nextMeta: nextMeta)
     }
 
     private static let orderLock = NSLock()
@@ -83,29 +72,28 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         return Int(Date().timeIntervalSince1970 * 1000) * 1000 + Self.orderCounter
     }
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
-        var tasks = loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == id }) else { throw TaskStoreError.notFound }
+        var tasks = try loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == id }) else { throw TaskStoreError.notFound }
         guard tasks[idx].isOpen else { throw TaskStoreError.notOpen }
         let completed = tasks[idx].withCompleted(at: Date(), actualDurationMinutes: actualDurationMinutes, flowState: flowState)
         tasks[idx] = completed; try saveAll(tasks); return completed
     }
     func updateTask(_ task: GoalflowTask) throws {
-        var tasks = loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { throw TaskStoreError.notFound }
+        var tasks = try loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == task.id }) else { throw TaskStoreError.notFound }
         tasks[idx] = task; try saveAll(tasks)
     }
-    func queueCount(today: String) -> Int { buildTodayQueue(tasks: loadAll(), today: today).count }
-    func completedCount(today: String) -> Int { loadAll().filter { $0.status == .completed && $0.scheduledFor == today }.count }
-    func seedIfEmpty(today: String) {
-        if !loadAll().isEmpty { return }
+    func queueCount(today: String) throws -> Int { try buildTodayQueue(tasks: loadAll(), today: today).count }
+    func completedCount(today: String) throws -> Int { try loadAll().filter { $0.status == .completed && $0.scheduledFor == today }.count }
+    func seedIfEmpty(today: String) throws {
+        if try !loadAll().isEmpty { return }
         let nowISO = ISO8601DateFormatter().string(from: Date())
         let tasks = [
-            GoalflowTask(id: "demo-1", title: "Draft Q4 roadmap — outline three bets", notes: "", tags: ["focus"], schedulePrecision: .day, scheduledFor: today, plannedOrder: 0, status: .open, isFrog: false, beforeFrog: false, source: .manual, createdAt: nowISO, updatedAt: nowISO, version: 1, durationMinutes: 25),
-            GoalflowTask(id: "demo-2", title: "Review weekly goals and prune one", tags: [], schedulePrecision: .day, scheduledFor: today, plannedOrder: 1, status: .open, isFrog: false, createdAt: nowISO, updatedAt: nowISO, version: 1, durationMinutes: 15)
+            GoalflowTask(id: "40a647cb-1f8b-4a23-8ceb-76a6c30b2d04", title: "Draft Q4 roadmap — outline three bets", notes: "", tags: ["focus"], schedulePrecision: .day, scheduledFor: today, plannedOrder: 0, status: .open, isFrog: false, beforeFrog: false, source: .manual, createdAt: nowISO, updatedAt: nowISO, version: 1, durationMinutes: 25),
+            GoalflowTask(id: "5955a3ad-5b7f-4cf2-9a2f-a64119f370d7", title: "Review weekly goals and prune one", tags: [], schedulePrecision: .day, scheduledFor: today, plannedOrder: 1, status: .open, isFrog: false, createdAt: nowISO, updatedAt: nowISO, version: 1, durationMinutes: 15)
         ]
-        try? saveAll(tasks)
+        try saveAll(tasks)
     }
     func clearAll() throws {
-        if FileManager.default.fileExists(atPath: fileURL.path) { try FileManager.default.removeItem(at: fileURL) }
-        defaults.removeObject(forKey: walKey)
+        try saveAll([])
     }
 }
 enum TaskStoreError: Error, LocalizedError {
@@ -117,50 +105,48 @@ enum TaskStoreError: Error, LocalizedError {
 final class DemoCurrentTaskProvider: CurrentTaskProvider, @unchecked Sendable {
     let taskStore: any TaskStore
     private let defaults: UserDefaults
-    init(taskStore: (any TaskStore)? = nil, defaults: UserDefaults = .standard, seedDemo: Bool = false) {
+    init(taskStore: (any TaskStore)? = nil, defaults: UserDefaults = .standard) {
         let resolvedStore = taskStore ?? LocalTaskStore(defaults: defaults)
         self.taskStore = resolvedStore; self.defaults = defaults
-        let today = todayString()
-        if seedDemo && resolvedStore.loadAll().isEmpty { (resolvedStore as? LocalTaskStore)?.seedIfEmpty(today: today) }
     }
-    func allDemoTasks(today: String) -> [GoalflowTask] {
-        return taskStore.loadAll().filter { $0.scheduledFor == today }.sorted(by: goalflowTaskComparator)
+    func allDemoTasks(today: String) throws -> [GoalflowTask] {
+        return try taskStore.loadAll().filter { $0.scheduledFor == today }.sorted(by: goalflowTaskComparator)
     }
-    func allTasks() -> [GoalflowTask] { taskStore.loadAll() }
-    func fetchCurrent() -> GoalflowTask? {
+    func allTasks() throws -> [GoalflowTask] { try taskStore.loadAll() }
+    func fetchCurrent() throws -> GoalflowTask? {
         let today = todayString()
-        let queue = buildTodayQueue(tasks: taskStore.loadAll(), today: today)
+        let queue = try buildTodayQueue(tasks: taskStore.loadAll(), today: today)
         return queue.first
     }
-    func queueCount(today: String) -> Int { taskStore.queueCount(today: today) }
-    func completedCount(today: String) -> Int { taskStore.completedCount(today: today) }
+    func queueCount(today: String) throws -> Int { try taskStore.queueCount(today: today) }
+    func completedCount(today: String) throws -> Int { try taskStore.completedCount(today: today) }
     func completeCurrent(actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
-        guard let cur = fetchCurrent() else { throw TaskStoreError.notFound }
+        guard let cur = try fetchCurrent() else { throw TaskStoreError.notFound }
         return try taskStore.completeTask(id: cur.id, actualDurationMinutes: actualDurationMinutes, flowState: flowState)
     }
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
         try taskStore.completeTask(id: id, actualDurationMinutes: actualDurationMinutes, flowState: flowState)
     }
     func updateFlowState(taskId: String, flow: FlowState) throws {
-        var tasks = taskStore.loadAll()
+        var tasks = try taskStore.loadAll()
         guard let idx = tasks.firstIndex(where: { $0.id == taskId }) else { throw TaskStoreError.notFound }
         tasks[idx] = tasks[idx].withFlowState(flow)
         try taskStore.saveAll(tasks)
     }
-    func resetDemo() {
-        try? (taskStore as? LocalTaskStore)?.clearAll()
+    func resetDemo() throws {
+        try (taskStore as? LocalTaskStore)?.clearAll()
         let today = todayString()
-        (taskStore as? LocalTaskStore)?.seedIfEmpty(today: today)
+        try (taskStore as? LocalTaskStore)?.seedIfEmpty(today: today)
     }
-    func setFrogDemo(isFrog: Bool) {
-        var tasks = taskStore.loadAll()
+    func setFrogDemo(isFrog: Bool) throws {
+        var tasks = try taskStore.loadAll()
         let today = todayString()
         let queue = buildTodayQueue(tasks: tasks, today: today)
         guard let firstId = queue.first?.id, let idx = tasks.firstIndex(where: { $0.id == firstId }) else { return }
         tasks[idx].isFrog = isFrog
         tasks[idx].updatedAt = ISO8601DateFormatter().string(from: Date())
         tasks[idx].version += 1
-        try? taskStore.saveAll(tasks)
+        try taskStore.saveAll(tasks)
     }
     private func todayString() -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")

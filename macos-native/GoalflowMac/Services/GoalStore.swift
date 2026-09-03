@@ -8,7 +8,6 @@ final class GoalStore: @unchecked Sendable {
     private let decoder: JSONDecoder
     private let syncMetaStore: SyncMetaStore
     private let deviceIdStore: DeviceIdStore
-    private let userKey = "localUser"
     private static let orderLock = NSLock()
     private static var orderCounter = 0
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.goals.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
@@ -25,36 +24,34 @@ final class GoalStore: @unchecked Sendable {
         self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
         self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
-    private func ensureDirectory() throws {
-        let dir = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-    }
-    func loadAll() -> [Goal] {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            if let data = try? Data(contentsOf: fileURL), let g = try? decoder.decode([Goal].self, from: data) { return g }
-        }
-        if let data = defaults.data(forKey: walKey), let g = try? decoder.decode([Goal].self, from: data) {
-            try? saveAll(g); return g
-        }
-        return []
+    func loadAll() throws -> [Goal] {
+        try syncMetaStore.loadLocalValue(fileURL: fileURL, walKey: walKey) { data in
+            let goals = try decoder.decode([Goal].self, from: data)
+            guard Set(goals.map(\.id)).count == goals.count,
+                  goals.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw SyncError.validation("Goal storage is invalid. No goal was discarded or replaced.")
+            }
+            return goals
+        } ?? []
     }
     func saveAll(_ goals: [Goal]) throws {
-        // Stage for sync (best-effort)
-        do {
-            let prev = loadAll()
-            let prevVal: Any? = prev.map { ["id": $0.id, "name": $0.name] as [String: Any] }
-            let nextVal: Any? = goals.map { ["id": $0.id, "name": $0.name] as [String: Any] }
-            if let tx = try? buildStagedLocalTransaction(storeName: "goals", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
-                var meta = syncMetaStore.load()
-                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
-            }
-        } catch {}
+        guard Set(goals.map(\.id)).count == goals.count,
+              goals.allSatisfy({ !$0.id.isEmpty && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw SyncError.validation("Goal storage is invalid. No goal was discarded or replaced.")
+        }
+        let previous = try loadAll()
+        let prevVal: Any? = previous.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+        let nextVal: Any? = goals.map { ["id": $0.id, "name": $0.name] as [String: Any] }
+        let transaction = try buildStagedLocalTransaction(storeName: "goals", userKey: "unbound-local-workspace", previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString.lowercased() })
+        let currentMeta = try syncMetaStore.load()
+        let nextMeta: SyncMeta
+        if let transaction {
+            nextMeta = try appendStagedTransactions(currentMeta, transactions: [transaction], deviceId: deviceIdStore.deviceId)
+        } else {
+            nextMeta = currentMeta
+        }
         let data = try encoder.encode(goals)
-        try ensureDirectory()
-        do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
-        guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after write") }
-        if read != data { throw FocusSessionStoreError.readBackMismatch }
-        defaults.set(data, forKey: walKey)
+        try syncMetaStore.commitLocalValue(fileURL: fileURL, walKey: walKey, data: data, nextMeta: nextMeta)
     }
     private func nextOrder() -> Int {
         Self.orderLock.lock(); defer { Self.orderLock.unlock() }
@@ -68,7 +65,6 @@ final class TrueNorthStore: @unchecked Sendable {
     private let encoder: JSONEncoder; private let decoder: JSONDecoder
     private let syncMetaStore: SyncMetaStore
     private let deviceIdStore: DeviceIdStore
-    private let userKey = "localUser"
     private static let orderLock = NSLock()
     private static var orderCounter = 0
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.truenorth.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
@@ -84,32 +80,34 @@ final class TrueNorthStore: @unchecked Sendable {
         self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
         self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
-    private func ensureDirectory() throws {
-        let dir = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-    }
-    func loadAll() -> [TrueNorthGoal] {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            if let data = try? Data(contentsOf: fileURL), let g = try? decoder.decode([TrueNorthGoal].self, from: data) { return g }
-        }
-        if let data = defaults.data(forKey: walKey), let g = try? decoder.decode([TrueNorthGoal].self, from: data) { try? saveAll(g); return g }
-        return []
+    func loadAll() throws -> [TrueNorthGoal] {
+        try syncMetaStore.loadLocalValue(fileURL: fileURL, walKey: walKey) { data in
+            let goals = try decoder.decode([TrueNorthGoal].self, from: data)
+            guard Set(goals.map(\.id)).count == goals.count,
+                  goals.allSatisfy({ !$0.id.isEmpty && !$0.vision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                throw SyncError.validation("True North storage is invalid. No goal was discarded or replaced.")
+            }
+            return goals
+        } ?? []
     }
     func saveAll(_ goals: [TrueNorthGoal]) throws {
-        do {
-            let prev = loadAll()
-            let prevVal: Any? = prev.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
-            let nextVal: Any? = goals.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
-            if let tx = try? buildStagedLocalTransaction(storeName: "truenorth", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
-                var meta = syncMetaStore.load()
-                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
-            }
-        } catch {}
-        let data = try encoder.encode(goals); try ensureDirectory()
-        do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
-        guard let read = try? Data(contentsOf: fileURL) else { throw FocusSessionStoreError.writeFailed("missing after write") }
-        if read != data { throw FocusSessionStoreError.readBackMismatch }
-        defaults.set(data, forKey: walKey)
+        guard Set(goals.map(\.id)).count == goals.count,
+              goals.allSatisfy({ !$0.id.isEmpty && !$0.vision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+            throw SyncError.validation("True North storage is invalid. No goal was discarded or replaced.")
+        }
+        let previous = try loadAll()
+        let prevVal: Any? = previous.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
+        let nextVal: Any? = goals.map { ["id": $0.id, "vision": $0.vision] as [String: Any] }
+        let transaction = try buildStagedLocalTransaction(storeName: "truenorth", userKey: "unbound-local-workspace", previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString.lowercased() })
+        let currentMeta = try syncMetaStore.load()
+        let nextMeta: SyncMeta
+        if let transaction {
+            nextMeta = try appendStagedTransactions(currentMeta, transactions: [transaction], deviceId: deviceIdStore.deviceId)
+        } else {
+            nextMeta = currentMeta
+        }
+        let data = try encoder.encode(goals)
+        try syncMetaStore.commitLocalValue(fileURL: fileURL, walKey: walKey, data: data, nextMeta: nextMeta)
     }
     private func nextOrder() -> Int {
         Self.orderLock.lock(); defer { Self.orderLock.unlock() }
@@ -122,7 +120,6 @@ final class AmalgamStore: @unchecked Sendable {
     let fileURL: URL; private let walKey: String; private let defaults: UserDefaults
     private let syncMetaStore: SyncMetaStore
     private let deviceIdStore: DeviceIdStore
-    private let userKey = "localUser"
     private static let orderLock = NSLock()
     private static var orderCounter = 0
     init(fileURL: URL? = nil, defaults: UserDefaults = .standard, walKey: String = "goalflow.amalgam.v1", syncMetaStore: SyncMetaStore? = nil, deviceIdStore: DeviceIdStore? = nil) {
@@ -137,30 +134,28 @@ final class AmalgamStore: @unchecked Sendable {
         self.syncMetaStore = syncMetaStore ?? SyncMetaStore(fileURL: syncURL, defaults: defaults)
         self.deviceIdStore = deviceIdStore ?? DeviceIdStore(defaults: defaults)
     }
-    private func ensureDirectory() throws {
-        let dir = fileURL.deletingLastPathComponent()
-        if !FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
-    }
-    func load() -> String? {
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            if let data = try? Data(contentsOf: fileURL), let s = try? JSONDecoder().decode(String.self, from: data) { return s }
-        }
-        if let data = defaults.data(forKey: walKey), let s = try? JSONDecoder().decode(String.self, from: data) { try? save(s); return s }
-        return defaults.string(forKey: walKey) // fallback legacy string
+    func load() throws -> String? {
+        if let value = try syncMetaStore.loadLocalValue(fileURL: fileURL, walKey: walKey, decode: {
+            try JSONDecoder().decode(String.self, from: $0)
+        }) { return value }
+        guard let legacy = defaults.string(forKey: walKey) else { return nil }
+        try persist(legacy, previous: nil)
+        return legacy
     }
     func save(_ value: String) throws {
-        do {
-            let prev = load()
-            let prevVal: Any? = prev
-            let nextVal: Any? = value
-            if let tx = try? buildStagedLocalTransaction(storeName: "amalgam", userKey: userKey, previousValue: prevVal, nextValue: nextVal, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString }) {
-                var meta = syncMetaStore.load()
-                if let newMeta = try? appendStagedTransactions(meta, transactions: [tx], deviceId: deviceIdStore.deviceId) { try? syncMetaStore.save(newMeta) }
-            }
-        } catch {}
-        let data = try JSONEncoder().encode(value); try ensureDirectory()
-        do { try data.write(to: fileURL, options: [.atomic]) } catch { throw FocusSessionStoreError.writeFailed(error.localizedDescription) }
-        defaults.set(data, forKey: walKey)
+        try persist(value, previous: load())
+    }
+    private func persist(_ value: String, previous: String?) throws {
+        let transaction = try buildStagedLocalTransaction(storeName: "amalgam", userKey: "unbound-local-workspace", previousValue: previous, nextValue: value, order: nextOrder(), now: ISO8601DateFormatter().string(from: Date()), randomUuid: { UUID().uuidString.lowercased() })
+        let currentMeta = try syncMetaStore.load()
+        let nextMeta: SyncMeta
+        if let transaction {
+            nextMeta = try appendStagedTransactions(currentMeta, transactions: [transaction], deviceId: deviceIdStore.deviceId)
+        } else {
+            nextMeta = currentMeta
+        }
+        let data = try JSONEncoder().encode(value)
+        try syncMetaStore.commitLocalValue(fileURL: fileURL, walKey: walKey, data: data, nextMeta: nextMeta)
     }
     private func nextOrder() -> Int {
         Self.orderLock.lock(); defer { Self.orderLock.unlock() }

@@ -49,13 +49,13 @@ final class CaptureViewModelTests: XCTestCase {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
         // selectedDate default is now, so second enter should create
         XCTAssertTrue(vm.handleEnter(intent: .add))
-        let all = store.loadAll()
+        let all = try store.loadAll()
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.title, "New task")
         XCTAssertEqual(all.first?.scheduledFor, f.string(from: vm.selectedDate))
     }
 
-    func test_month_future_via_picker() {
+    func test_month_future_via_picker() throws {
         let clock = ManualClock(now: ISO8601DateFormatter().date(from: "2026-09-01T00:00:00Z")!)
         let (vm, store, tmp, _) = makeVM(clock: clock)
         defer { try? FileManager.default.removeItem(at: tmp) }
@@ -64,8 +64,8 @@ final class CaptureViewModelTests: XCTestCase {
         vm.isMonthMode = true
         vm.selectedMonth = "2026-11"
         XCTAssertTrue(vm.handleEnter(intent: .add))
-        XCTAssertEqual(store.loadAll().first?.schedulePrecision, .month)
-        XCTAssertEqual(store.loadAll().first?.scheduledFor, "2026-11")
+        XCTAssertEqual(try store.loadAll().first?.schedulePrecision, .month)
+        XCTAssertEqual(try store.loadAll().first?.scheduledFor, "2026-11")
     }
 
     func test_notes_toggle_and_url() throws {
@@ -76,7 +76,7 @@ final class CaptureViewModelTests: XCTestCase {
         vm.showNotes = true
         vm.notes = "my note"
         XCTAssertTrue(vm.handleEnter(intent: .add))
-        let task = store.loadAll().first!
+        let task = try XCTUnwrap(store.loadAll().first)
         XCTAssertTrue(task.notes.contains("my note"))
         XCTAssertTrue(task.notes.contains("https://example.com"))
     }

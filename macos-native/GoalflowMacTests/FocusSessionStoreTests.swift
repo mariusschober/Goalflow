@@ -8,14 +8,14 @@ final class FocusSessionStoreTests: XCTestCase {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UserDefaultsFocusSessionStore(defaults: defaults)
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let s = ExecutionState(taskId: "demo-1", phase: .active, startedAt: now, plannedDurationSeconds: 1500)
         try store.save(s)
-        let loaded = store.load()
+        let loaded = try store.load()
         XCTAssertEqual(loaded, s)
         try store.clear()
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
     }
 
     func test_overwrite_updates() throws {
@@ -27,7 +27,7 @@ final class FocusSessionStoreTests: XCTestCase {
         try store.save(a)
         let b = ExecutionState(taskId: "b", phase: .active, startedAt: Date().addingTimeInterval(10), plannedDurationSeconds: 900)
         try store.save(b)
-        let loaded = store.load()
+        let loaded = try store.load()
         XCTAssertEqual(loaded?.taskId, b.taskId)
         XCTAssertEqual(loaded?.phase, b.phase)
         XCTAssertEqual(loaded?.plannedDurationSeconds, b.plannedDurationSeconds)
@@ -42,6 +42,6 @@ final class FocusSessionStoreTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         let store = UserDefaultsFocusSessionStore(defaults: defaults)
         try store.clear() // should not throw
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
     }
 }

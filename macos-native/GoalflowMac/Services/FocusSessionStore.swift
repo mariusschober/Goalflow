@@ -14,7 +14,7 @@ enum FocusSessionStoreError: Error, LocalizedError {
 }
 
 protocol FocusSessionStore: Sendable {
-    func load() -> ExecutionState?
+    func load() throws -> ExecutionState?
     func save(_ state: ExecutionState) throws
     func clear() throws
 }
@@ -32,13 +32,15 @@ final class UserDefaultsFocusSessionStore: FocusSessionStore, @unchecked Sendabl
         self.decoder = JSONDecoder()
         self.decoder.dateDecodingStrategy = .secondsSince1970
     }
-    func load() -> ExecutionState? {
+    func load() throws -> ExecutionState? {
         guard let data = defaults.data(forKey: key) else { return nil }
-        do { return try decoder.decode(ExecutionState.self, from: data) } catch { return nil }
+        do { return try decoder.decode(ExecutionState.self, from: data) }
+        catch { throw FocusSessionStoreError.corrupted("the durable mirror cannot be decoded") }
     }
     func save(_ state: ExecutionState) throws {
         let data = try encoder.encode(state)
         defaults.set(data, forKey: key)
+        guard defaults.synchronize() else { throw FocusSessionStoreError.writeFailed("the durable mirror did not flush") }
         guard let read = defaults.data(forKey: key) else { throw FocusSessionStoreError.writeFailed("missing after write") }
         if read != data { throw FocusSessionStoreError.readBackMismatch }
         let decoded = try decoder.decode(ExecutionState.self, from: read)
@@ -53,7 +55,7 @@ final class UserDefaultsFocusSessionStore: FocusSessionStore, @unchecked Sendabl
     }
     func clear() throws {
         defaults.removeObject(forKey: key)
-        if defaults.data(forKey: key) != nil { throw FocusSessionStoreError.writeFailed("remove failed") }
+        guard defaults.synchronize(), defaults.data(forKey: key) == nil else { throw FocusSessionStoreError.writeFailed("remove failed") }
     }
     func rawData() -> Data? { defaults.data(forKey: key) }
     func setRawData(_ data: Data) { defaults.set(data, forKey: key) }
@@ -83,12 +85,12 @@ final class FileFocusSessionStore: FocusSessionStore, @unchecked Sendable {
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         }
     }
-    func load() -> ExecutionState? {
+    func load() throws -> ExecutionState? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         do {
             let data = try Data(contentsOf: fileURL)
             return try decoder.decode(ExecutionState.self, from: data)
-        } catch { return nil }
+        } catch { throw FocusSessionStoreError.corrupted("the file replica cannot be decoded") }
     }
     func save(_ state: ExecutionState) throws {
         try ensureDirectory()
@@ -121,22 +123,31 @@ final class CompositeFocusSessionStore: FocusSessionStore, @unchecked Sendable {
         self.fileStore = fileStore
         self.walStore = walStore
     }
-    func load() -> ExecutionState? {
-        if let fromFile = fileStore.load() { return fromFile }
-        if let fromWAL = walStore.load() {
-            try? fileStore.save(fromWAL)
+    func load() throws -> ExecutionState? {
+        do {
+            if let fromFile = try fileStore.load() {
+                try walStore.save(fromFile)
+                return fromFile
+            }
+        } catch {
+            if let fromWAL = try walStore.load() {
+                try fileStore.save(fromWAL)
+                return fromWAL
+            }
+            throw error
+        }
+        if let fromWAL = try walStore.load() {
+            try fileStore.save(fromWAL)
             return fromWAL
         }
         return nil
     }
     func save(_ state: ExecutionState) throws {
         try fileStore.save(state)
-        do { try walStore.save(state) } catch {
-            print("[FocusSessionStore] WAL mirror failed (file authoritative): \(error)")
-        }
+        try walStore.save(state)
     }
     func clear() throws {
         try fileStore.clear()
-        try? walStore.clear()
+        try walStore.clear()
     }
 }

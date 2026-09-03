@@ -42,14 +42,14 @@ final class BreakSessionStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let file = tmp.appendingPathComponent("break.json")
         let store = BreakSessionStore(fileURL: file)
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
         let bs = BreakState(durationSeconds: 600, startedAt: Date(timeIntervalSince1970: 1_700_000_000), sourcePhase: .active, taskId: "t1")
         try store.save(bs)
-        let loaded = store.load()
+        let loaded = try store.load()
         XCTAssertEqual(loaded?.durationSeconds, 600)
         XCTAssertEqual(loaded?.taskId, "t1")
         try store.clear()
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
     }
     func test_open_ended_persists() throws {
         let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
@@ -59,8 +59,8 @@ final class BreakSessionStoreTests: XCTestCase {
         let store = BreakSessionStore(fileURL: file)
         let bs = BreakState(durationSeconds: nil, startedAt: Date(), sourcePhase: .paused, taskId: nil)
         try store.save(bs)
-        XCTAssertNil(store.load()?.durationSeconds)
-        XCTAssertTrue(store.load()?.isOpenEnded == true)
+        XCTAssertNil(try store.load()?.durationSeconds)
+        XCTAssertTrue(try store.load()?.isOpenEnded == true)
     }
 }
 

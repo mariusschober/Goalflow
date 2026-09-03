@@ -35,11 +35,97 @@ final class SyncEngine: @unchecked Sendable {
         }
     }
 
+    func bindingState(for userId: String) throws -> WorkspaceBindingState {
+        try metaStore.bindingState(for: userId)
+    }
+
+    func bindLocalWorkspace(to userId: String) async throws {
+        let transportUserId = (try await transport.currentUserId()).lowercased()
+        guard transportUserId == userId.lowercased() else { throw SyncError.accountMismatch }
+        try metaStore.bind(to: userId)
+    }
+
+    func resolveConflict(id: String, useLocal: Bool) throws {
+        var meta = try metaStore.load()
+        guard let conflictIndex = meta.conflicts.firstIndex(where: { $0.id == id }) else {
+            throw SyncError.validation("The selected synchronization conflict no longer exists.")
+        }
+        let conflict = meta.conflicts[conflictIndex]
+        let key = syncEntityKey(conflict.entityType, conflict.entityId)
+
+        if useLocal {
+            let current = meta.versions[key] ?? VersionPair(local: 0, server: conflict.serverVersion)
+            let historyMax = conflict.localHistory.compactMap {
+                ($0.value as? [String: Any])?["version"] as? Int
+            }.max() ?? current.local
+            let version = max(historyMax, current.local) + 1
+            meta.versions[key] = VersionPair(local: version, server: conflict.serverVersion)
+            meta.outbox.append(SyncMutation(
+                mutationId: UUID().uuidString.lowercased(),
+                deviceId: deviceIdStore.deviceId,
+                entityType: conflict.entityType,
+                entityId: conflict.entityId,
+                baseServerVersion: conflict.serverVersion,
+                version: version,
+                payload: conflict.localPayload,
+                updatedAt: ISO8601DateFormatter().string(from: Date()),
+                deletedAt: conflict.localDeletedAt,
+                dependsOnMutationId: nil,
+                resolvesConflictId: conflict.id,
+                attemptedAt: nil
+            ))
+            meta.conflicts[conflictIndex].status = "resolving-local"
+            try metaStore.save(meta)
+            return
+        }
+
+        var values = try storeBridge.loadValues()
+        let shouldDelete = conflict.serverMissing || conflict.serverDeletedAt?.isEmpty == false
+        if RECORD_LEVEL_STORES.contains(conflict.entityType) {
+            var records = values[conflict.entityType] as? [[String: Any]] ?? []
+            if shouldDelete {
+                records.removeAll { ($0["id"] as? String) == conflict.entityId }
+            } else {
+                guard var record = conflict.serverPayload.value as? [String: Any] else {
+                    throw SyncError.validation("The cloud conflict payload is invalid. Nothing was applied.")
+                }
+                if let payloadId = record["id"] as? String, payloadId != conflict.entityId {
+                    throw SyncError.validation("The cloud conflict identity does not match the selected entity. Nothing was applied.")
+                }
+                record["id"] = conflict.entityId
+                if let index = records.firstIndex(where: { ($0["id"] as? String) == conflict.entityId }) {
+                    records[index] = record
+                } else {
+                    records.append(record)
+                }
+            }
+            values[conflict.entityType] = records
+        } else if shouldDelete {
+            values.removeValue(forKey: conflict.entityType)
+        } else {
+            values[conflict.entityType] = conflict.serverPayload.value ?? NSNull()
+        }
+
+        var version = meta.versions[key] ?? VersionPair(local: 0, server: nil)
+        version.server = conflict.serverVersion
+        meta.versions[key] = version
+        meta.outbox.removeAll { $0.entityType == conflict.entityType && $0.entityId == conflict.entityId }
+        meta.conflicts.remove(at: conflictIndex)
+        let writes = try storeBridge.preparedWrites(values, stores: [conflict.entityType])
+        try metaStore.commitLocalValues(writes, nextMeta: meta)
+    }
+
     private func synchronizeOnce() async throws {
+        let accountUserId = (try await transport.currentUserId()).lowercased()
+        switch try metaStore.bindingState(for: accountUserId) {
+        case .unbound: throw SyncError.bindingRequired
+        case .differentAccount: throw SyncError.accountMismatch
+        case .bound: break
+        }
         // Ensure staged WAL flushed? For now assume meta already contains staged mutations via TaskStore staging
         // Push loop
         while true {
-            let meta = metaStore.load()
+            let meta = try metaStore.load()
             let batch = readyOutbox(meta, limit: 50)
             if batch.isEmpty { break }
             let wire = batch.map { m -> [String: Any] in
@@ -111,7 +197,7 @@ final class SyncEngine: @unchecked Sendable {
         // Pull loop
         var hasMore = true
         while hasMore {
-            let meta = metaStore.load()
+            let meta = try metaStore.load()
             let cursorBefore = meta.cursor
             let (data, resp) = try await transport.request(path: "/api/v1/sync/pull?cursor=\(cursorBefore)&limit=100", method: "GET", headers: [:], body: nil)
             guard (200..<300).contains(resp.statusCode) else { throw SyncError.validation("Sync pull failed HTTP \(resp.statusCode)") }
@@ -152,16 +238,20 @@ final class SyncEngine: @unchecked Sendable {
             if nextCursor != highest {
                 throw SyncError.validation("Remote synchronization cursor would skip or discard information. The cursor was not advanced.")
             }
-            let currentValues = storeBridge.loadValues()
+            let currentValues = try storeBridge.loadValues()
             let ownDeviceId = deviceIdStore.deviceId
             let now = ISO8601DateFormatter().string(from: Date())
             let res = try applyRemotePage(meta, currentValues: currentValues, records: records, nextCursor: nextCursor, ownDeviceId: ownDeviceId, now: now)
-            try storeBridge.saveValues(res.values)
-            try metaStore.save(res.meta)
+            let writes = try storeBridge.preparedWrites(res.values, stores: Set(res.changedStores))
+            if writes.isEmpty {
+                try metaStore.save(res.meta)
+            } else {
+                try metaStore.commitLocalValues(writes, nextMeta: res.meta)
+            }
             hasMore = hasMoreVal
         }
         // Mark successful
-        var finalMeta = metaStore.load()
+        var finalMeta = try metaStore.load()
         finalMeta.lastSuccessfulSync = ISO8601DateFormatter().string(from: Date())
         try metaStore.save(finalMeta)
     }

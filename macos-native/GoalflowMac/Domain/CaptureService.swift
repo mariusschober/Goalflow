@@ -36,7 +36,7 @@ final class LocalCaptureService: CaptureService, @unchecked Sendable {
         try assertSchedule(precision: precision, scheduledFor: scheduledFor, today: today, scheduledTime: scheduledTime)
 
         // Compute plannedOrder tail for that scheduledFor
-        let existing = taskStore.loadAll()
+        let existing = try taskStore.loadAll()
         let siblings = existing.filter { $0.scheduledFor == scheduledFor }
         let maxOrder = siblings.map(\.plannedOrder).max() ?? -1
         let plannedOrder = maxOrder + 1

@@ -32,7 +32,7 @@ final class LocalBreakdownTests: XCTestCase {
         XCTAssertEqual(res.children[0].plannedOrder, 0)
         XCTAssertEqual(res.children[1].plannedOrder, 1)
         // persisted
-        let all = store.loadAll()
+        let all = try store.loadAll()
         XCTAssertEqual(all.count, 3)
         XCTAssertTrue(all.contains { $0.id == "parent" && $0.status == .brokenDown })
         XCTAssertEqual(all.filter { $0.parentTaskId == "parent" }.count, 2)
@@ -71,7 +71,7 @@ final class LocalBreakdownTests: XCTestCase {
         let svc = LocalBreakdownService(taskStore: store, clock: clock, dailyPlanStore: planStore)
         let res = try svc.breakdown(taskId: "parent", children: [BreakdownChildInput(title: "Child A"), BreakdownChildInput(title: "Child B")])
         // Plan should be replaced with [ChildA, ChildB, other] (or sorted by comparator preserves parent order)
-        let newPlan = planStore.load(for: today)
+        let newPlan = try planStore.load(for: today)
         XCTAssertNotNil(newPlan)
         XCTAssertEqual(newPlan?.taskIds.count, 3)
         XCTAssertTrue(newPlan?.taskIds.contains(res.children[0].id) ?? false)

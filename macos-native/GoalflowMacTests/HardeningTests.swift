@@ -50,11 +50,12 @@ final class HardeningTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: UserDefaults(suiteName: UUID().uuidString)!)
         // Write 13 stores via bridge
+        let task = GoalflowTask(id: "1", title: "T", scheduledFor: "2026-09-01").toDictionary()
         let values: [String: Any] = [
-            "tasks": [["id":"1","title":"T"]],
-            "goals": [["id":"g1","name":"G"]],
+            "tasks": [task],
+            "goals": [["id":"g1","name":"G","color":"#4F46E5","createdAt":0]],
             "habits": [["id":"h1"]],
-            "truenorth": [["id":"tn1","vision":"V"]],
+            "truenorth": [["id":"tn1","vision":"V","isMoneyGoal":false,"sensoryDetails":"","planB":"","importance":1,"createdAt":0]],
             "daily_plans": [["id":"2026-09-01","localDate":"2026-09-01","confirmedAt":"now","taskIds":[]]],
             "stats": ["tasksCompleted":1],
             "progress": ["level":1],
@@ -66,12 +67,45 @@ final class HardeningTests: XCTestCase {
             "settings": ["theme":"dark"]
         ]
         try bridge.saveValues(values)
-        let loaded = bridge.loadValues()
+        let loaded = try bridge.loadValues()
         XCTAssertNotNil(loaded["tasks"])
         XCTAssertNotNil(loaded["habits"])
         XCTAssertNotNil(loaded["truenorth"])
         XCTAssertNotNil(loaded["stats"])
         XCTAssertNotNil(loaded["settings"])
+    }
+
+    func test_store_bridge_deletes_singleton_replica() throws {
+        let suite = "goalflow.bridge.delete.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: defaults)
+        try bridge.saveValues(["amalgam": "keep then delete"])
+        XCTAssertEqual(try bridge.loadValues()["amalgam"] as? String, "keep then delete")
+
+        let writes = try bridge.preparedWrites([:], stores: ["amalgam"])
+        let metaStore = SyncMetaStore(fileURL: tmp.appendingPathComponent("sync.json"), defaults: defaults)
+        try metaStore.commitLocalValues(writes, nextMeta: metaStore.load())
+
+        XCTAssertNil(try bridge.loadValues()["amalgam"])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("amalgam.json").path))
+        XCTAssertNil(defaults.data(forKey: "goalflow.amalgam.v1"))
+    }
+
+    func test_store_bridge_rejects_malformed_task_before_write() throws {
+        let suite = "goalflow.bridge.validation.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: defaults)
+
+        XCTAssertThrowsError(try bridge.preparedWrites(["tasks": [["id": "task-with-missing-fields"]]], stores: ["tasks"]))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tmp.appendingPathComponent("goalflow.tasks.json").path))
     }
 
     func test_sync_engine_lock_serializes() async throws {
@@ -90,6 +124,7 @@ final class HardeningTests: XCTestCase {
         }
         let bridge = FileSyncStoreBridge(baseDir: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString), defaults: UserDefaults(suiteName: UUID().uuidString)!)
         let engine = SyncEngine(metaStore: metaStore, deviceIdStore: device, transport: transport, storeBridge: bridge)
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
         // Two concurrent synchronizes should not crash due to lock
         async let a: () = engine.synchronize()
         async let b: () = engine.synchronize()

@@ -1,6 +1,6 @@
 import Foundation
 
-let SYNC_META_SCHEMA_VERSION = 2
+let SYNC_META_SCHEMA_VERSION = 3
 let RECORD_LEVEL_STORES: Set<String> = ["tasks","goals","habits","truenorth","daily_plans"]
 let LEGACY_MUTATION_NAMESPACE = "384d2580-c159-4f6a-97d4-f4e94809538b"
 
@@ -40,6 +40,7 @@ struct LocalConflict: Codable, Equatable, Sendable {
 
 struct SyncMeta: Codable, Equatable, Sendable {
     var schemaVersion: Int = SYNC_META_SCHEMA_VERSION
+    var accountUserId: String?
     var cursor: Int = 0
     var versions: [String: VersionPair] = [:]
     var outbox: [SyncMutation] = []
@@ -49,7 +50,17 @@ struct SyncMeta: Codable, Equatable, Sendable {
 
 func syncEntityKey(_ entityType: String, _ entityId: String) -> String { "\(entityType):\(entityId)" }
 
-func emptySyncMeta() -> SyncMeta { SyncMeta(schemaVersion: SYNC_META_SCHEMA_VERSION, cursor: 0, versions: [:], outbox: [], conflicts: [], lastSuccessfulSync: nil) }
+func emptySyncMeta() -> SyncMeta {
+    SyncMeta(
+        schemaVersion: SYNC_META_SCHEMA_VERSION,
+        accountUserId: nil,
+        cursor: 0,
+        versions: [:],
+        outbox: [],
+        conflicts: [],
+        lastSuccessfulSync: nil
+    )
+}
 
 // MARK: - AnyCodable
 

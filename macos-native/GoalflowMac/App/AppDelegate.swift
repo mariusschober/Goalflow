@@ -30,7 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         // A production build starts with the real local workspace. Demo data
         // is never seeded implicitly and cloud state is shown separately.
-        let provider = DemoCurrentTaskProvider(seedDemo: false)
+        let provider = DemoCurrentTaskProvider()
         let clock: any Clock = SystemClock()
         let dailyPlanStore = DailyPlanStore()
         let goalStore = GoalStore()

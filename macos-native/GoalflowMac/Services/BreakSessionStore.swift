@@ -27,12 +27,12 @@ final class BreakSessionStore: @unchecked Sendable {
         }
     }
 
-    func load() -> BreakState? {
+    func load() throws -> BreakState? {
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         do {
             let data = try Data(contentsOf: fileURL)
             return try decoder.decode(BreakState.self, from: data)
-        } catch { return nil }
+        } catch { throw FocusSessionStoreError.corrupted("the break-state file cannot be decoded") }
     }
 
     func save(_ state: BreakState) throws {

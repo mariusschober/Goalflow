@@ -72,7 +72,7 @@ final class LocalBreakdownService: @unchecked Sendable {
         guard !children.isEmpty else { throw SchedulingError(code: .invalidTitle, message: "Add at least one scheduled next action.") }
         guard children.count <= 50 else { throw SchedulingError(code: .invalidTitle, message: "At most 50 actions.") }
         let today = makeTodayString(from: clock.now())
-        var tasks = taskStore.loadAll()
+        var tasks = try taskStore.loadAll()
         guard let parentIdx = tasks.firstIndex(where: { $0.id == taskId }) else { throw TaskStoreError.notFound }
         guard tasks[parentIdx].isOpen else { throw TaskStoreError.notOpen }
         let parent = tasks[parentIdx]
@@ -84,7 +84,6 @@ final class LocalBreakdownService: @unchecked Sendable {
         }
         // Order: tail per today scheduledFor
         let siblingsToday = tasks.filter { $0.scheduledFor == today }
-        var maxOrder = siblingsToday.map(\.plannedOrder).max() ?? -1
         // If we will preserve plan, we need parent order
         let parentOrder = parent.plannedOrder
         var created: [GoalflowTask] = []
@@ -122,11 +121,15 @@ final class LocalBreakdownService: @unchecked Sendable {
         var dict: [String: Any] = [:]
         if let data = closed.extraJson.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { dict = obj }
         dict["completedAt"] = nowISO
-        if let d = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]), let s = String(data: d, encoding: .utf8) { closed.extraJson = s }
+        let extraData = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
+        guard let extraJSON = String(data: extraData, encoding: .utf8) else {
+            throw SyncError.validation("The breakdown metadata could not be encoded. Nothing was applied.")
+        }
+        closed.extraJson = extraJSON
 
         // Plan preservation: check previous queue == plan taskIds
         let previousQueue = buildTodayQueue(tasks: tasks, today: today)
-        let previousPlan = dailyPlanStore.load(for: today)
+        let previousPlan = try dailyPlanStore.load(for: today)
         var newPlanIds: [String]? = nil
         if let plan = previousPlan {
             let plannedIds = previousQueue.map(\.id)
@@ -156,14 +159,14 @@ final class LocalBreakdownService: @unchecked Sendable {
         // Update or delete daily plan
         if let ids = newPlanIds {
             let newPlan = DailyPlan(localDate: today, confirmedAt: nowISO, taskIds: ids)
-            try? dailyPlanStore.save(newPlan)
-        } else if dailyPlanStore.load(for: today) != nil && getPlanningGate(tasks: tasks, today: today, dailyPlan: previousPlan) != .ready(queue: buildTodayQueue(tasks: tasks, today: today)) {
+            try dailyPlanStore.save(newPlan)
+        } else if try dailyPlanStore.load(for: today) != nil && getPlanningGate(tasks: tasks, today: today, dailyPlan: previousPlan) != .ready(queue: buildTodayQueue(tasks: tasks, today: today)) {
             // If previous plan existed but now not matching, delete (or keep? Android deletes)
             // For simplicity, if plan existed and we didn't preserve, clear it
             // Check if gate would be not ready, then clear
             // We clear by saving empty? Instead clear file entry
-            var all = dailyPlanStore.loadAll().filter { $0.localDate != today }
-            try? dailyPlanStore.saveAll(all)
+            let all = try dailyPlanStore.loadAll().filter { $0.localDate != today }
+            try dailyPlanStore.saveAll(all)
         }
 
         return (closed, created)

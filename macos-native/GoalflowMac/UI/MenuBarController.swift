@@ -136,7 +136,7 @@ final class MenuBarController: NSObject {
             let img = NSImage(systemSymbolName: "calendar.badge.exclamationmark", accessibilityDescription: nil); img?.isTemplate = true; button.image = img
             button.toolTip = "Daily planning required"; button.contentTintColor = .systemOrange; return
         }
-        let task = viewModel.task ?? taskProvider?.fetchCurrent()
+        let task = viewModel.task
         let isPaused = viewModel?.isPaused ?? false; let isOvertime = viewModel?.isOvertime ?? false; let isActive = viewModel?.isActive ?? false
         let display: String
         if let t = task {

@@ -86,24 +86,26 @@ final class TaskCompletionPersistenceTests: XCTestCase {
         let file = tmp.appendingPathComponent("tasks.json")
         let store = LocalTaskStore(fileURL: file, defaults: defaults)
         let today = "2026-08-30"
-        store.seedIfEmpty(today: today)
-        let before = store.loadAll()
+        try store.seedIfEmpty(today: today)
+        let before = try store.loadAll()
         XCTAssertEqual(before.filter(\.isOpen).count, 2)
-        let completed = try store.completeTask(id: "demo-1", actualDurationMinutes: 5, flowState: nil)
+        let firstId = try XCTUnwrap(before.first?.id)
+        let secondId = try XCTUnwrap(before.dropFirst().first?.id)
+        let completed = try store.completeTask(id: firstId, actualDurationMinutes: 5, flowState: nil)
         XCTAssertEqual(completed.status, .completed)
         XCTAssertEqual(completed.version, 2)
         XCTAssertNil(completed.flowState)
-        let after = store.loadAll()
-        XCTAssertEqual(after.first(where: { $0.id == "demo-1" })?.status, .completed)
+        let after = try store.loadAll()
+        XCTAssertEqual(after.first(where: { $0.id == firstId })?.status, .completed)
         let queue = buildTodayQueue(tasks: after, today: today)
-        XCTAssertEqual(queue.first?.id, "demo-2")
+        XCTAssertEqual(queue.first?.id, secondId)
         var tasks = after
-        guard let idx = tasks.firstIndex(where: { $0.id == "demo-1" }) else { XCTFail(); return }
+        guard let idx = tasks.firstIndex(where: { $0.id == firstId }) else { XCTFail(); return }
         tasks[idx] = tasks[idx].withFlowState(FlowState.good)
         try store.saveAll(tasks)
-        let final = store.loadAll()
-        XCTAssertEqual(final.first(where: { $0.id == "demo-1" })?.flowState, FlowState.good)
-        XCTAssertEqual(final.first(where: { $0.id == "demo-1" })?.version, 3)
+        let final = try store.loadAll()
+        XCTAssertEqual(final.first(where: { $0.id == firstId })?.flowState, FlowState.good)
+        XCTAssertEqual(final.first(where: { $0.id == firstId })?.version, 3)
     }
     func test_no_resurrection_after_reload() throws {
         let suite = "test.nores.\(UUID().uuidString)"
@@ -115,14 +117,14 @@ final class TaskCompletionPersistenceTests: XCTestCase {
         let file = tmp.appendingPathComponent("tasks.json")
         let store = LocalTaskStore(fileURL: file, defaults: defaults)
         let today = "2026-08-30"
-        store.seedIfEmpty(today: today)
-        _ = try store.completeTask(id: "demo-1", actualDurationMinutes: 3, flowState: nil)
-        _ = try store.completeTask(id: "demo-2", actualDurationMinutes: 3, flowState: nil)
-        let after = store.loadAll()
+        try store.seedIfEmpty(today: today)
+        let seeded = try store.loadAll()
+        for task in seeded { _ = try store.completeTask(id: task.id, actualDurationMinutes: 3, flowState: nil) }
+        let after = try store.loadAll()
         let queue = buildTodayQueue(tasks: after, today: today)
         XCTAssertTrue(queue.isEmpty)
         let store2 = LocalTaskStore(fileURL: file, defaults: defaults)
-        let after2 = store2.loadAll()
+        let after2 = try store2.loadAll()
         XCTAssertEqual(after2.filter(\.isOpen).count, 0)
         XCTAssertEqual(after2.filter { $0.status == .completed }.count, 2)
     }
@@ -136,8 +138,9 @@ final class TaskCompletionPersistenceTests: XCTestCase {
         let file = tmp.appendingPathComponent("tasks.json")
         let store = LocalTaskStore(fileURL: file, defaults: defaults)
         let today = "2026-08-30"
-        store.seedIfEmpty(today: today)
-        _ = try store.completeTask(id: "demo-1", actualDurationMinutes: 2, flowState: nil)
-        XCTAssertThrowsError(try store.completeTask(id: "demo-1", actualDurationMinutes: 2, flowState: nil))
+        try store.seedIfEmpty(today: today)
+        let firstId = try XCTUnwrap(store.loadAll().first?.id)
+        _ = try store.completeTask(id: firstId, actualDurationMinutes: 2, flowState: nil)
+        XCTAssertThrowsError(try store.completeTask(id: firstId, actualDurationMinutes: 2, flowState: nil))
     }
 }

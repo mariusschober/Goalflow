@@ -21,31 +21,31 @@ final class SyncBackedCurrentTaskProvider: CurrentTaskProvider, @unchecked Senda
 
     private func todayString() -> String { makeTodayString(from: clock.now()) }
 
-    func fetchGate() -> PlanningGate {
+    func fetchGate() throws -> PlanningGate {
         let today = todayString()
-        let tasks = taskStore.loadAll()
-        let plan = dailyPlanStore.load(for: today)
+        let tasks = try taskStore.loadAll()
+        let plan = try dailyPlanStore.load(for: today)
         return getPlanningGate(tasks: tasks, today: today, dailyPlan: plan)
     }
 
-    func fetchCurrent() -> GoalflowTask? {
-        switch fetchGate() {
+    func fetchCurrent() throws -> GoalflowTask? {
+        switch try fetchGate() {
         case .ready(let queue): return queue.first
         default: return nil
         }
     }
 
-    func allDemoTasks(today: String) -> [GoalflowTask] {
+    func allDemoTasks(today: String) throws -> [GoalflowTask] {
         // Keep compatibility: return queue for today regardless of gate
-        buildTodayQueue(tasks: taskStore.loadAll(), today: today)
+        try buildTodayQueue(tasks: taskStore.loadAll(), today: today)
     }
 
     // Read-only context
-    func allGoals() -> [Goal] { goalStore.loadAll() }
-    func allTrueNorth() -> [TrueNorthGoal] { trueNorthStore.loadAll() }
-    func amalgam() -> String? { amalgamStore.load() }
-    func goal(for id: String?) -> Goal? {
+    func allGoals() throws -> [Goal] { try goalStore.loadAll() }
+    func allTrueNorth() throws -> [TrueNorthGoal] { try trueNorthStore.loadAll() }
+    func amalgam() throws -> String? { try amalgamStore.load() }
+    func goal(for id: String?) throws -> Goal? {
         guard let id else { return nil }
-        return goalStore.loadAll().first { $0.id == id }
+        return try goalStore.loadAll().first { $0.id == id }
     }
 }

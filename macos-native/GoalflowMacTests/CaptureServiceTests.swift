@@ -26,10 +26,10 @@ final class CaptureServiceTests: XCTestCase {
         XCTAssertEqual(task.scheduledFor, "2026-09-01")
         XCTAssertEqual(task.schedulePrecision, .day)
         XCTAssertEqual(task.version, 1)
-        let all = store.loadAll()
+        let all = try store.loadAll()
         XCTAssertEqual(all.count, 1)
         XCTAssertEqual(all.first?.id, task.id)
-        let all2 = LocalTaskStore(fileURL: file, defaults: defaults).loadAll()
+        let all2 = try LocalTaskStore(fileURL: file, defaults: defaults).loadAll()
         XCTAssertEqual(all2.count, 1)
     }
 
@@ -95,5 +95,4 @@ final class CaptureServiceTests: XCTestCase {
         XCTAssertThrowsError(try svc.createTask(from: p, notes: nil, scheduledFor: "2026-09-01", precision: .day, scheduledTime: "25:00", intent: .add))
     }
 }
-
 

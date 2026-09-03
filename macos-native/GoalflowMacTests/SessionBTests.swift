@@ -136,14 +136,14 @@ final class FileFocusSessionStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let file = tmp.appendingPathComponent("execution.json")
         let store = FileFocusSessionStore(fileURL: file)
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
         let s = ExecutionState(taskId: "t", phase: .active, startedAt: Date(timeIntervalSince1970: 1_700_000_000), plannedDurationSeconds: 900)
         try store.save(s)
-        let loaded = store.load()
+        let loaded = try store.load()
         XCTAssertEqual(loaded?.taskId, s.taskId)
         XCTAssertEqual(loaded?.plannedDurationSeconds, s.plannedDurationSeconds)
         try store.clear()
-        XCTAssertNil(store.load())
+        XCTAssertNil(try store.load())
     }
 
     func test_composite_migrates_from_wal() throws {
@@ -158,13 +158,13 @@ final class FileFocusSessionStoreTests: XCTestCase {
         let fileStore = FileFocusSessionStore(fileURL: file)
         let s = ExecutionState(taskId: "migrate", phase: .active, startedAt: Date(), plannedDurationSeconds: 600)
         try wal.save(s)
-        XCTAssertNil(fileStore.load())
+        XCTAssertNil(try fileStore.load())
         let composite = CompositeFocusSessionStore(fileStore: fileStore, walStore: wal)
-        let loaded = composite.load()
+        let loaded = try composite.load()
         XCTAssertEqual(loaded?.taskId, "migrate")
-        XCTAssertNotNil(fileStore.load())
+        XCTAssertNotNil(try fileStore.load())
         // second load prefers file
-        let second = composite.load()
+        let second = try composite.load()
         XCTAssertEqual(second?.taskId, "migrate")
     }
 
@@ -181,7 +181,7 @@ final class FileFocusSessionStoreTests: XCTestCase {
         let composite = CompositeFocusSessionStore(fileStore: fileStore, walStore: wal)
         let s = ExecutionState(taskId: "both", phase: .paused, startedAt: Date(), plannedDurationSeconds: 900, accumulatedPauseSeconds: 30, lastPausedAt: Date())
         try composite.save(s)
-        XCTAssertEqual(fileStore.load()?.taskId, "both")
+        XCTAssertEqual(try fileStore.load()?.taskId, "both")
         XCTAssertEqual(wal.load()?.taskId, "both")
     }
 }

@@ -19,9 +19,12 @@ final class StableJsonTests: XCTestCase {
 }
 
 final class SyncMetaTests: XCTestCase {
+    private enum InjectedFailure: Error { case simulatedProcessDeath }
+
     func test_empty_meta() throws {
         let m = emptySyncMeta()
-        XCTAssertEqual(m.schemaVersion, 2)
+        XCTAssertEqual(m.schemaVersion, 3)
+        XCTAssertNil(m.accountUserId)
         XCTAssertEqual(m.cursor, 0)
         XCTAssertTrue(m.outbox.isEmpty)
     }
@@ -37,6 +40,156 @@ final class SyncMetaTests: XCTestCase {
         m.schemaVersion = 99
         let store = SyncMetaStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString), defaults: UserDefaults(suiteName: UUID().uuidString)!)
         XCTAssertThrowsError(try store.normalizeSyncMeta(m))
+    }
+
+    func test_schema_two_migrates_without_discarding_outbox() throws {
+        let suite = "goalflow.sync.migration.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        var legacy = emptySyncMeta()
+        legacy.schemaVersion = 2
+        legacy.outbox = [SyncMutation(
+            mutationId: "pending-mutation",
+            deviceId: "device",
+            entityType: "tasks",
+            entityId: "durable-task-id",
+            baseServerVersion: nil,
+            version: 1,
+            payload: AnyCodable(["id": "durable-task-id"]),
+            updatedAt: "2026-09-03T00:00:00Z",
+            deletedAt: nil,
+            dependsOnMutationId: nil,
+            resolvesConflictId: nil,
+            attemptedAt: nil
+        )]
+        defaults.set(try JSONEncoder().encode(legacy), forKey: "goalflow.sync.meta.v2")
+        let store = SyncMetaStore(fileURL: file, defaults: defaults)
+        let migrated = try store.load()
+        XCTAssertEqual(migrated.schemaVersion, 3)
+        XCTAssertEqual(migrated.outbox.map(\.mutationId), ["pending-mutation"])
+        XCTAssertNil(migrated.accountUserId)
+    }
+
+    func test_corrupt_meta_never_becomes_an_empty_outbox() throws {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json")
+        try Data("damaged".utf8).write(to: file, options: [.atomic])
+        let store = SyncMetaStore(
+            fileURL: file,
+            defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        )
+        XCTAssertThrowsError(try store.load())
+    }
+
+    func test_workspace_binding_is_immutable() throws {
+        let store = SyncMetaStore(
+            fileURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".json"),
+            defaults: try XCTUnwrap(UserDefaults(suiteName: UUID().uuidString))
+        )
+        let first = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        let second = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        XCTAssertEqual(try store.bindingState(for: first), .unbound)
+        try store.bind(to: first)
+        XCTAssertEqual(try store.bindingState(for: first), .bound)
+        XCTAssertEqual(try store.bindingState(for: second), .differentAccount)
+        XCTAssertThrowsError(try store.bind(to: second))
+        XCTAssertEqual(try store.load().accountUserId, first)
+    }
+
+    func test_local_task_and_outbox_commit_together() throws {
+        let suite = "goalflow.sync.atomic.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let taskStore = LocalTaskStore(
+            fileURL: directory.appendingPathComponent("goalflow.tasks.json"),
+            defaults: defaults,
+            syncMetaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults)
+        )
+        let task = GoalflowTask(id: "durable-task-id", title: "Persist me", scheduledFor: "2026-09-03")
+
+        try taskStore.saveAll([task])
+
+        XCTAssertEqual(try taskStore.loadAll().map(\.id), [task.id])
+        let meta = try metaStore.load()
+        XCTAssertEqual(meta.outbox.count, 1)
+        XCTAssertEqual(meta.outbox.first?.entityId, task.id)
+        XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(task.toDictionary()))
+    }
+
+    func test_pending_local_commit_recovers_after_interrupted_write() throws {
+        let suite = "goalflow.sync.recovery.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let syncFile = directory.appendingPathComponent("sync.json")
+        let interruptedMetaStore = SyncMetaStore(fileURL: syncFile, defaults: defaults) { stage in
+            if stage == .localReplicaWritten(0) { throw InjectedFailure.simulatedProcessDeath }
+        }
+        let interruptedTaskStore = LocalTaskStore(
+            fileURL: directory.appendingPathComponent("goalflow.tasks.json"),
+            defaults: defaults,
+            syncMetaStore: interruptedMetaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults)
+        )
+        let task = GoalflowTask(id: "recoverable-task-id", title: "Recover me", scheduledFor: "2026-09-03")
+
+        XCTAssertThrowsError(try interruptedTaskStore.saveAll([task]))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: syncFile.appendingPathExtension("local-commit.json").path))
+
+        let recoveredMetaStore = SyncMetaStore(fileURL: syncFile, defaults: defaults)
+        let recoveredTaskStore = LocalTaskStore(
+            fileURL: directory.appendingPathComponent("goalflow.tasks.json"),
+            defaults: defaults,
+            syncMetaStore: recoveredMetaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults)
+        )
+        XCTAssertEqual(try recoveredTaskStore.loadAll().map(\.id), [task.id])
+        XCTAssertEqual(try recoveredMetaStore.load().outbox.map(\.entityId), [task.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: syncFile.appendingPathExtension("local-commit.json").path))
+    }
+
+    func test_damaged_local_file_repairs_from_valid_mirror() throws {
+        let suite = "goalflow.sync.local-repair.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let taskFile = directory.appendingPathComponent("goalflow.tasks.json")
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let taskStore = LocalTaskStore(fileURL: taskFile, defaults: defaults, syncMetaStore: metaStore)
+        let task = GoalflowTask(id: "repair-task-id", title: "Repair me", scheduledFor: "2026-09-03")
+        try taskStore.saveAll([task])
+        try Data("damaged".utf8).write(to: taskFile, options: [.atomic])
+
+        XCTAssertEqual(try taskStore.loadAll().map(\.id), [task.id])
+        XCTAssertEqual(try Data(contentsOf: taskFile), defaults.data(forKey: "goalflow.demo.tasks.v1"))
+    }
+
+    func test_two_damaged_local_replicas_never_become_empty() throws {
+        let suite = "goalflow.sync.local-corrupt.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let taskFile = directory.appendingPathComponent("goalflow.tasks.json")
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let taskStore = LocalTaskStore(fileURL: taskFile, defaults: defaults, syncMetaStore: metaStore)
+        try taskStore.saveAll([GoalflowTask(id: "preserved-task-id", title: "Preserve me", scheduledFor: "2026-09-03")])
+        try Data("damaged-file".utf8).write(to: taskFile, options: [.atomic])
+        defaults.set(Data("damaged-mirror".utf8), forKey: "goalflow.demo.tasks.v1")
+
+        XCTAssertThrowsError(try taskStore.loadAll())
+        XCTAssertEqual(try metaStore.load().outbox.map(\.entityId), ["preserved-task-id"])
+        XCTAssertEqual(try Data(contentsOf: taskFile), Data("damaged-file".utf8))
     }
 }
 

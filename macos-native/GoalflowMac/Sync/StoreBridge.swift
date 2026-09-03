@@ -1,13 +1,15 @@
 import Foundation
 
 protocol SyncStoreBridge: Sendable {
-    func loadValues() -> [String: Any]
+    func loadValues() throws -> [String: Any]
+    func preparedWrites(_ values: [String: Any], stores: Set<String>) throws -> [DurableLocalWrite]
     func saveValues(_ values: [String: Any]) throws
 }
 
 final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
     private let baseDir: URL
     private let defaults: UserDefaults
+    private let syncMetaStore: SyncMetaStore
     init(baseDir: URL? = nil, defaults: UserDefaults = .standard) {
         if let d = baseDir { self.baseDir = d }
         else {
@@ -15,87 +17,99 @@ final class FileSyncStoreBridge: SyncStoreBridge, @unchecked Sendable {
             self.baseDir = base.appendingPathComponent("com.mariusschober.GoalflowMac", isDirectory: true)
         }
         self.defaults = defaults
+        self.syncMetaStore = SyncMetaStore(fileURL: self.baseDir.appendingPathComponent("sync.json"), defaults: defaults)
     }
 
-    func loadValues() -> [String: Any] {
+    func loadValues() throws -> [String: Any] {
         var dict: [String: Any] = [:]
-        let mapping: [(file: String, store: String, isArray: Bool)] = [
-            ("goalflow.tasks.json", "tasks", true),
-            ("dailyPlans.json", "daily_plans", true),
-            ("goals.json", "goals", true),
-            ("habits.json", "habits", true),
-            ("truenorth.json", "truenorth", true),
-            ("stats.json", "stats", false),
-            ("progress.json", "progress", false),
-            ("hashtags.json", "hashtags", false),
-            ("accountability.json", "accountability", false),
-            ("amalgam.json", "amalgam", false),
-            ("tracking.json", "tracking", false),
-            ("circadian.json", "circadian", false),
-            ("settings.json", "settings", false)
-        ]
-        for m in mapping {
-            let url = baseDir.appendingPathComponent(m.file)
-            guard let data = try? Data(contentsOf: url),
-                  let val = try? JSONSerialization.jsonObject(with: data) else { continue }
-            dict[m.store] = val
+        for mapping in Self.mappings {
+            let url = baseDir.appendingPathComponent(mapping.file)
+            if let value = try syncMetaStore.loadLocalValue(fileURL: url, walKey: mapping.walKey, decode: {
+                try JSONSerialization.jsonObject(with: $0, options: [.fragmentsAllowed])
+            }) {
+                dict[mapping.store] = value
+            }
         }
         return dict
     }
 
-    func saveValues(_ values: [String : Any]) throws {
-        try FileManager.default.createDirectory(at: baseDir, withIntermediateDirectories: true)
-        for (store, value) in values {
-            let fileName: String
+    func preparedWrites(_ values: [String: Any], stores: Set<String>) throws -> [DurableLocalWrite] {
+        var writes: [DurableLocalWrite] = []
+        for store in stores {
+            guard let mapping = Self.mappings.first(where: { $0.store == store }) else {
+                throw SyncError.validation("The server returned an unsupported local store. Nothing was applied.")
+            }
+            guard let value = values[store] else {
+                writes.append(DurableLocalWrite(fileName: mapping.file, walKey: mapping.walKey, data: nil))
+                continue
+            }
+            let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
+            try validateDomainData(data, store: store)
+            writes.append(DurableLocalWrite(fileName: mapping.file, walKey: mapping.walKey, data: data))
+        }
+        return writes.sorted { $0.fileName < $1.fileName }
+    }
+
+    func saveValues(_ values: [String: Any]) throws {
+        let writes = try preparedWrites(values, stores: Set(values.keys))
+        if writes.isEmpty { return }
+        try syncMetaStore.commitLocalValues(writes, nextMeta: syncMetaStore.load())
+    }
+
+    private func validateDomainData(_ data: Data, store: String) throws {
+        if RECORD_LEVEL_STORES.contains(store) {
+            guard let records = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+                  records.allSatisfy({ ($0["id"] as? String)?.isEmpty == false }),
+                  Set(records.compactMap { $0["id"] as? String }).count == records.count else {
+                throw SyncError.validation("The server returned invalid or duplicate durable identities. Nothing was applied.")
+            }
+        }
+        do {
             switch store {
-            case "tasks": fileName = "goalflow.tasks.json"
-            case "daily_plans": fileName = "dailyPlans.json"
-            case "goals": fileName = "goals.json"
-            case "habits": fileName = "habits.json"
-            case "truenorth": fileName = "truenorth.json"
-            case "stats": fileName = "stats.json"
-            case "progress": fileName = "progress.json"
-            case "hashtags": fileName = "hashtags.json"
-            case "accountability": fileName = "accountability.json"
-            case "amalgam": fileName = "amalgam.json"
-            case "tracking": fileName = "tracking.json"
-            case "circadian": fileName = "circadian.json"
-            case "settings": fileName = "settings.json"
-            default: continue
+            case "tasks":
+                let tasks = try JSONDecoder().decode([GoalflowTask].self, from: data)
+                guard tasks.allSatisfy({ !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.version > 0 }) else {
+                    throw SyncError.validation("The server returned invalid task data. Nothing was applied.")
+                }
+            case "goals":
+                let goals = try JSONDecoder().decode([Goal].self, from: data)
+                guard goals.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                    throw SyncError.validation("The server returned invalid goal data. Nothing was applied.")
+                }
+            case "truenorth":
+                let goals = try JSONDecoder().decode([TrueNorthGoal].self, from: data)
+                guard goals.allSatisfy({ !$0.vision.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) else {
+                    throw SyncError.validation("The server returned invalid True North data. Nothing was applied.")
+                }
+            case "daily_plans":
+                let plans = try JSONDecoder().decode([DailyPlan].self, from: data)
+                guard Set(plans.map(\.localDate)).count == plans.count,
+                      plans.allSatisfy({ isRealDay($0.localDate) && Set($0.taskIds).count == $0.taskIds.count }) else {
+                    throw SyncError.validation("The server returned invalid daily plan data. Nothing was applied.")
+                }
+            default:
+                break
             }
-            let url = baseDir.appendingPathComponent(fileName)
-            let data: Data
-            if let arr = value as? [[String: Any]] {
-                data = try JSONSerialization.data(withJSONObject: arr, options: [.sortedKeys])
-            } else if let dict = value as? [String: Any] {
-                data = try JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys])
-            } else if let str = value as? String {
-                data = try JSONEncoder().encode(str)
-            } else if let num = value as? NSNumber {
-                data = try JSONEncoder().encode(num.stringValue)
-            } else {
-                data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
-            }
-            try data.write(to: url, options: [.atomic])
-            if let read = try? Data(contentsOf: url), read != data { throw SyncError.writeFailed("read-back mismatch \(store)") }
-            let walKey: String
-            switch store {
-            case "tasks": walKey = "goalflow.demo.tasks.v1"
-            case "daily_plans": walKey = "goalflow.daily_plans.v1"
-            case "goals": walKey = "goalflow.goals.v1"
-            case "habits": walKey = "goalflow.habits.v1"
-            case "truenorth": walKey = "goalflow.truenorth.v1"
-            case "stats": walKey = "goalflow.stats.v1"
-            case "progress": walKey = "goalflow.progress.v1"
-            case "hashtags": walKey = "goalflow.hashtags.v1"
-            case "accountability": walKey = "goalflow.accountability.v1"
-            case "amalgam": walKey = "goalflow.amalgam.v1"
-            case "tracking": walKey = "goalflow.tracking.v1"
-            case "circadian": walKey = "goalflow.circadian.v1"
-            case "settings": walKey = "goalflow.settings.v1"
-            default: walKey = "goalflow.\(store).v1"
-            }
-            defaults.set(data, forKey: walKey)
+        } catch let error as SyncError {
+            throw error
+        } catch {
+            throw SyncError.validation("The server returned malformed \(store) data. Nothing was applied.")
         }
     }
+
+    private static let mappings: [(file: String, store: String, walKey: String)] = [
+        ("goalflow.tasks.json", "tasks", "goalflow.demo.tasks.v1"),
+        ("dailyPlans.json", "daily_plans", "goalflow.daily_plans.v1"),
+        ("goals.json", "goals", "goalflow.goals.v1"),
+        ("habits.json", "habits", "goalflow.habits.v1"),
+        ("truenorth.json", "truenorth", "goalflow.truenorth.v1"),
+        ("stats.json", "stats", "goalflow.stats.v1"),
+        ("progress.json", "progress", "goalflow.progress.v1"),
+        ("hashtags.json", "hashtags", "goalflow.hashtags.v1"),
+        ("accountability.json", "accountability", "goalflow.accountability.v1"),
+        ("amalgam.json", "amalgam", "goalflow.amalgam.v1"),
+        ("tracking.json", "tracking", "goalflow.tracking.v1"),
+        ("circadian.json", "circadian", "goalflow.circadian.v1"),
+        ("settings.json", "settings", "goalflow.settings.v1")
+    ]
 }
