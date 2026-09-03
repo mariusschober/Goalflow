@@ -10,6 +10,10 @@ import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import com.mariusschober.goalflow.nativeapp.domain.GoalflowTask
 import com.mariusschober.goalflow.nativeapp.domain.SchedulePrecision
 import kotlinx.coroutines.test.runTest
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.After
@@ -17,13 +21,17 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.io.File
 import java.net.SocketTimeoutException
+import java.net.URI
 import java.time.Instant
 import java.time.LocalDate
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 class NativeSyncEngineTest {
@@ -397,6 +405,112 @@ class NativeSyncEngineTest {
         assertEquals(conflict.id, submitted?.getString("conflictId"))
         assertEquals(conflict.mutationId, submitted?.getString("mutationId"))
         assertEquals(conflict, database.syncConflictDao().get(conflict.id))
+    }
+
+    @Test
+    fun hostedBrowserRecordConvergesThroughProductionTransport() = runTest {
+        assumeTrue(
+            "The live transport proof runs only inside the explicit staging cross-client gate.",
+            System.getenv("GOALFLOW_HOSTED_TEST_CONFIRM") == "staging" &&
+                System.getenv("GOALFLOW_CROSS_CLIENT_PHASE") == "android"
+        )
+        val state = JSONObject(File(hostedEnvironment("GOALFLOW_CROSS_CLIENT_STATE_FILE")).readText())
+        assertEquals("The cross-client handoff schema is invalid.", 1, state.getInt("schemaVersion"))
+        val taskId = state.getString("taskId")
+        val browserTitle = state.getString("browserTitle")
+        val androidTitle = state.getString("androidTitle")
+        val appOrigin = hostedOrigin("GOALFLOW_STAGING_APP_ORIGIN")
+        val supabaseUrl = hostedOrigin("GOALFLOW_STAGING_SUPABASE_URL")
+        val publishableKey = hostedEnvironment("GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY")
+        assertTrue("A server credential must never enter the native gate.", publishableKey.startsWith("sb_publishable_"))
+        assertEquals(appOrigin, NativeConfig.apiOrigin)
+        assertEquals(supabaseUrl, NativeConfig.supabaseUrl)
+        assertEquals(publishableKey, NativeConfig.supabasePublicKey)
+
+        val session = hostedPasswordSession(supabaseUrl, publishableKey)
+        val expectedUserId = hostedEnvironment("GOALFLOW_STAGING_USER_A_ID")
+        assertEquals(expectedUserId, session.userId)
+        val engine = NativeSyncEngine(
+            repository = repository,
+            sessionProvider = NativeSessionProvider { session }
+        )
+
+        val initialResult = engine.synchronize()
+        assertEquals(SyncResult.Synced(conflicts = 0), initialResult)
+        val browserTask = repository.taskSnapshot(taskId)
+            ?: throw AssertionError("The production Android transport did not pull the browser task.")
+        assertEquals(browserTitle, browserTask.title)
+
+        repository.updateTask(
+            id = browserTask.id,
+            title = androidTitle,
+            notes = browserTask.notes,
+            schedulePrecision = browserTask.schedulePrecision,
+            scheduledFor = browserTask.scheduledFor,
+            scheduledTime = browserTask.scheduledTime,
+            isFrog = browserTask.isFrog,
+            goalId = browserTask.goalId
+        )
+        val pending = repository.pendingSyncMutations().single {
+            it.entityType == "tasks" && it.entityId == taskId
+        }
+        assertEquals(androidTitle, JSONObject(pending.payload).getString("title"))
+
+        val editResult = engine.synchronize()
+        assertEquals(SyncResult.Synced(conflicts = 0), editResult)
+        assertTrue(repository.pendingSyncMutations().none { it.entityId == taskId })
+        assertEquals(androidTitle, repository.taskSnapshot(taskId)?.title)
+    }
+
+    private fun hostedPasswordSession(supabaseUrl: String, publishableKey: String): NativeSession {
+        val client = OkHttpClient.Builder()
+            .connectTimeout(10, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            .writeTimeout(20, TimeUnit.SECONDS)
+            .callTimeout(25, TimeUnit.SECONDS)
+            .build()
+        val body = JSONObject()
+            .put("email", hostedEnvironment("GOALFLOW_STAGING_USER_A_EMAIL"))
+            .put("password", hostedEnvironment("GOALFLOW_STAGING_USER_A_PASSWORD"))
+            .toString()
+            .toRequestBody("application/json".toMediaType())
+        val request = Request.Builder()
+            .url("$supabaseUrl/auth/v1/token?grant_type=password")
+            .header("apikey", publishableKey)
+            .header("Authorization", "Bearer $publishableKey")
+            .header("Accept", "application/json")
+            .post(body)
+            .build()
+        val responseBody = client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                throw AssertionError("Staging password authentication failed with HTTP ${response.code}.")
+            }
+            readNativeSyncResponse(response.body, maximumBytes = 1024 * 1024)
+        }
+        val response = JSONObject(responseBody)
+        val userId = response.getJSONObject("user").getString("id")
+        val expiresInSeconds = response.getLong("expires_in")
+        assertTrue("The staging session has an unsafe lifetime.", expiresInSeconds in 60L..86_400L)
+        return NativeSession(
+            accessToken = response.getString("access_token"),
+            refreshToken = response.getString("refresh_token"),
+            expiresAtMillis = System.currentTimeMillis() + expiresInSeconds * 1_000L,
+            userId = userId
+        )
+    }
+
+    private fun hostedEnvironment(name: String): String =
+        System.getenv(name)?.trim()?.takeIf(String::isNotEmpty)
+            ?: throw AssertionError("Missing required hosted staging setting: $name")
+
+    private fun hostedOrigin(name: String): String {
+        val value = hostedEnvironment(name).trimEnd('/')
+        val uri = URI(value)
+        assertEquals("https", uri.scheme)
+        assertTrue("Hosted origins must not contain credentials.", uri.userInfo == null)
+        assertTrue("Hosted origins must not contain a path.", uri.path.isNullOrEmpty() || uri.path == "/")
+        assertTrue("Hosted origins must not contain a query or fragment.", uri.query == null && uri.fragment == null)
+        return value
     }
 
     private fun engine(
