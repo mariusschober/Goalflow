@@ -8,5 +8,6 @@
   "202608310001_telegram_auth_state_pkce.sql": "bc03354e202602ae111a27c2fa99f6256cee64abe4332882ba2c213f89f3868d",
   "202609030001_access_boundary_hardening.sql": "da05c9f3ca5bc8f88cfc7577b9acbf0f9dfa1e316257b1548d6f548e59013627",
   "202609030002_account_lifecycle.sql": "3653ad3b92d1c7079fe4190646b1cd4682f88540c9f08408b6c3fe1d65723d4f",
-  "202609030003_backup_restore_hardening.sql": "a90f96ef6fe1ba175be4f0335be64f0b1cb4bc96f16f3715612fd7db6a65805c"
+  "202609030003_backup_restore_hardening.sql": "a90f96ef6fe1ba175be4f0335be64f0b1cb4bc96f16f3715612fd7db6a65805c",
+  "202609030004_telegram_webhook_claims.sql": "771abee5f25bdfb50537221c73ecd38089dc98cce1274e49fab26fc9eb934665"
 }

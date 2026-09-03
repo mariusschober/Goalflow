@@ -105,6 +105,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
     },
     crossOriginEmbedderPolicy: false
   }));
+  app.use("/api/v1/telegram", express.json({ limit: "128kb" }));
   app.use(express.json({ limit: "256kb" }));
   app.use("/api", rateLimit({
     windowMs: 60_000,
@@ -166,9 +167,14 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
   const errorHandler: ErrorRequestHandler = (error, request, response, _next) => {
     logger.error("http.unhandled_error", { requestId: request.requestId, category: error instanceof Error ? error.name : "unknown" });
     const invalidJson = isRecord(error) && error.type === "entity.parse.failed";
-    response.status(invalidJson ? 400 : 500).json({ error: {
-      code: invalidJson ? "invalid_json" : "internal_error",
-      message: invalidJson ? "The request body is not valid JSON." : "The request could not be completed."
+    const payloadTooLarge = isRecord(error) && error.type === "entity.too.large";
+    response.status(invalidJson ? 400 : payloadTooLarge ? 413 : 500).json({ error: {
+      code: invalidJson ? "invalid_json" : payloadTooLarge ? "payload_too_large" : "internal_error",
+      message: invalidJson
+        ? "The request body is not valid JSON."
+        : payloadTooLarge
+          ? "The request body is too large."
+          : "The request could not be completed."
     } });
   };
   app.use(errorHandler);

@@ -89,6 +89,19 @@ describe("public server boundary", () => {
     expect(body.error.requestId).toBe(response.headers.get("x-request-id"));
   });
 
+  it("enforces the tighter Telegram body limit with a safe public error", async () => {
+    const { origin } = await serve(true);
+    const response = await fetch(`${origin}/api/v1/telegram/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ update_id: 1, padding: "x".repeat(129 * 1024) })
+    });
+    const body = await response.json() as { error: { code: string; requestId: string } };
+    expect(response.status).toBe(413);
+    expect(body.error.code).toBe("payload_too_large");
+    expect(body.error.requestId).toBe(response.headers.get("x-request-id"));
+  });
+
   it("trusts exactly one Railway edge proxy hop in production", async () => {
     const { app } = await serve(true);
     expect(app.get("trust proxy")).toBe(1);
