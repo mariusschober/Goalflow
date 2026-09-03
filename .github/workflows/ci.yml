@@ -59,18 +59,6 @@ jobs:
   migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
     env:
       PGHOST: 127.0.0.1
       PGPORT: 5432
@@ -85,6 +73,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Start runner PostgreSQL 16
+        run: |
+          set -euo pipefail
+          installed_major="$(psql --version | awk '{ split($3, version, "."); print version[1] }')"
+          [ "$installed_major" = "16" ] || {
+            echo "The migration gate requires PostgreSQL 16; runner provided major $installed_major." >&2
+            exit 1
+          }
+          sudo systemctl start postgresql.service
+          sudo -u postgres env -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
+            psql --set=ON_ERROR_STOP=1 \
+            --command="ALTER USER postgres PASSWORD 'postgres'"
+          pg_isready --host="$PGHOST" --port="$PGPORT" --username="$PGUSER"
       - run: npm ci
       - run: npm run verify:migrations
       - run: node scripts/verify-migration-hashes.mjs
