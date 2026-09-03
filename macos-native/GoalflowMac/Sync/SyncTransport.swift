@@ -194,6 +194,7 @@ final class MockSyncTransport: SyncTransport, @unchecked Sendable {
     var userId = defaultUserId
     var pushHandler: ((Data) async throws -> (Data, HTTPURLResponse))?
     var pullHandler: ((String) async throws -> (Data, HTTPURLResponse))?
+    var conflictHandler: ((String, String, Data?) async throws -> (Data, HTTPURLResponse))?
     func currentUserId() async throws -> String { userId }
     func request(path: String, method: String, headers: [String: String], body: Data?) async throws -> (Data, HTTPURLResponse) {
         if path.hasPrefix("/api/v1/sync/push") {
@@ -201,6 +202,12 @@ final class MockSyncTransport: SyncTransport, @unchecked Sendable {
         }
         if path.hasPrefix("/api/v1/sync/pull") {
             if let handler = pullHandler { return try await handler(path) }
+        }
+        if path.hasPrefix("/api/v1/sync/conflicts") {
+            if let handler = conflictHandler { return try await handler(path, method, body) }
+            let data = try JSONSerialization.data(withJSONObject: ["conflicts": []])
+            let response = HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (data, response)
         }
         throw SyncError.validation("Mock no handler for \(path)")
     }

@@ -110,7 +110,13 @@ func appendStagedTransactions(_ input: SyncMeta, transactions: [StagedLocalTrans
                 // Append to history
                 var history = conflict.localHistory
                 // Each history entry as AnyCodable with payload etc
-                let entry: [String: Any] = ["mutationId": change.mutationId, "payload": change.payload as Any, "deletedAt": change.deletedAt as Any, "updatedAt": change.updatedAt, "version": version]
+                let entry: [String: Any] = [
+                    "mutationId": change.mutationId,
+                    "payload": change.payload ?? NSNull(),
+                    "deletedAt": change.deletedAt.map { $0 as Any } ?? NSNull(),
+                    "updatedAt": change.updatedAt,
+                    "version": version
+                ]
                 history.append(AnyCodable(entry))
                 conflict.localPayload = AnyCodable(change.payload)
                 conflict.localDeletedAt = change.deletedAt

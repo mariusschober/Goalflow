@@ -1,5 +1,13 @@
 import Foundation
 
+private func sameConflictExceptCreationTime(_ left: LocalConflict, _ right: LocalConflict) -> Bool {
+    var leftCopy = left
+    var rightCopy = right
+    leftCopy.createdAt = nil
+    rightCopy.createdAt = nil
+    return leftCopy == rightCopy
+}
+
 func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushResult]) throws -> SyncMeta {
     var meta = cloneMeta(input)
     guard Set(batch.map(\.mutationId)).count == batch.count else {
@@ -48,7 +56,6 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
     }
     // Apply
     var toRemoveIds = Set<String>()
-    var newConflicts: [LocalConflict] = []
     for mut in batch {
         guard let res = resultsById[mut.mutationId] else { continue }
         if res.accepted {
@@ -75,7 +82,13 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
             let affectedIds = Set(affected.map(\.mutationId))
             // Build history
             let history = affected.sorted { $0.version < $1.version }.map { m -> AnyCodable in
-                let d: [String: Any] = ["mutationId": m.mutationId, "payload": m.payload.value as Any, "deletedAt": m.deletedAt as Any, "updatedAt": m.updatedAt, "version": m.version]
+                let d: [String: Any] = [
+                    "mutationId": m.mutationId,
+                    "payload": m.payload.value ?? NSNull(),
+                    "deletedAt": m.deletedAt.map { $0 as Any } ?? NSNull(),
+                    "updatedAt": m.updatedAt,
+                    "version": m.version
+                ]
                 return AnyCodable(d)
             }
             let serverPayload: AnyCodable
@@ -91,19 +104,20 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
                 serverMissing = res.serverMissing ?? false
             }
             let cid = res.conflictId ?? "push:\(mut.mutationId):\(res.serverVersion)"
-            // Check collision with different signature
-            if let existing = meta.conflicts.first(where: { $0.id == cid }), existing.serverVersion != res.serverVersion || stableJson(existing.serverPayload.value) != stableJson(serverPayload.value) {
-                throw SyncError.validation("Sync push conflict \(cid) collides. Pending mutations were not changed.")
-            }
-            let conflict = LocalConflict(
+            let latest = affected.max { left, right in
+                left.version == right.version
+                    ? left.mutationId < right.mutationId
+                    : left.version < right.version
+            } ?? mut
+            var conflict = LocalConflict(
                 id: cid,
                 entityType: mut.entityType,
                 entityId: mut.entityId,
                 mutationId: mut.mutationId,
                 baseServerVersion: mut.baseServerVersion,
                 serverVersion: res.serverVersion,
-                localPayload: mut.payload,
-                localDeletedAt: mut.deletedAt,
+                localPayload: latest.payload,
+                localDeletedAt: latest.deletedAt,
                 localHistory: history,
                 serverPayload: serverPayload,
                 serverMissing: serverMissing,
@@ -111,13 +125,48 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
                 status: res.replayMismatch == true ? "replay_mismatch" : "unresolved",
                 createdAt: ISO8601DateFormatter().string(from: Date())
             )
-            if !meta.conflicts.contains(where: { $0.id == cid }) {
-                newConflicts.append(conflict)
+            if let resolvingId = mut.resolvesConflictId,
+               let resolvingIndex = meta.conflicts.firstIndex(where: { $0.id == resolvingId }) {
+                let resolving = meta.conflicts[resolvingIndex]
+                var combinedById: [String: AnyCodable] = [:]
+                for entry in resolving.localHistory + history {
+                    guard let object = entry.value as? [String: Any],
+                          let mutationId = object["mutationId"] as? String,
+                          UUID(uuidString: mutationId) != nil,
+                          let version = strictJSONInteger(object["version"]), version > 0,
+                          object.keys.contains("payload") else {
+                        throw SyncError.validation("Conflict history is damaged. Pending mutations were not changed.")
+                    }
+                    if let represented = combinedById[mutationId], represented != entry {
+                        throw SyncError.validation("A mutation identity represents different local conflict history. Pending mutations were not changed.")
+                    }
+                    combinedById[mutationId] = entry
+                }
+                conflict.localHistory = combinedById.values.sorted { left, right in
+                    let leftObject = left.value as? [String: Any]
+                    let rightObject = right.value as? [String: Any]
+                    let leftVersion = strictJSONInteger(leftObject?["version"]) ?? 0
+                    let rightVersion = strictJSONInteger(rightObject?["version"]) ?? 0
+                    if leftVersion != rightVersion { return leftVersion < rightVersion }
+                    return (leftObject?["mutationId"] as? String ?? "") < (rightObject?["mutationId"] as? String ?? "")
+                }
+                if let newest = conflict.localHistory.last?.value as? [String: Any] {
+                    conflict.localPayload = AnyCodable(newest["payload"])
+                    conflict.localDeletedAt = newest["deletedAt"] as? String
+                }
+                meta.conflicts.remove(at: resolvingIndex)
+            }
+            if let existing = meta.conflicts.first(where: { $0.id == cid }) {
+                guard sameConflictExceptCreationTime(existing, conflict) else {
+                    throw SyncError.validation("A server conflict id refers to different preserved data. Pending mutations were not changed.")
+                }
+            } else {
+                meta.conflicts.append(conflict)
             }
             for aid in affectedIds { toRemoveIds.insert(aid) }
             // Update versions to latest pending version
             let key = syncEntityKey(mut.entityType, mut.entityId)
-            if let latest = affected.max(by: { $0.version < $1.version }) {
+            if !affected.isEmpty {
                 var v = meta.versions[key] ?? VersionPair(local: 0, server: nil)
                 v.local = max(v.local, latest.version)
                 meta.versions[key] = v
@@ -125,7 +174,6 @@ func applyPushResults(_ input: SyncMeta, batch: [SyncMutation], results: [PushRe
         }
     }
     meta.outbox.removeAll { toRemoveIds.contains($0.mutationId) }
-    meta.conflicts.append(contentsOf: newConflicts)
     // Also need to release dependents of removed chain that are not part of newConflicts? Already handled via toRemoveIds, but dependents that were chained to removed mutations should be released? In Android, releaseDependents clears dependsOn for task_events.
     // For simplicity, for any remaining outbox that had dependsOn in removedIds, clear it
     for i in meta.outbox.indices {

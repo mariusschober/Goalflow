@@ -89,7 +89,18 @@ final class SyncEngine: @unchecked Sendable {
         try metaStore.bind(to: userId)
     }
 
-    func resolveConflict(id: String, useLocal: Bool) throws {
+    func resolveConflict(id: String, useLocal: Bool) async throws {
+        await gate.acquire()
+        do {
+            try await resolveConflictWhileLocked(id: id, useLocal: useLocal)
+            await gate.release()
+        } catch {
+            await gate.release()
+            throw error
+        }
+    }
+
+    private func resolveConflictWhileLocked(id: String, useLocal: Bool) async throws {
         var meta = try metaStore.load()
         guard let conflictIndex = meta.conflicts.firstIndex(where: { $0.id == id }) else {
             throw SyncError.validation("The selected synchronization conflict no longer exists.")
@@ -98,14 +109,29 @@ final class SyncEngine: @unchecked Sendable {
         let key = syncEntityKey(conflict.entityType, conflict.entityId)
 
         if useLocal {
+            if conflict.status == "resolving-local" { return }
             let current = meta.versions[key] ?? VersionPair(local: 0, server: conflict.serverVersion)
-            let historyMax = conflict.localHistory.compactMap {
-                ($0.value as? [String: Any])?["version"] as? Int
-            }.max() ?? current.local
+            let historyVersions = try conflict.localHistory.map { entry -> Int in
+                guard let value = entry.value as? [String: Any],
+                      let mutationId = value["mutationId"] as? String, UUID(uuidString: mutationId) != nil,
+                      let version = strictJSONInteger(value["version"]), version > 0,
+                      value.keys.contains("payload") else {
+                    throw SyncError.validation("The conflict history is damaged. Both versions remain preserved.")
+                }
+                return version
+            }
+            let historyMax = historyVersions.max() ?? current.local
             let version = max(historyMax, current.local) + 1
             meta.versions[key] = VersionPair(local: version, server: conflict.serverVersion)
+            let representedIds = Set(meta.outbox.map(\.mutationId)).union(meta.conflicts.flatMap { item in
+                item.localHistory.compactMap { ($0.value as? [String: Any])?["mutationId"] as? String }
+            })
+            var resolutionMutationId = UUID().uuidString.lowercased()
+            while representedIds.contains(resolutionMutationId) {
+                resolutionMutationId = UUID().uuidString.lowercased()
+            }
             meta.outbox.append(SyncMutation(
-                mutationId: UUID().uuidString.lowercased(),
+                mutationId: resolutionMutationId,
                 deviceId: deviceIdStore.deviceId,
                 entityType: conflict.entityType,
                 entityId: conflict.entityId,
@@ -123,11 +149,58 @@ final class SyncEngine: @unchecked Sendable {
             return
         }
 
+        // A PostgreSQL-ledger conflict must be acknowledged there before its
+        // local copy is removed. Synthetic pull conflicts have no server row.
+        if UUID(uuidString: conflict.id) != nil {
+            guard UUID(uuidString: conflict.mutationId) != nil,
+                  let boundUserId = meta.accountUserId else {
+                throw SyncError.validation("The server conflict identity is invalid. Both versions remain preserved.")
+            }
+            let transportUserId = (try await transport.currentUserId()).lowercased()
+            guard transportUserId == boundUserId.lowercased() else { throw SyncError.accountMismatch }
+            let body = try JSONSerialization.data(withJSONObject: [
+                "mutationId": conflict.mutationId,
+                "choice": "cloud"
+            ], options: [])
+            let (_, response) = try await requestWithRetry(
+                path: "/api/v1/sync/conflicts/resolve",
+                method: "POST",
+                body: body
+            )
+            guard (200..<300).contains(response.statusCode) else {
+                throw SyncError.validation("The server conflict could not be resolved (HTTP \(response.statusCode)). Both versions remain preserved.")
+            }
+        }
+
+        // Local edits may happen outside the sync gate while a request is in
+        // flight. Never apply an earlier choice over a newly edited local side.
+        meta = try metaStore.load()
+        guard let refreshedIndex = meta.conflicts.firstIndex(where: { $0.id == id }),
+              meta.conflicts[refreshedIndex] == conflict else {
+            throw SyncError.validation("The conflict changed while it was being resolved. Both versions remain preserved for a new choice.")
+        }
+
         var values = try storeBridge.loadValues()
         let shouldDelete = conflict.serverMissing || conflict.serverDeletedAt?.isEmpty == false
         if RECORD_LEVEL_STORES.contains(conflict.entityType) {
             var records = values[conflict.entityType] as? [[String: Any]] ?? []
-            if shouldDelete {
+            if conflict.entityId == "singleton", !conflict.serverMissing,
+               let snapshot = conflict.serverPayload.value as? [[String: Any]] {
+                let ids = snapshot.compactMap { $0["id"] as? String }
+                guard ids.count == snapshot.count, Set(ids).count == snapshot.count else {
+                    throw SyncError.validation("The cloud snapshot contains invalid or duplicate identities. Both versions remain preserved.")
+                }
+                for record in snapshot {
+                    guard let recordId = record["id"] as? String, !recordId.isEmpty else {
+                        throw SyncError.validation("The cloud snapshot contains an invalid identity. Both versions remain preserved.")
+                    }
+                    if let index = records.firstIndex(where: { ($0["id"] as? String) == recordId }) {
+                        records[index] = record
+                    } else {
+                        records.append(record)
+                    }
+                }
+            } else if shouldDelete {
                 records.removeAll { ($0["id"] as? String) == conflict.entityId }
             } else {
                 guard var record = conflict.serverPayload.value as? [String: Any] else {
@@ -153,8 +226,17 @@ final class SyncEngine: @unchecked Sendable {
         var version = meta.versions[key] ?? VersionPair(local: 0, server: nil)
         version.server = conflict.serverVersion
         meta.versions[key] = version
-        meta.outbox.removeAll { $0.entityType == conflict.entityType && $0.entityId == conflict.entityId }
-        meta.conflicts.remove(at: conflictIndex)
+        let removedMutationIds = Set(meta.outbox.filter {
+            $0.entityType == conflict.entityType && $0.entityId == conflict.entityId
+        }.map(\.mutationId))
+        meta.outbox.removeAll { removedMutationIds.contains($0.mutationId) }
+        for index in meta.outbox.indices {
+            if let predecessor = meta.outbox[index].dependsOnMutationId,
+               removedMutationIds.contains(predecessor) {
+                meta.outbox[index].dependsOnMutationId = nil
+            }
+        }
+        meta.conflicts.remove(at: refreshedIndex)
         let writes = try storeBridge.preparedWrites(values, stores: [conflict.entityType])
         try metaStore.commitLocalValues(writes, nextMeta: meta)
     }
@@ -179,7 +261,7 @@ final class SyncEngine: @unchecked Sendable {
                     "entityType": m.entityType,
                     "entityId": m.entityId,
                     "version": m.version,
-                    "payload": m.payload.value as Any,
+                    "payload": m.payload.value ?? NSNull(),
                     "updatedAt": m.updatedAt
                 ]
                 if let b = m.baseServerVersion { d["baseServerVersion"] = b } else { d["baseServerVersion"] = NSNull() }
@@ -282,6 +364,21 @@ final class SyncEngine: @unchecked Sendable {
             }
             hasMore = hasMoreVal
         }
+        let (conflictData, conflictResponse) = try await requestWithRetry(
+            path: "/api/v1/sync/conflicts",
+            method: "GET",
+            body: nil
+        )
+        guard (200..<300).contains(conflictResponse.statusCode) else {
+            throw SyncError.validation("Server conflicts could not be verified (HTTP \(conflictResponse.statusCode)). Existing local state was not changed.")
+        }
+        guard let conflictBody = try JSONSerialization.jsonObject(with: conflictData) as? [String: Any],
+              conflictBody.keys.contains("conflicts") else {
+            throw SyncError.validation("Sync conflict response was invalid. Existing local state was not changed.")
+        }
+        let remoteConflicts = try parseServerConflictSet(conflictBody["conflicts"])
+        let mergedMeta = try mergeServerConflicts(try metaStore.load(), conflicts: remoteConflicts)
+        try metaStore.save(mergedMeta)
         // Mark successful
         var finalMeta = try metaStore.load()
         finalMeta.lastSuccessfulSync = ISO8601DateFormatter().string(from: Date())

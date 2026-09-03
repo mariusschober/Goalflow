@@ -367,6 +367,81 @@ final class ApplyPushResultsTests: XCTestCase {
         // Batch 1 but results empty
         XCTAssertThrowsError(try applyPushResults(meta, batch: [m], results: []))
     }
+
+    func test_rejected_resolution_replaces_old_conflict_without_losing_history() throws {
+        let originalMutationId = "11111111-1111-4111-8111-111111111111"
+        let resolutionMutationId = "22222222-2222-4222-8222-222222222222"
+        let originalConflictId = "33333333-3333-4333-8333-333333333333"
+        let replacementConflictId = "44444444-4444-4444-8444-444444444444"
+        var meta = emptySyncMeta()
+        meta.conflicts = [LocalConflict(
+            id: originalConflictId,
+            entityType: "tasks",
+            entityId: "task-1",
+            mutationId: originalMutationId,
+            baseServerVersion: 1,
+            serverVersion: 2,
+            localPayload: AnyCodable(["id": "task-1", "title": "First local"]),
+            localDeletedAt: nil,
+            localHistory: [AnyCodable([
+                "mutationId": originalMutationId,
+                "payload": ["id": "task-1", "title": "First local"],
+                "deletedAt": NSNull(),
+                "updatedAt": "2026-09-03T00:00:00.000Z",
+                "version": 2
+            ])],
+            serverPayload: AnyCodable(["id": "task-1", "title": "First cloud"]),
+            serverMissing: false,
+            serverDeletedAt: nil,
+            status: "resolving-local",
+            createdAt: "2026-09-03T00:00:01.000Z"
+        )]
+        let resolution = SyncMutation(
+            mutationId: resolutionMutationId,
+            deviceId: "device-a",
+            entityType: "tasks",
+            entityId: "task-1",
+            baseServerVersion: 2,
+            version: 3,
+            payload: AnyCodable(["id": "task-1", "title": "Latest local"]),
+            updatedAt: "2026-09-03T00:00:02.000Z",
+            deletedAt: nil,
+            dependsOnMutationId: nil,
+            resolvesConflictId: originalConflictId,
+            attemptedAt: nil
+        )
+        meta.outbox = [resolution]
+        let serverRecord = RemoteRecord(
+            entityType: "tasks",
+            entityId: "task-1",
+            version: 4,
+            serverVersion: 3,
+            deviceId: "device-b",
+            payload: AnyCodable(["id": "task-1", "title": "New cloud"]),
+            updatedAt: "2026-09-03T00:00:03.000Z",
+            deletedAt: nil
+        )
+        let result = PushResult(
+            mutationId: resolutionMutationId,
+            accepted: false,
+            serverVersion: 3,
+            replayMismatch: false,
+            serverMissing: false,
+            conflictId: replacementConflictId,
+            record: serverRecord
+        )
+
+        let next = try applyPushResults(meta, batch: [resolution], results: [result])
+
+        XCTAssertTrue(next.outbox.isEmpty)
+        XCTAssertEqual(next.conflicts.map(\.id), [replacementConflictId])
+        let historyIds = next.conflicts[0].localHistory.compactMap {
+            ($0.value as? [String: Any])?["mutationId"] as? String
+        }
+        XCTAssertEqual(historyIds, [originalMutationId, resolutionMutationId])
+        XCTAssertEqual(stableJson(next.conflicts[0].localPayload.value), "{\"id\":\"task-1\",\"title\":\"Latest local\"}")
+        XCTAssertEqual(stableJson(next.conflicts[0].serverPayload.value), "{\"id\":\"task-1\",\"title\":\"New cloud\"}")
+    }
 }
 
 final class ApplyRemotePageTests: XCTestCase {
@@ -409,6 +484,131 @@ final class ApplyRemotePageTests: XCTestCase {
         let res = try applyRemotePage(meta, currentValues: [:], records: [rec], nextCursor: 1, ownDeviceId: "d", now: "now")
         XCTAssertTrue(res.meta.conflicts.isEmpty)
         XCTAssertEqual(stableJson(res.values["tasks"]), stableJson([["id":"1","title":"Remote"] as [String: Any]]))
+    }
+}
+
+final class ServerConflictTests: XCTestCase {
+    private let conflictId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+    private let mutationId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2"
+
+    private func remoteConflict(localTitle: String = "Local", serverTitle: String = "Cloud") -> [String: Any] {
+        [
+            "id": conflictId,
+            "entity_type": "tasks",
+            "entity_id": "task-1",
+            "mutation_id": mutationId,
+            "base_server_version": 4,
+            "local_payload": ["id": "task-1", "title": localTitle],
+            "local_deleted_at": NSNull(),
+            "local_version": 5,
+            "local_updated_at": "2026-09-03T00:00:00.000Z",
+            "server_payload": ["id": "task-1", "title": serverTitle],
+            "server_deleted_at": NSNull(),
+            "server_version": 6,
+            "server_missing": false,
+            "created_at": "2026-09-03T00:00:01.000Z"
+        ]
+    }
+
+    func test_snake_case_server_conflict_imports_both_sides() throws {
+        let parsed = try parseServerConflictSet([remoteConflict()])
+        let merged = try mergeServerConflicts(emptySyncMeta(), conflicts: parsed)
+
+        let conflict = try XCTUnwrap(merged.conflicts.first)
+        XCTAssertEqual(conflict.id, conflictId)
+        XCTAssertEqual(conflict.mutationId, mutationId)
+        XCTAssertEqual(stableJson(conflict.localPayload.value), "{\"id\":\"task-1\",\"title\":\"Local\"}")
+        XCTAssertEqual(stableJson(conflict.serverPayload.value), "{\"id\":\"task-1\",\"title\":\"Cloud\"}")
+        XCTAssertEqual(merged.versions[syncEntityKey("tasks", "task-1")], VersionPair(local: 5, server: 6))
+    }
+
+    func test_server_conflict_replay_cannot_change_preserved_local_data() throws {
+        let first = try mergeServerConflicts(
+            emptySyncMeta(),
+            conflicts: parseServerConflictSet([remoteConflict()])
+        )
+        XCTAssertThrowsError(try mergeServerConflicts(
+            first,
+            conflicts: parseServerConflictSet([remoteConflict(localTitle: "Different")])
+        ))
+        XCTAssertEqual(stableJson(first.conflicts.first?.localPayload.value), "{\"id\":\"task-1\",\"title\":\"Local\"}")
+    }
+
+    func test_sync_imports_postgresql_only_conflict_before_success() async throws {
+        let suite = "goalflow.sync.server-conflict.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transport = MockSyncTransport()
+        transport.pullHandler = { _ in
+            let data = try JSONSerialization.data(withJSONObject: ["records": [], "nextCursor": 0, "hasMore": false])
+            return (data, HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        transport.conflictHandler = { _, method, _ in
+            XCTAssertEqual(method, "GET")
+            let data = try JSONSerialization.data(withJSONObject: ["conflicts": [self.remoteConflict()]])
+            return (data, HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
+        }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: FileSyncStoreBridge(baseDir: directory, defaults: defaults)
+        )
+        try await engine.bindLocalWorkspace(to: MockSyncTransport.defaultUserId)
+
+        try await engine.synchronize()
+
+        let meta = try metaStore.load()
+        XCTAssertEqual(meta.conflicts.map(\.id), [conflictId])
+        XCTAssertNotNil(meta.lastSuccessfulSync)
+    }
+
+    func test_cloud_resolution_failure_preserves_local_and_cloud_sides() async throws {
+        let suite = "goalflow.sync.resolve-failure.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let metaStore = SyncMetaStore(fileURL: directory.appendingPathComponent("sync.json"), defaults: defaults)
+        let bridge = FileSyncStoreBridge(baseDir: directory, defaults: defaults)
+        let localTask = GoalflowTask(id: "task-1", title: "Local", scheduledFor: "2026-09-03")
+        try bridge.saveValues(["tasks": [try localTask.toDictionary()]])
+        var meta = try metaStore.load()
+        meta.accountUserId = MockSyncTransport.defaultUserId
+        meta.conflicts = try mergeServerConflicts(
+            emptySyncMeta(),
+            conflicts: parseServerConflictSet([remoteConflict()])
+        ).conflicts
+        try metaStore.save(meta)
+        let transport = MockSyncTransport()
+        transport.conflictHandler = { path, method, _ in
+            XCTAssertTrue(path.hasSuffix("/resolve"))
+            XCTAssertEqual(method, "POST")
+            return (Data(), HTTPURLResponse(url: URL(string: "https://example.com")!, statusCode: 422, httpVersion: nil, headerFields: nil)!)
+        }
+        let engine = SyncEngine(
+            metaStore: metaStore,
+            deviceIdStore: DeviceIdStore(defaults: defaults),
+            transport: transport,
+            storeBridge: bridge,
+            retrySleeper: { _ in XCTFail("A permanent conflict rejection must not retry.") },
+            retryJitter: { _ in 0 }
+        )
+
+        do {
+            try await engine.resolveConflict(id: self.conflictId, useLocal: false)
+            XCTFail("A rejected server resolution must not be reported as successful.")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("422"))
+        }
+        XCTAssertEqual(try metaStore.load().conflicts.map(\.id), [conflictId])
+        let stored = try XCTUnwrap((try bridge.loadValues()["tasks"] as? [[String: Any]])?.first)
+        XCTAssertEqual(stored["title"] as? String, "Local")
     }
 }
 

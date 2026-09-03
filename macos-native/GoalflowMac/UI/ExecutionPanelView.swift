@@ -291,12 +291,14 @@ final class ExecutionViewModel: ObservableObject {
     }
 
     func resolveConflict(id: String, useLocal: Bool) {
-        do {
-            try syncEngine.resolveConflict(id: id, useLocal: useLocal)
-            cloudError = nil
-            restore()
-        } catch {
-            cloudError = error.localizedDescription
+        Task { @MainActor in
+            do {
+                try await syncEngine.resolveConflict(id: id, useLocal: useLocal)
+                cloudError = nil
+                restore()
+            } catch {
+                cloudError = error.localizedDescription
+            }
         }
     }
 
