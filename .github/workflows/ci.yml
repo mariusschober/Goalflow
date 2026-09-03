@@ -119,6 +119,7 @@ jobs:
       # but must not publish an artifact that can be mistaken for an authorized release.
       - name: Compile production release (unsigned, no secrets required)
         run: |
+          set -euo pipefail
           cd android
           ./gradlew assembleProductionRelease -PgoalflowSkipSigning=true
           apk="$(find app/build/outputs/apk/production/release -name '*-unsigned.apk' -print -quit)"
@@ -186,6 +187,7 @@ jobs:
       # Compile production release unsigned; ordinary CI must not require signing secrets
       - name: Compile native production release (unsigned, no secrets)
         run: |
+          set -euo pipefail
           ./android-native/gradlew -p android-native assembleProductionRelease -PgoalflowSkipSigning=true
           apk="$(find android-native/app/build/outputs/apk/production/release -name '*-unsigned.apk' -print -quit)"
           [ -n "$apk" ] && [ -f "$apk" ] || { echo "Unsigned native production release APK was not produced." >&2; exit 1; }
@@ -207,6 +209,7 @@ jobs:
         env:
           GOALFLOW_APK_LABEL: TEST-ONLY
         run: |
+          set -euo pipefail
           apk="$(find "$GITHUB_WORKSPACE/android-native/app/build/outputs/apk/production/debug" -name '*.apk' -print -quit)"
           [ -n "$apk" ] && [ -f "$apk" ] || { echo "Production debug APK was not found before diagnostic." >&2; exit 1; }
           android-native/scripts/diagnose-apk.sh "$apk"

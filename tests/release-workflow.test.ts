@@ -19,4 +19,14 @@ describe('manual release workflow', () => {
     expect(workflow).toContain('.name == "beta-gate"');
     expect(workflow).not.toContain('/commits/$GITHUB_SHA/check-runs');
   });
+
+  it('fails closed on signing and requires exactly one expected signer', () => {
+    expect(workflow.match(/set -euo pipefail/g)?.length).toBeGreaterThanOrEqual(5);
+    expect(workflow).toContain('mapfile -t signer_fingerprints');
+    expect(workflow).toContain('[ "${#signer_fingerprints[@]}" -ne 1 ]');
+    expect(workflow).toContain('ANDROID_EXPECT_SIGNED=1 bash android-native/scripts/verify-signing-strict.sh "$apk"');
+    expect(workflow).not.toContain('tee /tmp/certs.txt');
+    expect(workflow).not.toContain('present (length ${#val})');
+    expect(workflow).not.toContain("find android-native/app/build/outputs -name '*.aab' -print -quit || true");
+  });
 });

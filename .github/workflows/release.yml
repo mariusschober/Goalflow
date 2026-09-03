@@ -63,6 +63,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           EXPECTED_CERT_FINGERPRINT: ${{ secrets.EXPECTED_CERT_FINGERPRINT }}
         run: |
+          set -euo pipefail
           if [ "$RELEASE_CONFIRMATION" != "release" ]; then
             echo "Release confirmation must be exactly 'release'." >&2
             exit 1
@@ -74,7 +75,7 @@ jobs:
               echo "Missing required signing secret: $var" >&2
               missing=1
             else
-              echo "$var present (length ${#val})"
+              echo "$var present"
             fi
           done
           if [ "$missing" -ne 0 ]; then
@@ -124,12 +125,14 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           ./android-native/gradlew -p android-native assembleProductionRelease --stacktrace --info
           ls -l android-native/app/build/outputs/apk/production/release/*.apk
       - name: Verify certificate fingerprint (fail closed)
         env:
           EXPECTED_CERT_FINGERPRINT: ${{ secrets.EXPECTED_CERT_FINGERPRINT }}
         run: |
+          set -euo pipefail
           apk=$(find android-native/app/build/outputs/apk/production/release -name '*.apk' -print -quit)
           if [ -z "$apk" ]; then echo "No release APK found" >&2; exit 1; fi
           # Find apksigner
@@ -138,13 +141,21 @@ jobs:
             if [ -x "$p" ]; then APKSIGNER="$p"; break; fi
           done
           if [ -z "$APKSIGNER" ]; then echo "apksigner not found" >&2; exit 1; fi
-          "$APKSIGNER" verify --verbose --print-certs "$apk" 2>&1 | tee /tmp/certs.txt
+          certificate_output="$(mktemp)"
+          trap 'rm -f "$certificate_output"' EXIT
+          "$APKSIGNER" verify --verbose --print-certs "$apk" >"$certificate_output" 2>&1
+          cat "$certificate_output"
           expected="$(printf '%s' "$EXPECTED_CERT_FINGERPRINT" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
-          actual="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/certs.txt | head -n 1 | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
+          mapfile -t signer_fingerprints < <(sed -n 's/^Signer #[0-9][0-9]* certificate SHA-256 digest: //p' "$certificate_output")
           if ! printf '%s' "$expected" | grep -Eq '^[0-9a-f]{64}$'; then
             echo "EXPECTED_CERT_FINGERPRINT must normalize to exactly 64 hexadecimal characters." >&2
             exit 1
           fi
+          if [ "${#signer_fingerprints[@]}" -ne 1 ]; then
+            echo "The release APK must contain exactly one signer certificate." >&2
+            exit 1
+          fi
+          actual="$(printf '%s' "${signer_fingerprints[0]}" | tr '[:upper:]' '[:lower:]' | tr -d ':[:space:]')"
           if ! printf '%s' "$actual" | grep -Eq '^[0-9a-f]{64}$'; then
             echo "apksigner did not report one valid SHA-256 signer fingerprint." >&2
             exit 1
@@ -158,13 +169,15 @@ jobs:
           ANDROID_EXPECT_SIGNED=1 bash android-native/scripts/verify-signing-strict.sh "$apk"
       - name: Create digests and provenance
         run: |
+          set -euo pipefail
           apk=$(find android-native/app/build/outputs/apk/production/release -name '*.apk' -print -quit)
+          [ -n "$apk" ] && [ -f "$apk" ] || { echo "No signed release APK found for provenance." >&2; exit 1; }
           sha256sum "$apk" > "$apk.sha256"
           cat "$apk.sha256"
           echo "Provenance: $(git rev-parse HEAD) built at $(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$apk.provenance.txt"
           cat "$apk.provenance.txt"
           # Also for AAB if present
-          aab=$(find android-native/app/build/outputs -name '*.aab' -print -quit || true)
+          aab=$(find android-native/app/build/outputs -name '*.aab' -print -quit)
           if [ -n "$aab" ]; then
             sha256sum "$aab" > "$aab.sha256"
             cat "$aab.sha256"
@@ -188,6 +201,7 @@ jobs:
     steps:
       - name: Check release gate
         run: |
+          set -euo pipefail
           echo "verify-release-source=${{ needs.verify-release-source.result }} verify-signing-secrets=${{ needs.verify-signing-secrets.result }} release=${{ needs.release.result }}"
           if [ "${{ needs.verify-release-source.result }}" != "success" ]; then echo "verify-release-source failed" >&2; exit 1; fi
           if [ "${{ needs.verify-signing-secrets.result }}" != "success" ]; then echo "verify-signing-secrets failed" >&2; exit 1; fi
