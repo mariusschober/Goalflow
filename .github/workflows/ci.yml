@@ -175,7 +175,7 @@ jobs:
           key: ${{ runner.os }}-gradle-native-${{ hashFiles('android-native/**/*.gradle*', 'android-native/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-native-
-      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/run-emulator-gate.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-instrumentation-target.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-instrumentation-target.sh android-native/scripts/verify-signing-strict.sh
+      - run: chmod +x android-native/gradlew android-native/scripts/diagnose-apk.sh android-native/scripts/run-emulator-gate.sh android-native/scripts/run-instrumentation-apk.sh android-native/scripts/test-apk-path-handoff.sh android-native/scripts/test-instrumentation-apk-runner.sh android-native/scripts/test-instrumentation-target.sh android-native/scripts/test-public-key-gate.sh android-native/scripts/test-room-schema-assets.sh android-native/scripts/verify-instrumentation-target.sh android-native/scripts/verify-signing-strict.sh
       - name: Prove release signing checks fail closed
         run: bash android-native/scripts/test-signing-gate.sh
       - name: Prove Android rejects Supabase server secrets
@@ -186,6 +186,8 @@ jobs:
         run: sh android-native/scripts/test-apk-path-handoff.sh
       - name: Run installed instrumentation target regression test
         run: sh android-native/scripts/test-instrumentation-target.sh
+      - name: Run instrumentation APK runner regression test
+        run: sh android-native/scripts/test-instrumentation-apk-runner.sh
       - name: Run Room schema asset regression test
         run: sh android-native/scripts/test-room-schema-assets.sh
       - name: Verify Room schema hashes
@@ -255,6 +257,7 @@ jobs:
           android-native/scripts/diagnose-apk.sh "$apk"
       - name: Reclaim runner disk for emulator
         run: |
+          ./android-native/gradlew -p android-native --stop
           sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell
           sudo rm -rf /usr/local/lib/android/sdk/ndk /usr/local/lib/android/sdk/cmake
           sudo rm -rf /usr/local/lib/android/sdk/system-images/*

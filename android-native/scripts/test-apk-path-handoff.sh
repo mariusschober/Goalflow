@@ -25,15 +25,18 @@ workspace="$work_dir/workspace"
 native_root="$workspace/android-native"
 scripts="$native_root/scripts"
 apk_dir="$native_root/app/build/outputs/apk/production/debug"
-mkdir -p "$scripts" "$apk_dir"
+test_apk_dir="$native_root/app/build/outputs/apk/androidTest/production/debug"
+mkdir -p "$scripts" "$apk_dir" "$test_apk_dir"
 cp "$driver" "$scripts/run-emulator-gate.sh"
 chmod +x "$scripts/run-emulator-gate.sh"
 
 current_apk="$apk_dir/app-production-debug.apk"
+current_test_apk="$test_apk_dir/app-production-debug-androidTest.apk"
 old_apk="$work_dir/preserved-v2.apk"
 old_test_apk="$work_dir/preserved-v2-androidTest.apk"
 record="$work_dir/record"
 printf '%s\n' current >"$current_apk"
+printf '%s\n' current-test >"$current_test_apk"
 printf '%s\n' old >"$old_apk"
 printf '%s\n' old-test >"$old_test_apk"
 
@@ -42,17 +45,17 @@ cat >"$scripts/diagnose-apk.sh" <<'STUB'
 set -eu
 printf 'diagnose|%s|%s|%s\n' "${GOALFLOW_APK_LABEL:-}" "${DIAGNOSE_APK_INSTALL:-}" "$1" >>"$GOALFLOW_TEST_RECORD"
 STUB
-cat >"$native_root/gradlew" <<'STUB'
+cat >"$scripts/run-instrumentation-apk.sh" <<'STUB'
 #!/usr/bin/env sh
 set -eu
-printf 'gradle|%s|%s|%s\n' "$1" "$2" "$3" >>"$GOALFLOW_TEST_RECORD"
+printf 'instrumentation|%s|%s|%s|%s\n' "${GOALFLOW_ALLOW_TEST_APP_DATA_ERASE:-}" "$1" "$2" "$3" >>"$GOALFLOW_TEST_RECORD"
 STUB
 cat >"$scripts/test-upgrade-matrix.sh" <<'STUB'
 #!/usr/bin/env sh
 set -eu
 printf 'upgrade|%s|%s|%s|%s\n' "${GOALFLOW_ALLOW_TEST_APP_DATA_ERASE:-}" "$1" "$2" "$3" >>"$GOALFLOW_TEST_RECORD"
 STUB
-chmod +x "$scripts/diagnose-apk.sh" "$native_root/gradlew" "$scripts/test-upgrade-matrix.sh"
+chmod +x "$scripts/diagnose-apk.sh" "$scripts/run-instrumentation-apk.sh" "$scripts/test-upgrade-matrix.sh"
 
 if GITHUB_WORKSPACE="$workspace" \
     GOALFLOW_UPGRADE_FROM_APK="$old_apk" \
@@ -73,7 +76,7 @@ GOALFLOW_TEST_RECORD="$record" \
 
 expected="$work_dir/expected"
 printf 'diagnose|TEST-ONLY|1|%s\n' "$current_apk" >"$expected"
-printf 'gradle|-p|%s|:app:connectedProductionDebugAndroidTest\n' "$native_root" >>"$expected"
+printf 'instrumentation|1|%s|%s|7\n' "$current_apk" "$current_test_apk" >>"$expected"
 printf 'upgrade|1|%s|%s|%s\n' "$old_apk" "$current_apk" "$old_test_apk" >>"$expected"
 cmp "$record" "$expected"
 

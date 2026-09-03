@@ -12,11 +12,16 @@ set -euo pipefail
 workspace="${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
 native_root="$workspace/android-native"
 current_apk="$native_root/app/build/outputs/apk/production/debug/app-production-debug.apk"
+current_test_apk="$native_root/app/build/outputs/apk/androidTest/production/debug/app-production-debug-androidTest.apk"
 old_apk="${GOALFLOW_UPGRADE_FROM_APK:?GOALFLOW_UPGRADE_FROM_APK is required}"
 old_test_apk="${GOALFLOW_UPGRADE_SEED_TEST_APK:?GOALFLOW_UPGRADE_SEED_TEST_APK is required}"
 
 [[ -f "$current_apk" ]] || {
   echo 'EMULATOR_GATE=FAIL (current production debug APK is missing)' >&2
+  exit 1
+}
+[[ -f "$current_test_apk" ]] || {
+  echo 'EMULATOR_GATE=FAIL (current production instrumentation APK is missing)' >&2
   exit 1
 }
 [[ -f "$old_apk" ]] || {
@@ -30,7 +35,7 @@ old_test_apk="${GOALFLOW_UPGRADE_SEED_TEST_APK:?GOALFLOW_UPGRADE_SEED_TEST_APK i
 
 GOALFLOW_APK_LABEL=TEST-ONLY DIAGNOSE_APK_INSTALL=1 \
   "$native_root/scripts/diagnose-apk.sh" "$current_apk"
-"$native_root/gradlew" -p "$native_root" :app:connectedProductionDebugAndroidTest
+"$native_root/scripts/run-instrumentation-apk.sh" "$current_apk" "$current_test_apk" 7
 "$native_root/scripts/test-upgrade-matrix.sh" "$old_apk" "$current_apk" "$old_test_apk"
 
 echo 'EMULATOR_GATE=PASS'
