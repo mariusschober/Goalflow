@@ -13,6 +13,14 @@ const apkRunner = readFileSync(
   new URL('../android-native/scripts/run-instrumentation-apk.sh', import.meta.url),
   'utf8'
 );
+const launchVerifier = readFileSync(
+  new URL('../android-native/scripts/verify-installed-app-launch.sh', import.meta.url),
+  'utf8'
+);
+const apkDiagnostic = readFileSync(
+  new URL('../android-native/scripts/diagnose-apk.sh', import.meta.url),
+  'utf8'
+);
 const emulatorGate = readFileSync(
   new URL('../android-native/scripts/run-emulator-gate.sh', import.meta.url),
   'utf8'
@@ -48,17 +56,26 @@ describe('installed Android upgrade instrumentation contract', () => {
 
   it('models process death between the preserved seed and cold-launch upgrade', () => {
     const uninstallSeed = upgrade.indexOf('uninstall "$test_package"');
-    const stopPreserved = upgrade.indexOf('shell am force-stop "$old_package"', uninstallSeed);
-    const launchPreserved = upgrade.indexOf('shell am start -W -n "$old_package/', stopPreserved);
-    const stopBeforeUpgrade = upgrade.indexOf('shell am force-stop "$old_package"', stopPreserved + 1);
+    const launchPreserved = upgrade.indexOf('"$old_package" com.mariusschober.goalflow.nativeapp.MainActivity UPGRADE_PRESERVED_LAUNCH', uninstallSeed);
+    const stopBeforeUpgrade = upgrade.indexOf('shell am force-stop "$old_package"', launchPreserved);
     const installUpgrade = upgrade.indexOf('install -r "$new_apk"', stopBeforeUpgrade);
+    const launchCurrent = upgrade.indexOf('"$new_package" com.mariusschober.goalflow.nativeapp.MainActivity UPGRADE_CURRENT_LAUNCH', installUpgrade);
 
     expect(uninstallSeed).toBeGreaterThan(-1);
-    expect(stopPreserved).toBeGreaterThan(uninstallSeed);
-    expect(launchPreserved).toBeGreaterThan(stopPreserved);
+    expect(launchPreserved).toBeGreaterThan(uninstallSeed);
     expect(stopBeforeUpgrade).toBeGreaterThan(launchPreserved);
     expect(installUpgrade).toBeGreaterThan(stopBeforeUpgrade);
-    expect(upgrade).toContain('UPGRADE_MATRIX=FAIL (preserved-version cold launch failed)');
-    expect(upgrade).toContain('UPGRADE_MATRIX=FAIL (upgraded application cold launch failed)');
+    expect(launchCurrent).toBeGreaterThan(installUpgrade);
+  });
+
+  it('requires a live resumed process and rendered frame for every APK launch', () => {
+    expect(launchVerifier).toContain('shell am force-stop "$package_name"');
+    expect(launchVerifier).toContain('shell pidof "$package_name"');
+    expect(launchVerifier).toContain('shell dumpsys activity activities');
+    expect(launchVerifier).toContain('Total frames rendered:');
+    expect(launchVerifier).toContain('"$last_frames" -gt 0');
+    expect(upgrade).toContain('verify-installed-app-launch.sh');
+    expect(apkDiagnostic).toContain('verify-installed-app-launch.sh');
+    expect(workflow).toContain('Run installed app launch regression test');
   });
 });
