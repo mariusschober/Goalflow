@@ -2,21 +2,28 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 const workflow = readFileSync(
-  new URL('../.github/workflows/android-internal-beta.yml', import.meta.url),
+  new URL('../.github/workflows/ci.yml', import.meta.url),
   'utf8'
 );
 
 describe('Android internal beta workflow', () => {
-  it('accepts only an exact green integration candidate', () => {
-    expect(workflow).toContain('refs/heads/integration/beta');
-    expect(workflow).not.toContain('refs/heads/main');
+  it('runs only within the exact integration push gate after every preliminary job', () => {
+    expect(workflow).toContain('android-internal-beta:');
     expect(workflow).toContain(
-      '/actions/workflows/ci.yml/runs?branch=integration%2Fbeta&event=push&status=success&head_sha=$GITHUB_SHA'
+      "if: github.event_name == 'push' && github.ref == 'refs/heads/integration/beta'"
     );
-    expect(workflow).toContain('.head_branch == "integration/beta"');
-    expect(workflow).toContain('.event == "push"');
-    expect(workflow).toContain('.name == "beta-gate"');
-    expect(workflow).toContain("Internal beta confirmation must be exactly 'internal-beta'.");
+    expect(workflow).toContain(
+      'needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging]'
+    );
+    expect(workflow).toContain(
+      'needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, android-internal-beta]'
+    );
+    expect(workflow).toContain(
+      'if [ "${{ needs.android-internal-beta.result }}" != "success" ]'
+    );
+    expect(workflow).toContain(
+      'android-internal-beta unexpectedly ran outside an integration/beta push'
+    );
   });
 
   it('requires staging-only public configuration and one expected signer', () => {

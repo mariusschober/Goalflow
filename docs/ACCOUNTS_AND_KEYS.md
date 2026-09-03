@@ -89,7 +89,7 @@ matrix. AI and voice are not required for core beta task capture and sync.
 
 ## Android beta and release signing
 
-Both protected manual GitHub workflows require:
+Both protected GitHub build paths require:
 
 - `ANDROID_KEYSTORE_BASE64`;
 - `ANDROID_KEYSTORE_PASSWORD`;
@@ -98,13 +98,13 @@ Both protected manual GitHub workflows require:
 - `EXPECTED_CERT_FINGERPRINT`.
 
 The keystore must be generated and retained outside the repository. The
-`Android internal beta (manual)` workflow additionally embeds only the three
-staging public values already listed above. It can run only for an exact
-`integration/beta` commit with a successful push `beta-gate`; it verifies one
-expected signer and uploads an APK plus verified checksum and provenance without
-creating a GitHub release. Its build job is scoped to the `internal-beta`
-GitHub environment. The production release workflow remains restricted to an
-exact successful `main` push and its separate `production-release` environment.
+`android-internal-beta` Beta Gate job additionally embeds only the three staging
+public values already listed above. It runs only on an `integration/beta` push,
+after every preliminary required job succeeds; it verifies one expected signer
+and uploads an APK plus verified checksum and provenance without creating a
+GitHub release. The job is scoped to the protected `internal-beta` GitHub
+environment. The production release workflow remains restricted to an exact
+successful `main` push and its separate `production-release` environment.
 
 Do not reuse the historical temporary test signer mentioned in old evidence
 snapshots. No keystore or private-key file is tracked anywhere in Git history,
