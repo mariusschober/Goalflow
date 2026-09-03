@@ -37,3 +37,10 @@ create table if not exists storage.buckets (
   public boolean not null default false,
   file_size_limit bigint
 );
+create table if not exists storage.objects (
+  id uuid primary key default gen_random_uuid(),
+  bucket_id text not null references storage.buckets(id) on delete cascade,
+  name text not null,
+  owner_id text,
+  created_at timestamptz not null default now()
+);

@@ -10,10 +10,12 @@ const latest = migrations.find(item => item.file === '202608260001_zero_silent_d
 const nativeEvents = migrations.find(item => item.file === '202608290001_native_task_events.sql');
 const transportCompletion = migrations.find(item => item.file === '202608300001_complete_native_sync_transport.sql');
 const telegramAuth = migrations.find(item => item.file === '202608310001_telegram_auth_state_pkce.sql');
+const accessBoundary = migrations.find(item => item.file === '202609030001_access_boundary_hardening.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
 assert(telegramAuth, 'Telegram auth state PKCE migration is missing.');
+assert(accessBoundary, 'Access-boundary hardening migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -98,11 +100,21 @@ assert(
     && transportCompletion.sql.includes('pg_trigger_depth() > 1'),
   'Native event transport or lossless canonical payload preservation is incomplete.'
 );
+assert(
+  accessBoundary.sql.includes('revoke execute on all functions in schema public')
+    && accessBoundary.sql.includes('revoke all privileges on table')
+    && accessBoundary.sql.includes('tasks_parent_same_owner_fk')
+    && accessBoundary.sql.includes('task_events_task_same_owner_fk')
+    && accessBoundary.sql.includes('validate_goalflow_daily_plan_ownership')
+    && accessBoundary.sql.includes('alter default privileges in schema public'),
+  'Server-only data access, internal RPC denial, or same-owner constraints are incomplete.'
+);
 
 process.stdout.write(JSON.stringify({
   status: 'PASS',
   migrations: files.length,
   emptySchemaOrder: 'PASS',
   existingSchemaAdditiveSafety: 'PASS',
+  accessBoundary: 'PASS',
   note: 'Static verification only; PostgreSQL execution still requires a live/staging Supabase drill.'
 }) + '\n');
