@@ -1,3 +1,7 @@
+> **HISTORICAL PROMPT — DO NOT EXECUTE.** It targets the divergent macOS
+> feature branch and predates the selective transplant. Use
+> `docs/reconciliation/BETA_PROVENANCE.md` and the current beta branch.
+
 # Starter Prompt — Continue macOS Execution Companion → Production
 
 Copy-paste to continue final phase (Tahoe 26, Liquid Glass, no visual redesign):

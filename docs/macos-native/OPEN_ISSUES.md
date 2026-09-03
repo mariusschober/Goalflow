@@ -1,3 +1,7 @@
+> **HISTORICAL FEATURE-BRANCH SNAPSHOT.** Counts, SHAs, and completion claims
+> below do not describe the current beta candidate. Current limitations belong
+> in `docs/BETA_READINESS.md` only after hosted evidence exists.
+
 # Open Issues — macOS Execution Companion
 
 **Branch:** `feature/macos-execution-companion` @ `a8e3526` (14 ahead, `000cc7d` hardened) + `2fb195c..a8e3526` final hardening (GoalStore sync, sound dedup, force-unwrap). **135 tests green**, `xcodebuild analyze` clean, Debug/Release build OK. No UI pixels changed since `146538d`.

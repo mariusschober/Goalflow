@@ -1,3 +1,9 @@
+> **HISTORICAL DIVERGENT-BRANCH HANDOFF — NOT RELEASE EVIDENCE.** The macOS
+> application has since been selectively transplanted onto the beta contracts.
+> The readiness and completion language below describes the old feature branch,
+> not the current hosted, signing, or synchronization state. See
+> `docs/reconciliation/BETA_PROVENANCE.md` for current evidence.
+
 # Goalflow macOS Execution Companion — Session Handoff
 
 **Branch:** `feature/macos-execution-companion`  

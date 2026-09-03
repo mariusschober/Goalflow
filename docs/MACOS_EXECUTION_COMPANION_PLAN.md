@@ -1,3 +1,8 @@
+> **HISTORICAL FEATURE-BRANCH PLAN.** Demo transports, completion claims, and
+> deployment assumptions below are not current production behavior or beta
+> evidence. The selectively transplanted implementation is governed by
+> `docs/reconciliation/BETA_PROVENANCE.md` and the current release gate.
+
 # Goalflow macOS Execution Companion — Master Implementation Plan
 
 **Branch:** `feature/macos-execution-companion`  

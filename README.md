@@ -12,16 +12,16 @@ The application retains the complete Goalflow experience: Current, daily and mon
 - One pure scheduling domain in `src/domain/scheduling.ts` defines schedule validation, planning gates, queue precedence, skip, frog promotion, breakdown, and habit generation.
 - Telegram uses the same task and queue rules for text, voice, and command capture.
 
-## Production finalization
+## Beta reconciliation
 
-The production-finalization roadmap and release gates are authoritative in [docs/PRODUCTION_FINALIZATION_PLAN.md](./docs/PRODUCTION_FINALIZATION_PLAN.md). Future agents must read these documents in order:
-
-1. [Authoritative five-tranche plan](./docs/PRODUCTION_FINALIZATION_PLAN.md)
-2. [AI context handover](./docs/AI_CONTEXT_HANDOVER.md)
-3. [Current production-readiness evidence](./docs/PRODUCTION_READINESS.md)
-4. [Current tranche handover](./docs/TRANCHE_2_HANDOVER.md)
-
-Older implementation and integrity handovers are historical evidence and do not override those documents.
+The current reconciliation authority is
+[docs/reconciliation/BETA_PROVENANCE.md](./docs/reconciliation/BETA_PROVENANCE.md).
+Deployment prerequisites and procedures live in
+[DEPLOYMENT.md](./DEPLOYMENT.md),
+[docs/operations/BETA_RUNBOOK.md](./docs/operations/BETA_RUNBOOK.md), and
+[docs/ACCOUNTS_AND_KEYS.md](./docs/ACCOUNTS_AND_KEYS.md). Older readiness,
+handover, and finalization documents are historical snapshots; their PASS or
+“ready” language is not current release evidence.
 
 ## Local development
 
@@ -60,7 +60,11 @@ npm run verify:release
 npm run verify:test-build
 ```
 
-The production server listens on `PORT` and exposes `/api/v1/health`. Client and server bundles are separated under `dist/client` and `dist/server`; production source maps are disabled.
+The production server listens on `PORT`. `/api/v1/health/live` proves the
+process is alive, while `/api/v1/health/ready` checks the production boot
+contract and required Supabase dependency. Client and server bundles are
+separated under `dist/client` and `dist/server`; production source maps are
+disabled.
 
 ## Android
 
@@ -113,9 +117,15 @@ It is labeled `Goalflow Test`, uses
 
 ## Production setup
 
-Follow [DEPLOYMENT.md](./DEPLOYMENT.md). Apply the Supabase migrations in order, provision Telegram OIDC and the bot webhook, set every Railway secret, bootstrap the owner through the verified `mris@tuta.io` magic link, and enroll TOTP before using owner APIs.
+Follow [DEPLOYMENT.md](./DEPLOYMENT.md). Apply the Supabase migrations in order
+to an isolated staging project, create two nonproduction test identities, and
+bootstrap the owner from the verified account's immutable Supabase user UUID.
+Set `OWNER_USER_ID` to that UUID and enroll TOTP before using owner APIs. Keep
+Telegram disabled until its separate live webhook, replay, and account-linking
+matrix passes.
 
 This release is a free invite beta. Entitlements grant the complete feature set and no payment code is present.
 
-For a detailed record of the production rewrite, verification status, and remaining
-launch work, see [docs/IMPLEMENTATION_HANDOFF.md](./docs/IMPLEMENTATION_HANDOFF.md).
+For the exact branch history, selective ports, current evidence, and unresolved
+release blockers, see
+[docs/reconciliation/BETA_PROVENANCE.md](./docs/reconciliation/BETA_PROVENANCE.md).
