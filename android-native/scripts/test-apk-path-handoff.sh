@@ -7,7 +7,9 @@ repo_root="$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)"
 workflow="$repo_root/.github/workflows/ci.yml"
 [ -f "$workflow" ]
 grep -F 'working-directory: ${{ github.workspace }}' "$workflow" >/dev/null
-grep -F 'apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"; [ -n "$apk" ] && [ -f "$apk" ]' "$workflow" >/dev/null
+grep -F 'apk="android-native/app/build/outputs/apk/production/debug/app-production-debug.apk"' "$workflow" >/dev/null
+grep -F '[ -n "$apk" ] && [ -f "$apk" ] || {' "$workflow" >/dev/null
+grep -F 'android-native/scripts/diagnose-apk.sh "$apk"' "$workflow" >/dev/null
 if grep -F 'apk="$GOALFLOW_PRODUCTION_DEBUG_APK"' "$workflow" >/dev/null; then
     echo "Workflow still depends on an action-internal environment handoff." >&2
     exit 1
