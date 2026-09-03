@@ -1,5 +1,9 @@
-import { authenticatedFetch, supabase } from './authService';
-import { storageService, STORES } from './storage';
+import {
+  authenticatedFetchForUser,
+  SessionAccountMismatchError,
+  supabase
+} from './authService';
+import { DurableStorageError, storageService, STORES } from './storage';
 import {
   emptySyncMeta,
   normalizeSyncMeta,
@@ -20,10 +24,15 @@ const SYNCED_STORES: string[] = [
 ];
 
 export interface CloudSyncDependencies {
-  fetch: typeof authenticatedFetch;
+  fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
   isOnline: () => boolean;
   now: () => Date;
   deviceId: () => string;
+  sleep?: (delayMs: number) => Promise<void>;
+  random?: () => number;
+  requestTimeoutMs?: number;
+  maxAttempts?: number;
+  signal?: AbortSignal;
 }
 
 const persistentDeviceId = (): string => {
@@ -32,18 +41,47 @@ const persistentDeviceId = (): string => {
   if (existing) return existing;
   const created = crypto.randomUUID();
   localStorage.setItem(key, created);
-  if (localStorage.getItem(key) !== created) throw new Error('A stable sync device identity could not be persisted.');
+  if (localStorage.getItem(key) !== created) throw new DurableStorageError('A stable sync device identity could not be persisted.');
   return created;
 };
 
-const defaultDependencies: CloudSyncDependencies = {
-  fetch: authenticatedFetch,
+const defaultRuntimeDependencies = {
   isOnline: () => navigator.onLine,
   now: () => new Date(),
   deviceId: persistentDeviceId
 };
 
+const dependenciesForUser = (userKey: string, signal?: AbortSignal): CloudSyncDependencies => ({
+  ...defaultRuntimeDependencies,
+  fetch: (input, init) => authenticatedFetchForUser(userKey, input, init),
+  signal
+});
+
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const RETRYABLE_STATUS = new Set([408, 425, 429]);
+
+export class SyncHttpError extends Error {
+  readonly permanent: boolean;
+
+  constructor(message: string, readonly status: number, readonly code: string) {
+    super(message);
+    this.name = 'SyncHttpError';
+    this.permanent = status >= 400 && status < 500 && !RETRYABLE_STATUS.has(status);
+  }
+}
+
+export class SyncProtocolError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SyncProtocolError';
+  }
+}
+
+export const isPermanentSyncFailure = (error: unknown): boolean =>
+  (error instanceof SyncHttpError && error.permanent)
+  || error instanceof SyncProtocolError
+  || error instanceof DurableStorageError
+  || error instanceof SessionAccountMismatchError;
 
 const emit = (state: SyncState, meta: SyncMeta, message?: string): void => {
   window.dispatchEvent(new CustomEvent('goalflow:sync-state', {
@@ -58,12 +96,67 @@ const emit = (state: SyncState, meta: SyncMeta, message?: string): void => {
 
 const parseJson = async <T>(response: Response, failureMessage: string): Promise<T> => {
   let body: unknown;
-  try { body = await response.json(); } catch (_) { throw new Error(failureMessage); }
+  try { body = await response.json(); } catch (_) {
+    if (!response.ok) throw new SyncHttpError(failureMessage, response.status, 'invalid_error_response');
+    throw new SyncProtocolError(failureMessage);
+  }
   if (!response.ok) {
-    const message = (body as { error?: { message?: string } } | undefined)?.error?.message;
-    throw new Error(message || failureMessage);
+    const error = (body as { error?: { code?: string; message?: string } } | undefined)?.error;
+    throw new SyncHttpError(error?.message || failureMessage, response.status, error?.code || 'sync_http_error');
   }
   return body as T;
+};
+
+const defaultSleep = (delayMs: number): Promise<void> =>
+  new Promise(resolve => globalThis.setTimeout(resolve, delayMs));
+
+const retryableStatus = (status: number): boolean => status >= 500 || RETRYABLE_STATUS.has(status);
+
+/** Bounded, jittered retry for idempotent sync requests and mutation-ID pushes. */
+export const fetchSyncWithRetry = async (
+  input: RequestInfo | URL,
+  init: RequestInit,
+  dependencies: CloudSyncDependencies
+): Promise<Response> => {
+  const maximumAttempts = Math.max(1, Math.min(5, dependencies.maxAttempts ?? 3));
+  const timeoutMs = Math.max(250, Math.min(120_000, dependencies.requestTimeoutMs ?? 15_000));
+  const sleep = dependencies.sleep ?? defaultSleep;
+  const random = dependencies.random ?? Math.random;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < maximumAttempts; attempt += 1) {
+    const parentSignals = [dependencies.signal, init.signal ?? undefined]
+      .filter((signal): signal is AbortSignal => Boolean(signal));
+    const alreadyAborted = parentSignals.find(signal => signal.aborted);
+    if (alreadyAborted) throw alreadyAborted.reason ?? new DOMException('Synchronization stopped.', 'AbortError');
+    const controller = new AbortController();
+    const abortFromParent = (event: Event) => controller.abort((event.target as AbortSignal).reason);
+    parentSignals.forEach(signal => signal.addEventListener('abort', abortFromParent, { once: true }));
+    const timeout = globalThis.setTimeout(
+      () => controller.abort(new DOMException('Synchronization request timed out.', 'TimeoutError')),
+      timeoutMs
+    );
+    try {
+      const response = await dependencies.fetch(input, { ...init, signal: controller.signal });
+      if (!retryableStatus(response.status) || attempt + 1 >= maximumAttempts) return response;
+      await response.body?.cancel().catch(() => undefined);
+      lastError = new SyncHttpError('Synchronization service is temporarily unavailable.', response.status, 'sync_retryable');
+    } catch (error) {
+      const abortedParent = parentSignals.find(signal => signal.aborted);
+      if (abortedParent) throw abortedParent.reason ?? error;
+      lastError = error;
+      if (isPermanentSyncFailure(error)
+        || attempt + 1 >= maximumAttempts
+        || !dependencies.isOnline()) throw error;
+    } finally {
+      globalThis.clearTimeout(timeout);
+      parentSignals.forEach(signal => signal.removeEventListener('abort', abortFromParent));
+    }
+    const exponential = Math.min(500 * (2 ** attempt), 5_000);
+    const jitter = Math.floor(Math.max(0, Math.min(1, random())) * 250);
+    await sleep(exponential + jitter);
+  }
+  throw lastError ?? new Error('Synchronization request failed.');
 };
 
 const wireMutation = (mutation: SyncMutation) => ({
@@ -98,7 +191,7 @@ const seedUnsynchronizedLocalData = async (userKey: string): Promise<void> => {
 /** One crash-safe, retry-safe synchronization cycle. Exported for adversarial tests. */
 export const synchronizeCloudOnce = async (
   userKey: string,
-  dependencies: CloudSyncDependencies = defaultDependencies
+  dependencies: CloudSyncDependencies = dependenciesForUser(userKey)
 ): Promise<SyncMeta> => {
   await seedUnsynchronizedLocalData(userKey);
   let meta = normalizeSyncMeta(await storageService.get(STORES.SYNC, userKey));
@@ -108,21 +201,25 @@ export const synchronizeCloudOnce = async (
   while (true) {
     const batch = await storageService.preparePushBatch(userKey, 50);
     if (!batch.length) break;
-    const response = await dependencies.fetch('/api/v1/sync/push', {
+    const response = await fetchSyncWithRetry('/api/v1/sync/push', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mutations: batch.map(wireMutation) })
-    });
+    }, dependencies);
     const body = await parseJson<{ results?: PushResult[] }>(response, 'Sync push failed. Local changes remain pending.');
-    if (!Array.isArray(body.results)) throw new Error('Sync push response was invalid. Local changes remain pending.');
-    meta = await storageService.commitPushResults(userKey, batch, body.results);
+    if (!Array.isArray(body.results)) throw new SyncProtocolError('Sync push response was invalid. Local changes remain pending.');
+    try {
+      meta = await storageService.commitPushResults(userKey, batch, body.results);
+    } catch (error) {
+      throw new SyncProtocolError(error instanceof Error ? error.message : 'Sync receipts were invalid. Local changes remain pending.');
+    }
   }
 
   let hasMore = true;
   while (hasMore) {
     meta = normalizeSyncMeta(await storageService.get(STORES.SYNC, userKey));
     const cursorBefore = meta.cursor;
-    const response = await dependencies.fetch(`/api/v1/sync/pull?cursor=${cursorBefore}&limit=100`);
+    const response = await fetchSyncWithRetry(`/api/v1/sync/pull?cursor=${cursorBefore}&limit=100`, {}, dependencies);
     const body = await parseJson<{
       records?: RemoteSyncRecord[];
       nextCursor?: number;
@@ -133,26 +230,26 @@ export const synchronizeCloudOnce = async (
       || typeof body.nextCursor !== 'number'
       || !Number.isSafeInteger(body.nextCursor)
       || typeof body.hasMore !== 'boolean') {
-      throw new Error('Sync pull response was invalid. The local cursor was not advanced.');
+      throw new SyncProtocolError('Sync pull response was invalid. The local cursor was not advanced.');
     }
     const nextCursor = body.nextCursor;
     if (nextCursor < cursorBefore || (body.hasMore && nextCursor === cursorBefore)) {
-      throw new Error('Sync pull cursor did not advance safely.');
+      throw new SyncProtocolError('Sync pull cursor did not advance safely.');
     }
     const highestRecord = body.records.reduce((highest, record) => Math.max(highest, Number(record.serverVersion) || 0), cursorBefore);
-    if (nextCursor !== highestRecord) throw new Error('Sync pull cursor would skip or discard remote information.');
+    if (nextCursor !== highestRecord) throw new SyncProtocolError('Sync pull cursor would skip or discard remote information.');
     const applied = await storageService.applyRemotePage(userKey, body.records, nextCursor, ownDeviceId);
     meta = applied.meta;
     hasMore = body.hasMore;
   }
 
-  const conflictResponse = await dependencies.fetch('/api/v1/sync/conflicts');
+  const conflictResponse = await fetchSyncWithRetry('/api/v1/sync/conflicts', {}, dependencies);
   const conflictBody = await parseJson<{ conflicts?: RemoteServerConflict[] }>(
     conflictResponse,
     'Sync conflicts could not be verified. Existing local state was not changed.'
   );
   if (!Array.isArray(conflictBody.conflicts)) {
-    throw new Error('Sync conflict response was invalid. Existing local state was not changed.');
+    throw new SyncProtocolError('Sync conflict response was invalid. Existing local state was not changed.');
   }
   meta = await storageService.mergeServerConflicts(userKey, conflictBody.conflicts);
 
@@ -177,20 +274,31 @@ class SimpleMutex {
 }
 const syncMutex = new SimpleMutex();
 
-export const fetchSyncHealth = async (dependencies: CloudSyncDependencies = defaultDependencies): Promise<{ outboxDepth: number; pendingBytes: number; serverVersion: number }> => {
-  const response = await dependencies.fetch('/api/v1/sync/health');
-  const body = await parseJson<{ outboxDepth?: number; pendingBytes?: number; serverVersion?: number }>(response, 'Sync health unavailable');
-  return { outboxDepth: Number(body.outboxDepth ?? 0), pendingBytes: Number(body.pendingBytes ?? 0), serverVersion: Number(body.serverVersion ?? 0) };
+export const fetchSyncHealth = async (
+  userKey: string,
+  dependencies: CloudSyncDependencies = dependenciesForUser(userKey)
+): Promise<{ serverRecordCount: number; unresolvedConflicts: number; serverVersion: number }> => {
+  const response = await fetchSyncWithRetry('/api/v1/sync/health', {}, dependencies);
+  const body = await parseJson<{ serverRecordCount?: number; unresolvedConflicts?: number; serverVersion?: number }>(response, 'Sync health unavailable');
+  return {
+    serverRecordCount: Number(body.serverRecordCount ?? 0),
+    unresolvedConflicts: Number(body.unresolvedConflicts ?? 0),
+    serverVersion: Number(body.serverVersion ?? 0)
+  };
 };
 
 export const startCloudSync = (userKey: string): (() => void) => {
   if (!supabase) return () => undefined;
   let stopped = false;
+  let blockedByPermanentError = false;
   let timer: number | undefined;
   let activeSync: Promise<void> | null = null;
+  const lifecycleController = new AbortController();
+  const lifecycleDependencies = dependenciesForUser(userKey, lifecycleController.signal);
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(`goalflow-sync:${userKey}`);
 
   const synchronize = async (): Promise<void> => {
+    if (stopped || blockedByPermanentError) return;
     if (activeSync) return activeSync;
     activeSync = (async () => {
       try {
@@ -202,7 +310,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
         emit('syncing', before);
         const run = async () => {
           if (stopped) return;
-          const meta = await synchronizeCloudOnce(userKey);
+          const meta = await synchronizeCloudOnce(userKey, lifecycleDependencies);
           const state: SyncState = meta.conflicts.length ? 'conflict' : 'synced';
           emit(state, meta);
           channel?.postMessage({
@@ -210,19 +318,28 @@ export const startCloudSync = (userKey: string): (() => void) => {
             conflictCount: meta.conflicts.length
           });
         };
-        // P2-C: ifAvailable false + Mutex ensures serialization; health exposes outboxDepth
+        // ifAvailable false plus the in-page mutex serializes local writers.
         if ('locks' in navigator) {
           await navigator.locks.request(`goalflow-sync:${userKey}`, { ifAvailable: false }, async lock => {
             if (lock) {
               await syncMutex.acquire();
-              try { await run(); await fetchSyncHealth().catch(() => undefined); } finally { syncMutex.release(); }
+              try { await run(); await fetchSyncHealth(userKey, lifecycleDependencies).catch(() => undefined); } finally { syncMutex.release(); }
             }
           });
         } else {
           await syncMutex.acquire();
-          try { await run(); await fetchSyncHealth().catch(() => undefined); } finally { syncMutex.release(); }
+          try { await run(); await fetchSyncHealth(userKey, lifecycleDependencies).catch(() => undefined); } finally { syncMutex.release(); }
         }
       } catch (error) {
+        if (stopped && (error instanceof DOMException || lifecycleController.signal.aborted)) return;
+        if (isPermanentSyncFailure(error)) {
+          blockedByPermanentError = true;
+          if (error instanceof SyncHttpError && (error.status === 401 || error.status === 403)) {
+            window.dispatchEvent(new CustomEvent('goalflow:session-rejected', {
+              detail: { status: error.status, code: error.code }
+            }));
+          }
+        }
         let meta: SyncMeta;
         try {
           meta = normalizeSyncMeta(await storageService.get(STORES.SYNC, userKey));
@@ -244,6 +361,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
     timer = window.setTimeout(() => void synchronize(), 500);
   };
   const onOnline = () => void synchronize();
+  const onRetry = () => { blockedByPermanentError = false; void synchronize(); };
   const onFocus = () => { if (document.visibilityState === 'visible') void synchronize(); };
   const onChannel = (event: MessageEvent) => {
     if (event.data?.type === 'complete') window.dispatchEvent(new CustomEvent('goalflow:sync-state', { detail: event.data }));
@@ -251,6 +369,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
 
   window.addEventListener('goalflow:local-change', onLocalChange);
   window.addEventListener('online', onOnline);
+  window.addEventListener('goalflow:sync-retry', onRetry);
   window.addEventListener('focus', onFocus);
   document.addEventListener('visibilitychange', onFocus);
   channel?.addEventListener('message', onChannel);
@@ -261,10 +380,12 @@ export const startCloudSync = (userKey: string): (() => void) => {
 
   return () => {
     stopped = true;
+    lifecycleController.abort(new DOMException('Synchronization stopped.', 'AbortError'));
     window.clearTimeout(timer);
     window.clearInterval(interval);
     window.removeEventListener('goalflow:local-change', onLocalChange);
     window.removeEventListener('online', onOnline);
+    window.removeEventListener('goalflow:sync-retry', onRetry);
     window.removeEventListener('focus', onFocus);
     document.removeEventListener('visibilitychange', onFocus);
     channel?.removeEventListener('message', onChannel);
@@ -286,12 +407,14 @@ export const resolveLocalConflict = async (
     return;
   }
   if (conflict.mutationId) {
-    const response = await authenticatedFetch('/api/v1/sync/conflicts/resolve', {
+    const response = await fetchSyncWithRetry('/api/v1/sync/conflicts/resolve', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ mutationId: conflict.mutationId, choice: 'cloud' })
-    });
-    if (!response.ok) throw new Error('The server conflict could not be resolved. Both versions remain preserved.');
+    }, dependenciesForUser(userKey));
+    if (!response.ok) {
+      throw new SyncHttpError('The server conflict could not be resolved. Both versions remain preserved.', response.status, 'conflict_resolution_failed');
+    }
   }
   const meta = await storageService.resolveConflictWithCloud(userKey, conflictId);
   emit(meta.conflicts.length ? 'conflict' : 'saved-locally', meta);

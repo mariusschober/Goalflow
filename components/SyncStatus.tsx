@@ -42,6 +42,11 @@ export const SyncStatus: React.FC<{ userKey: string }> = ({ userKey }) => {
         <div className="absolute right-0 top-full z-50 mt-2 w-80 rounded-xl border border-gray-200 bg-white p-4 shadow-lg dark:border-slate-700 dark:bg-slate-800">
           <p className="font-bold text-gray-900 dark:text-white">{labels[status.state]}</p>
           <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">{status.lastSuccessfulSync ? `Last successful sync: ${new Date(status.lastSuccessfulSync).toLocaleString()}` : status.message || 'Changes remain available on this device.'}</p>
+          {status.state === 'error' && <button type="button"
+            onClick={() => window.dispatchEvent(new Event('goalflow:sync-retry'))}
+            className="mt-3 rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 dark:border-slate-600 dark:text-gray-200">
+            Retry sync
+          </button>}
           {conflicts.map(conflict => (
             <div key={conflict.id} className="mt-3 border-t border-gray-100 pt-3 dark:border-slate-700">
               <p className="text-sm font-bold text-gray-700 dark:text-gray-200">

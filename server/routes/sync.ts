@@ -73,6 +73,48 @@ export const assertDurableReceipt = (mutation: z.infer<typeof syncMutationSchema
   return value;
 };
 
+type SyncMutation = z.infer<typeof syncMutationSchema>;
+
+/**
+ * Preserve client dependency order. Earlier calls may commit before a later
+ * call fails, so the client retains the whole batch and safely replays the
+ * exact mutation IDs. The durable receipt ledger makes that replay idempotent.
+ */
+export const applySyncMutationsSequentially = async (
+  database: SupabaseClient,
+  userId: string,
+  mutations: SyncMutation[]
+): Promise<Array<Record<string, unknown>>> => {
+  const results: Array<Record<string, unknown>> = [];
+  for (const mutation of mutations) {
+    const { data, error } = await database.rpc('push_sync_mutation_v2', {
+      target_user_id: userId,
+      target_mutation_id: mutation.mutationId,
+      target_device_id: mutation.deviceId,
+      target_entity_type: mutation.entityType,
+      target_entity_id: mutation.entityId,
+      target_base_server_version: mutation.baseServerVersion,
+      target_version: mutation.version,
+      target_payload: mutation.payload,
+      target_updated_at: mutation.updatedAt,
+      target_deleted_at: mutation.deletedAt,
+      target_resolves_conflict_id: mutation.resolvesConflictId ?? null
+    });
+    if (error) throw error;
+    const receipt = assertDurableReceipt(mutation, data);
+    if (receipt.accepted && mutation.entityType === 'tasks') {
+      await reconcileLegacyTasks(database, userId, mutation.payload, {
+        entityId: mutation.entityId,
+        serverVersion: Number(receipt.serverVersion),
+        deletedAt: mutation.deletedAt,
+        updatedAt: mutation.updatedAt
+      });
+    }
+    results.push({ mutationId: mutation.mutationId, ...receipt });
+  }
+  return results;
+};
+
 const invalidRequest = (response: Response, error: unknown) => {
   if (error instanceof z.ZodError) {
     response.status(400).json({ error: { code: 'invalid_request', message: 'Synchronization data is invalid.', issues: error.issues } });
@@ -95,36 +137,8 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
       if (protocolError || Number(protocolVersion) !== 3) {
         throw new Error('The hardened synchronization protocol is not installed. Local mutations remain pending.');
       }
-      // Batch push with concurrency 5 to reduce RTT while preserving order for assertDurableReceipt
-      const results: unknown[] = await Promise.all(body.mutations.map(async (mutation) => {
-        const { data, error } = await database.rpc('push_sync_mutation_v2', {
-          target_user_id: request.user!.id,
-          target_mutation_id: mutation.mutationId,
-          target_device_id: mutation.deviceId,
-          target_entity_type: mutation.entityType,
-          target_entity_id: mutation.entityId,
-          target_base_server_version: mutation.baseServerVersion,
-          target_version: mutation.version,
-          target_payload: mutation.payload,
-          target_updated_at: mutation.updatedAt,
-          target_deleted_at: mutation.deletedAt,
-          target_resolves_conflict_id: mutation.resolvesConflictId ?? null
-        });
-        if (error) throw error;
-        const receipt = assertDurableReceipt(mutation, data);
-        if (receipt.accepted && mutation.entityType === 'tasks') {
-          await reconcileLegacyTasks(database, request.user!.id, mutation.payload, {
-            entityId: mutation.entityId,
-            serverVersion: Number(receipt.serverVersion),
-            deletedAt: mutation.deletedAt,
-            updatedAt: mutation.updatedAt
-          });
-        }
-        return { mutationId: mutation.mutationId, ...receipt };
-      }));
-      // Ensure results order matches input order for client that expects 1:1
-      const ordered = body.mutations.map(m => results.find(r => (r as any).mutationId === m.mutationId)!);
-      response.json({ results: ordered });
+      const results = await applySyncMutationsSequentially(database, request.user!.id, body.mutations);
+      response.json({ results });
     } catch (error) {
       invalidRequest(response, error);
     }
@@ -183,18 +197,17 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
   router.get('/sync/health', async (request, response) => {
     try {
       const database = requireDatabase(admin);
-      const [{ data: latest, error: latestError }, { count: conflictCount, error: conflictError }, { count: outboxCount, error: outboxError }] = await Promise.all([
+      const [{ data: latest, error: latestError }, { count: conflictCount, error: conflictError }, { count: recordCount, error: recordError }] = await Promise.all([
         database.from('sync_records').select('server_version').eq('user_id', request.user!.id).order('server_version', { ascending: false }).limit(1).maybeSingle(),
         database.from('sync_conflicts').select('id', { count: 'exact', head: true }).eq('user_id', request.user!.id).is('resolved_at', null),
-        database.from('sync_records').select('id', { count: 'exact', head: true }).eq('user_id', request.user!.id)
+        database.from('sync_records').select('entity_id', { count: 'exact', head: true }).eq('user_id', request.user!.id)
       ]);
-      if (latestError || conflictError || outboxError) throw latestError || conflictError || outboxError;
+      if (latestError || conflictError || recordError) throw latestError || conflictError || recordError;
       response.json({
         userId: request.user!.id,
         serverVersion: Number(latest?.server_version ?? 0),
         unresolvedConflicts: conflictCount ?? 0,
-        outboxDepth: outboxCount ?? 0,
-        pendingBytes: (outboxCount ?? 0) * 1024
+        serverRecordCount: recordCount ?? 0
       });
     } catch (error) {
       invalidRequest(response, error);

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { synchronizeCloudOnce, type CloudSyncDependencies } from './cloudSync';
+import { fetchSyncWithRetry, synchronizeCloudOnce, type CloudSyncDependencies } from './cloudSync';
 import { storageService, STORES } from './storage';
 import { normalizeSyncMeta } from './syncProtocol';
 
@@ -143,7 +143,9 @@ const dependencies = (server: DurableFakeServer, deviceId = 'device-a'): CloudSy
   fetch: server.fetch as CloudSyncDependencies['fetch'],
   isOnline: () => true,
   now: () => new Date('2026-08-27T00:00:00.000Z'),
-  deviceId: () => deviceId
+  deviceId: () => deviceId,
+  sleep: async () => undefined,
+  random: () => 0
 });
 
 const task = (title: string, id = 'task-1', extra: Record<string, unknown> = {}) => ({
@@ -155,39 +157,86 @@ const task = (title: string, id = 'task-1', extra: Record<string, unknown> = {})
 describe('adversarial cloud synchronization', () => {
   beforeEach(() => installBrowser());
 
-  it('recovers when the server commits but the response is lost', async () => {
+  it('automatically retries the exact mutation when the server commits but the response is lost', async () => {
     const key = `timeout-after-${crypto.randomUUID()}`;
     const server = new DurableFakeServer();
     storageService.stageLocalValue(STORES.TASKS, key, [], [task('created offline')]);
     server.failAfterCommit = true;
 
-    await expect(synchronizeCloudOnce(key, dependencies(server))).rejects.toThrow('response lost');
-    expect(server.records.size).toBe(1);
-    expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).outbox).toHaveLength(1);
-
-    const restartedServer = new DurableFakeServer(server.durableState());
-    const meta = await synchronizeCloudOnce(key, dependencies(restartedServer));
+    const meta = await synchronizeCloudOnce(key, dependencies(server));
     expect(meta.outbox).toHaveLength(0);
     expect(meta.conflicts).toHaveLength(0);
-    expect(restartedServer.records.size).toBe(1);
-    expect(restartedServer.receipts.size).toBe(1);
+    expect(server.records.size).toBe(1);
+    expect(server.receipts.size).toBe(1);
   });
 
-  it('retries the unchanged mutation after a timeout before commit', async () => {
+  it('automatically retries the unchanged mutation after a timeout before commit', async () => {
     const key = `timeout-before-${crypto.randomUUID()}`;
     const server = new DurableFakeServer();
     storageService.stageLocalValue(STORES.TASKS, key, [], [task('safe')]);
     server.failBeforeCommit = true;
 
-    await expect(synchronizeCloudOnce(key, dependencies(server))).rejects.toThrow('before commit');
-    expect(server.records.size).toBe(0);
-    const pending = normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).outbox;
-    expect(pending).toHaveLength(1);
-    const mutationId = pending[0].mutationId;
-
-    await synchronizeCloudOnce(key, dependencies(server));
-    expect(server.receipts.has(mutationId)).toBe(true);
+    const meta = await synchronizeCloudOnce(key, dependencies(server));
+    expect(meta.outbox).toHaveLength(0);
     expect(server.records.size).toBe(1);
+  });
+
+  it('bounds transient retries and leaves the outbox intact after exhaustion', async () => {
+    const key = `retry-exhaustion-${crypto.randomUUID()}`;
+    storageService.stageLocalValue(STORES.TASKS, key, [], [task('still local')]);
+    let calls = 0;
+    const failedDependencies: CloudSyncDependencies = {
+      ...dependencies(new DurableFakeServer()),
+      maxAttempts: 3,
+      fetch: async () => {
+        calls += 1;
+        throw new TypeError('network unavailable');
+      }
+    };
+
+    await expect(synchronizeCloudOnce(key, failedDependencies)).rejects.toThrow('network unavailable');
+    expect(calls).toBe(3);
+    expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).outbox).toHaveLength(1);
+  });
+
+  it('aborts an in-flight logout without acknowledging or deleting the local mutation', async () => {
+    const key = `logout-during-sync-${crypto.randomUUID()}`;
+    storageService.stageLocalValue(STORES.TASKS, key, [], [task('survives logout')]);
+    const controller = new AbortController();
+    let markStarted: (() => void) | undefined;
+    const started = new Promise<void>(resolve => { markStarted = resolve; });
+    const fetch = ((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      markStarted?.();
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    })) as CloudSyncDependencies['fetch'];
+    const sync = synchronizeCloudOnce(key, {
+      ...dependencies(new DurableFakeServer()),
+      fetch,
+      maxAttempts: 1,
+      signal: controller.signal
+    });
+    const rejection = expect(sync).rejects.toMatchObject({ name: 'AbortError' });
+
+    await started;
+    controller.abort(new DOMException('signed out', 'AbortError'));
+    await rejection;
+
+    expect(normalizeSyncMeta(await storageService.get(STORES.SYNC, key)).outbox).toHaveLength(1);
+  });
+
+  it('never retries a permanent authorization response', async () => {
+    let calls = 0;
+    const permanentDependencies: CloudSyncDependencies = {
+      ...dependencies(new DurableFakeServer()),
+      fetch: async () => {
+        calls += 1;
+        return Response.json({ error: { code: 'session_revoked', message: 'revoked' } }, { status: 401 });
+      }
+    };
+
+    const response = await fetchSyncWithRetry('/api/v1/sync/pull', {}, permanentDependencies);
+    expect(response.status).toBe(401);
+    expect(calls).toBe(1);
   });
 
   it('keeps every mutation pending across 401 and later authentication recovery', async () => {

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { assertDurableReceipt, syncMutationSchema } from './sync';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { describe, expect, it, vi } from 'vitest';
+import { applySyncMutationsSequentially, assertDurableReceipt, syncMutationSchema } from './sync';
 
 const mutation = {
   mutationId: '11111111-1111-4111-8111-111111111111',
@@ -64,5 +65,66 @@ describe('sync API durable acceptance boundary', () => {
   it('rejects ambiguous acceptance flags even with a matching record', () => {
     expect(() => assertDurableReceipt(mutation, { ...receipt(), replayMismatch: true }))
       .toThrow(/exact durable server record/i);
+  });
+
+  it('processes a batch strictly in request order without overlapping RPC calls', async () => {
+    let active = 0;
+    let maximumActive = 0;
+    const order: string[] = [];
+    const rpc = vi.fn(async (_name: string, input: Record<string, unknown>) => {
+      active += 1;
+      maximumActive = Math.max(maximumActive, active);
+      const entityId = String(input.target_entity_id);
+      order.push(entityId);
+      await Promise.resolve();
+      active -= 1;
+      return {
+        error: null,
+        data: {
+          accepted: true,
+          serverVersion: order.length,
+          record: {
+            entity_type: input.target_entity_type,
+            entity_id: entityId,
+            version: input.target_version,
+            server_version: order.length,
+            payload: input.target_payload,
+            updated_at: input.target_updated_at,
+            deleted_at: input.target_deleted_at
+          }
+        }
+      };
+    });
+    const database = { rpc } as unknown as SupabaseClient;
+    const mutations = ['first', 'second', 'third'].map((entityId, index) => syncMutationSchema.parse({
+      ...mutation,
+      mutationId: `00000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      entityType: 'settings',
+      entityId,
+      payload: { id: entityId }
+    }));
+
+    const results = await applySyncMutationsSequentially(database, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', mutations);
+
+    expect(order).toEqual(['first', 'second', 'third']);
+    expect(maximumActive).toBe(1);
+    expect(results.map(result => result.mutationId)).toEqual(mutations.map(item => item.mutationId));
+  });
+
+  it('stops at the first RPC failure so later dependent mutations are not attempted', async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ error: new Error('database unavailable'), data: null });
+    const database = { rpc } as unknown as SupabaseClient;
+    const mutations = ['first', 'dependent'].map((entityId, index) => syncMutationSchema.parse({
+      ...mutation,
+      mutationId: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+      entityType: 'settings',
+      entityId,
+      payload: { id: entityId }
+    }));
+
+    await expect(applySyncMutationsSequentially(database, 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', mutations))
+      .rejects.toThrow('database unavailable');
+    expect(rpc).toHaveBeenCalledTimes(1);
   });
 });

@@ -32,6 +32,17 @@ export class SessionValidationError extends Error {
   }
 }
 
+export class SessionAccountMismatchError extends Error {
+  constructor() {
+    super('The signed-in account changed while synchronization was running. Local changes were not sent.');
+    this.name = 'SessionAccountMismatchError';
+  }
+}
+
+export const assertSessionMatchesUser = (session: Session, expectedUserId: string): void => {
+  if (session.user.id !== expectedUserId) throw new SessionAccountMismatchError();
+};
+
 export const isTestBuild = (): boolean => testBuild;
 export const isLocalDemo = (): boolean => localDemo || testBuild;
 export const shouldDisableServiceWorker = (): boolean => localDemo;
@@ -336,6 +347,19 @@ export const authenticatedFetch = async (input: RequestInfo | URL, init: Request
   if (!token) throw new Error('A signed-in session is required.');
   const headers = new Headers(init.headers);
   headers.set('authorization', `Bearer ${token}`);
+  return fetch(apiUrl(input), { ...init, headers });
+};
+
+export const authenticatedFetchForUser = async (
+  expectedUserId: string,
+  input: RequestInfo | URL,
+  init: RequestInit = {}
+): Promise<Response> => {
+  const session = await getSession();
+  if (!session) throw new Error('A signed-in session is required.');
+  assertSessionMatchesUser(session, expectedUserId);
+  const headers = new Headers(init.headers);
+  headers.set('authorization', `Bearer ${session.access_token}`);
   return fetch(apiUrl(input), { ...init, headers });
 };
 

@@ -145,14 +145,27 @@ const AppWrapper: React.FC = () => {
       void acceptSession(nextSession, false);
     };
 
+    const sessionRejected = () => {
+      void authService.getSession()
+        .then(nextSession => acceptSession(nextSession, false))
+        .catch(error => rejectSession(error, ++validationVersion));
+    };
+
     void (async () => {
       await acceptSession(await authService.getSession(), true);
-      if (active) unsubscribe = authService.onSessionChange(sessionChanged);
+      if (active) {
+        unsubscribe = authService.onSessionChange(sessionChanged);
+        window.addEventListener('goalflow:session-rejected', sessionRejected);
+      }
     })().catch(async error => {
       const version = ++validationVersion;
       await rejectSession(error, version);
     });
-    return () => { active = false; unsubscribe(); };
+    return () => {
+      active = false;
+      unsubscribe();
+      window.removeEventListener('goalflow:session-rejected', sessionRejected);
+    };
   }, [testBuild]);
 
   if (isLoading) return <Loading />;
