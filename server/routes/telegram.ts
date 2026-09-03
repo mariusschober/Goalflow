@@ -23,7 +23,7 @@ export const createTelegramRouter = (
   const router = Router();
   const processor = database ? createTelegramProcessor(config, database, speech, logger) : undefined;
   router.post("/webhook", async (request, response) => {
-    if (!config.TELEGRAM_WEBHOOK_SECRET || !config.TELEGRAM_BOT_TOKEN || !processor || !database) {
+    if (config.TELEGRAM_ENABLED !== "true" || !config.TELEGRAM_WEBHOOK_SECRET || !config.TELEGRAM_BOT_TOKEN || !processor || !database) {
       response.status(503).json({ error: { code: "telegram_not_configured", message: "Telegram is not configured." } }); return;
     }
     const providedSecret = request.header("x-telegram-bot-api-secret-token") ?? "";

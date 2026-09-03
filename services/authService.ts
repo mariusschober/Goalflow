@@ -1,7 +1,7 @@
 import { createClient, type Session } from '@supabase/supabase-js';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabasePublicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
 const apiOrigin = (import.meta.env.VITE_API_ORIGIN || '').replace(/\/$/, '');
 const configuredTelegramProvider = import.meta.env.VITE_TELEGRAM_OIDC_PROVIDER_ID || 'custom:telegram';
 export const telegramProvider = (configuredTelegramProvider.startsWith('custom:')
@@ -37,8 +37,8 @@ export const apiUrl = (input: RequestInfo | URL): RequestInfo | URL => {
   return `${apiOrigin}${raw.startsWith('/') ? raw : `/${raw}`}`;
 };
 
-export const supabase = supabaseUrl && supabaseAnonKey
-  ? createClient(supabaseUrl, supabaseAnonKey, {
+export const supabase = supabaseUrl && supabasePublicKey
+  ? createClient(supabaseUrl, supabasePublicKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     })
   : undefined;

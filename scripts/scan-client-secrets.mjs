@@ -3,6 +3,7 @@ import path from 'node:path';
 
 const root = path.resolve('dist/client');
 const forbiddenNames = [
+  'SUPABASE_SECRET_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
   'BACKUP_MASTER_KEY',
   'TELEGRAM_BOT_TOKEN',
@@ -28,6 +29,7 @@ for (const file of files) {
   const content = await readFile(file, 'utf8');
   for (const name of forbiddenNames) if (content.includes(name)) findings.push(`${file}: ${name}`);
   for (const value of forbiddenValues) if (content.includes(value)) findings.push(`${file}: configured secret value`);
+  if (/sb_secret_[A-Za-z0-9_-]{16,}/.test(content)) findings.push(`${file}: Supabase secret-key-shaped value`);
 }
 if (findings.length) {
   console.error('Forbidden server secret material found in the client bundle:');

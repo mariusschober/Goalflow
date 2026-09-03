@@ -181,7 +181,7 @@ export const runEncryptedBackups = async (config: AppConfig, admin: SupabaseClie
 };
 
 export const startBackupScheduler = (config: AppConfig, admin?: SupabaseClient): (() => void) => {
-  if (!admin || !config.BACKUP_MASTER_KEY) return () => undefined;
+  if (config.BACKUPS_ENABLED !== 'true' || !admin || !config.BACKUP_MASTER_KEY) return () => undefined;
   let lastRun = '';
   let running = false;
   const tick = async () => {

@@ -32,15 +32,7 @@ jobs:
       - run: node scripts/check-durable-identifiers.mjs
       - run: npm audit --audit-level=high
       - name: Verify production startup
-        run: |
-          npm start &
-          SERVER_PID=$!
-          trap 'kill $SERVER_PID' EXIT
-          for attempt in {1..20}; do
-            curl --fail --silent http://127.0.0.1:3000/api/v1/health && exit 0
-            sleep 1
-          done
-          exit 1
+        run: npm run verify:server
 
   secrets:
     runs-on: ubuntu-latest
@@ -267,15 +259,7 @@ jobs:
       - run: npm run build:client
       - run: npm run build:server
       - name: Verify production startup
-        run: |
-          npm start &
-          SERVER_PID=$!
-          trap 'kill $SERVER_PID' EXIT
-          for attempt in {1..20}; do
-            curl --fail --silent http://127.0.0.1:3000/api/v1/health && exit 0
-            sleep 1
-          done
-          exit 1
+        run: npm run verify:server
       - run: npm run verify:client-secrets
       - run: npm run verify:client-artifacts
       - run: npm audit --audit-level=high

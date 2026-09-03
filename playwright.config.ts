@@ -29,13 +29,14 @@ export default defineConfig({
   ],
   webServer: {
     command: 'npm run build:client:test && npm run build:server && npm start',
-    url: 'http://127.0.0.1:4173/api/v1/health',
+    url: 'http://127.0.0.1:4173/api/v1/health/live',
     reuseExistingServer: !process.env.CI,
     timeout: 90_000,
     env: {
       NODE_ENV: 'production',
       HOST: '127.0.0.1',
       PORT: '4173',
+      APP_ORIGIN: 'http://127.0.0.1:4173',
     },
   },
 });

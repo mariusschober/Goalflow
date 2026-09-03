@@ -1,7 +1,8 @@
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import type { NextFunction, Request, Response } from "express";
 import type { AppConfig } from "./config";
 import type { AuthenticatedRequest, AuthenticatedUser } from "./types";
+import { createUserVerifierClient } from "./supabase";
 
 export const bearerToken = (request: Request): string | undefined => {
   const header = request.header("authorization");
@@ -15,9 +16,7 @@ const tokenAal = (token: string): "aal1" | "aal2" => {
 };
 
 export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) => {
-  const supabase = config.SUPABASE_URL && config.SUPABASE_ANON_KEY
-    ? createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } })
-    : undefined;
+  const supabase = createUserVerifierClient(config);
   return async (request: Request, response: Response, next: NextFunction) => {
     const token = bearerToken(request);
     if (token === "local-demo" && config.NODE_ENV !== "production" && config.ENABLE_LOCAL_DEMO === "true") {
@@ -34,7 +33,7 @@ export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) 
     const authEmail = data.user.email?.toLowerCase() ?? "";
     let { data: profile, error: profileError } = await admin.from("profiles").select("email,role,status")
       .eq("user_id", data.user.id).maybeSingle();
-    if (!profile && !profileError && authEmail === config.OWNER_EMAIL.toLowerCase()) {
+    if (!profile && !profileError && data.user.id === config.OWNER_USER_ID) {
       const result = await admin.from("profiles").upsert({ user_id: data.user.id, email: authEmail, role: "owner", status: "active" }, { onConflict: "user_id" })
         .select("email,role,status").single();
       profile = result.data; profileError = result.error;
@@ -54,6 +53,9 @@ export const createAuthMiddleware = (config: AppConfig, admin?: SupabaseClient) 
       profile = updatedProfile;
     }
     if (!profile || profile.status !== "active") {
+      response.status(403).json({ error: { code: "account_inactive", message: "This Goalflow account is not active." } }); return;
+    }
+    if (profile.role === "owner" && config.OWNER_USER_ID && data.user.id !== config.OWNER_USER_ID) {
       response.status(403).json({ error: { code: "account_inactive", message: "This Goalflow account is not active." } }); return;
     }
     const user: AuthenticatedUser = {

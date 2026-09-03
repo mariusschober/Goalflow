@@ -1,10 +1,11 @@
 import crypto from "node:crypto";
-import { createClient, type SupabaseClient, type User } from "@supabase/supabase-js";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { Router } from "express";
 import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import { bearerToken } from "../auth";
 import type { AppConfig } from "../config";
+import { createUserVerifierClient } from "../supabase";
 
 const hash = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
 const codeChallengePattern = /^[A-Za-z0-9_-]{43,128}$/;
@@ -36,25 +37,22 @@ export const telegramIdentity = (user: User, providerId: string) => {
 
 export const createTelegramAuthRouter = (config: AppConfig, admin?: SupabaseClient) => {
   const router = Router();
-  const verifier = config.SUPABASE_URL && config.SUPABASE_ANON_KEY
-    ? createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY, {
-        auth: { persistSession: false, autoRefreshToken: false }
-      })
-    : undefined;
+  const verifier = createUserVerifierClient(config);
   router.use(rateLimit({ windowMs: 60_000, limit: 12, standardHeaders: "draft-8", legacyHeaders: false }));
 
   router.post("/telegram/preflight", async (request, response) => {
-    if (!admin) {
+    if (config.TELEGRAM_ENABLED !== "true" || !admin) {
       response.status(503).json({ error: { code: "auth_not_configured", message: "Telegram signup is not configured." } });
       return;
     }
     try {
       const input = preflightBody.parse(request.body);
-      if (config.TURNSTILE_SECRET_KEY) {
+      if (config.TURNSTILE_ENABLED === "true" && config.TURNSTILE_SECRET_KEY) {
         const verification = await fetch('https://challenges.cloudflare.com/turnstile/v0/siteverify', {
           method: 'POST',
           headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ secret: config.TURNSTILE_SECRET_KEY, response: input.captchaToken, remoteip: request.ip || '' })
+          body: new URLSearchParams({ secret: config.TURNSTILE_SECRET_KEY, response: input.captchaToken, remoteip: request.ip || '' }),
+          signal: AbortSignal.timeout(config.READINESS_TIMEOUT_MS)
         });
         const result = await verification.json() as { success?: boolean };
         if (!result.success) {
