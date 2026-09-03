@@ -83,7 +83,6 @@ final class LocalBreakdownService: @unchecked Sendable {
             try assertSchedule(precision: .day, scheduledFor: today, today: today, scheduledTime: nil)
         }
         // Order: tail per today scheduledFor
-        let siblingsToday = tasks.filter { $0.scheduledFor == today }
         // If we will preserve plan, we need parent order
         let parentOrder = parent.plannedOrder
         var created: [GoalflowTask] = []

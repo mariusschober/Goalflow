@@ -182,6 +182,42 @@ final class FileFocusSessionStoreTests: XCTestCase {
         let s = ExecutionState(taskId: "both", phase: .paused, startedAt: Date(), plannedDurationSeconds: 900, accumulatedPauseSeconds: 30, lastPausedAt: Date())
         try composite.save(s)
         XCTAssertEqual(try fileStore.load()?.taskId, "both")
-        XCTAssertEqual(wal.load()?.taskId, "both")
+        XCTAssertEqual(try wal.load()?.taskId, "both")
+    }
+
+    func test_composite_repairs_corrupt_file_from_valid_mirror() throws {
+        let suite = "test.focus.repair.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let wal = UserDefaultsFocusSessionStore(defaults: defaults)
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let file = tmp.appendingPathComponent("execution.json")
+        let expected = ExecutionState(taskId: "recover-focus", phase: .paused, startedAt: Date(), plannedDurationSeconds: 900)
+        try wal.save(expected)
+        try Data("damaged".utf8).write(to: file, options: [.atomic])
+
+        let fileStore = FileFocusSessionStore(fileURL: file)
+        let composite = CompositeFocusSessionStore(fileStore: fileStore, walStore: wal)
+        XCTAssertEqual(try composite.load()?.taskId, expected.taskId)
+        XCTAssertEqual(try fileStore.load()?.taskId, expected.taskId)
+    }
+
+    func test_composite_surfaces_two_corrupt_replicas() throws {
+        let suite = "test.focus.corrupt.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let wal = UserDefaultsFocusSessionStore(defaults: defaults)
+        wal.setRawData(Data("damaged-mirror".utf8))
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let file = tmp.appendingPathComponent("execution.json")
+        try Data("damaged-file".utf8).write(to: file, options: [.atomic])
+
+        let composite = CompositeFocusSessionStore(fileStore: FileFocusSessionStore(fileURL: file), walStore: wal)
+        XCTAssertThrowsError(try composite.load())
+        XCTAssertEqual(try Data(contentsOf: file), Data("damaged-file".utf8))
     }
 }

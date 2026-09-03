@@ -51,9 +51,9 @@ final class FlowStateTests: XCTestCase {
         XCTAssertNil(FlowState(rawValue: "invalid"))
         XCTAssertNil(FlowState(rawValue: ""))
     }
-    func test_withCompleted_preserves_extraJson() {
+    func test_withCompleted_preserves_extraJson() throws {
         var task = GoalflowTask(id: "t", title: "Test", scheduledFor: "2026-08-30", createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z", extraJson: "{\"keep\":\"x\",\"duration\":25}")
-        task = task.withCompleted(at: Date(timeIntervalSince1970: 1_700_000_000), actualDurationMinutes: 10, flowState: FlowState.high)
+        task = try task.withCompleted(at: Date(timeIntervalSince1970: 1_700_000_000), actualDurationMinutes: 10, flowState: FlowState.high)
         XCTAssertEqual(task.status, .completed)
         XCTAssertEqual(task.version, 2)
         XCTAssertEqual(task.flowState, FlowState.high)
@@ -63,9 +63,9 @@ final class FlowStateTests: XCTestCase {
             XCTAssertEqual(obj["keep"] as? String, "x")
         } else { XCTFail() }
     }
-    func test_withFlowState_merges() {
+    func test_withFlowState_merges() throws {
         var task = GoalflowTask(id: "t", title: "Test", scheduledFor: "2026-08-30", status: .completed, createdAt: "2026-08-30T00:00:00Z", updatedAt: "2026-08-30T00:00:00Z", version: 2, extraJson: "{\"actualDuration\":10,\"keep\":\"y\"}")
-        task = task.withFlowState(FlowState.flow)
+        task = try task.withFlowState(FlowState.flow)
         XCTAssertEqual(task.flowState, FlowState.flow)
         XCTAssertEqual(task.version, 3)
         if let data = task.extraJson.data(using: .utf8),
@@ -73,6 +73,19 @@ final class FlowStateTests: XCTestCase {
             XCTAssertEqual(obj["keep"] as? String, "y")
             XCTAssertEqual(obj["actualDuration"] as? Int, 10)
         } else { XCTFail() }
+    }
+
+    func test_corrupt_extra_json_blocks_completion_without_changing_identity() {
+        let task = GoalflowTask(
+            id: "durable-corrupt-metadata-id",
+            title: "Do not partially complete",
+            scheduledFor: "2026-08-30",
+            extraJson: "not-json"
+        )
+        XCTAssertThrowsError(try task.withCompleted(at: Date(), actualDurationMinutes: 10, flowState: nil))
+        XCTAssertEqual(task.id, "durable-corrupt-metadata-id")
+        XCTAssertEqual(task.status, .open)
+        XCTAssertEqual(task.version, 1)
     }
 }
 final class TaskCompletionPersistenceTests: XCTestCase {
@@ -101,7 +114,7 @@ final class TaskCompletionPersistenceTests: XCTestCase {
         XCTAssertEqual(queue.first?.id, secondId)
         var tasks = after
         guard let idx = tasks.firstIndex(where: { $0.id == firstId }) else { XCTFail(); return }
-        tasks[idx] = tasks[idx].withFlowState(FlowState.good)
+        tasks[idx] = try tasks[idx].withFlowState(FlowState.good)
         try store.saveAll(tasks)
         let final = try store.loadAll()
         XCTAssertEqual(final.first(where: { $0.id == firstId })?.flowState, FlowState.good)

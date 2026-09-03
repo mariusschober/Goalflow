@@ -50,7 +50,7 @@ final class HardeningTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         let bridge = FileSyncStoreBridge(baseDir: tmp, defaults: UserDefaults(suiteName: UUID().uuidString)!)
         // Write 13 stores via bridge
-        let task = GoalflowTask(id: "1", title: "T", scheduledFor: "2026-09-01").toDictionary()
+        let task = try GoalflowTask(id: "1", title: "T", scheduledFor: "2026-09-01").toDictionary()
         let values: [String: Any] = [
             "tasks": [task],
             "goals": [["id":"g1","name":"G","color":"#4F46E5","createdAt":0]],

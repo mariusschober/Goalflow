@@ -62,6 +62,18 @@ final class BreakSessionStoreTests: XCTestCase {
         XCTAssertNil(try store.load()?.durationSeconds)
         XCTAssertTrue(try store.load()?.isOpenEnded == true)
     }
+
+    func test_corrupt_break_state_is_not_treated_as_no_break() throws {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let file = tmp.appendingPathComponent("break.json")
+        try Data("damaged".utf8).write(to: file, options: [.atomic])
+        let store = BreakSessionStore(fileURL: file)
+
+        XCTAssertThrowsError(try store.load())
+        XCTAssertEqual(try Data(contentsOf: file), Data("damaged".utf8))
+    }
 }
 
 final class BreakTimerTests: XCTestCase {

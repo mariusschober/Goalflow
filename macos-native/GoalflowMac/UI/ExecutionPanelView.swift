@@ -167,6 +167,10 @@ final class ExecutionViewModel: ObservableObject {
         localError = nil
     }
 
+    func reportCaptureStartFailure(_ error: Error) {
+        localError = "Task captured, but focus did not start: \(error.localizedDescription)"
+    }
+
     func requestCalendarAccess() {
         Task { @MainActor in
             _ = await calendarService.requestAccessIfNeeded()

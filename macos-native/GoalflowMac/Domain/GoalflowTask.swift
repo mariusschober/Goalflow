@@ -16,22 +16,36 @@ struct GoalflowTask: Codable, Equatable, Sendable, Identifiable {
     init(id: String, title: String, notes: String = "", tags: [String] = [], schedulePrecision: SchedulePrecision = .day, scheduledFor: String, scheduledTime: String? = nil, plannedOrder: Int = 0, status: TaskStatus = .open, isFrog: Bool = false, frogFailures: Int = 0, beforeFrog: Bool = false, source: TaskSource = .manual, parentTaskId: String? = nil, habitId: String? = nil, goalId: String? = nil, createdAt: String = ISO8601DateFormatter().string(from: Date()), updatedAt: String = ISO8601DateFormatter().string(from: Date()), version: Int = 1, durationMinutes: Int = 25, extraJson: String = "{}") {
         self.id = id; self.title = title.trimmingCharacters(in: .whitespacesAndNewlines); self.notes = notes; self.tags = tags; self.schedulePrecision = schedulePrecision; self.scheduledFor = scheduledFor; self.scheduledTime = scheduledTime; self.plannedOrder = plannedOrder; self.status = status; self.isFrog = isFrog; self.frogFailures = frogFailures; self.beforeFrog = beforeFrog; self.source = source; self.parentTaskId = parentTaskId; self.habitId = habitId; self.goalId = goalId; self.createdAt = createdAt; self.updatedAt = updatedAt; self.version = version; self.durationMinutes = max(1, min(1440, durationMinutes)); self.extraJson = extraJson
     }
-    func withCompleted(at now: Date, actualDurationMinutes: Int, flowState: FlowState?) -> GoalflowTask {
+    func withCompleted(at now: Date, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
         var copy = self; copy.status = .completed; let iso = ISO8601DateFormatter().string(from: now); copy.updatedAt = iso; copy.version = version + 1
-        var dict: [String: Any] = [:]
-        if let data = extraJson.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { dict = obj }
+        var dict = try decodedExtraJSON()
         dict["actualDuration"] = max(1, actualDurationMinutes); dict["completedAt"] = iso
         if let flow = flowState { dict["flowState"] = flow.rawValue }
-        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]), let str = String(data: data, encoding: .utf8) { copy.extraJson = str }
+        copy.extraJson = try encodedExtraJSON(dict)
         return copy
     }
-    func withFlowState(_ flow: FlowState) -> GoalflowTask {
+    func withFlowState(_ flow: FlowState) throws -> GoalflowTask {
         var copy = self; copy.updatedAt = ISO8601DateFormatter().string(from: Date()); copy.version = version + 1
-        var dict: [String: Any] = [:]
-        if let data = extraJson.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] { dict = obj }
+        var dict = try decodedExtraJSON()
         dict["flowState"] = flow.rawValue
-        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.sortedKeys]), let str = String(data: data, encoding: .utf8) { copy.extraJson = str }
+        copy.extraJson = try encodedExtraJSON(dict)
         return copy
+    }
+
+    private func decodedExtraJSON() throws -> [String: Any] {
+        guard let data = extraJson.data(using: .utf8),
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SyncError.validation("Task metadata is damaged. The task was not changed.")
+        }
+        return object
+    }
+
+    private func encodedExtraJSON(_ object: [String: Any]) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        guard let value = String(data: data, encoding: .utf8) else {
+            throw SyncError.validation("Task metadata could not be encoded. The task was not changed.")
+        }
+        return value
     }
     var flowState: FlowState? {
         guard let data = extraJson.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let raw = obj["flowState"] as? String else { return nil }
@@ -46,12 +60,14 @@ extension GoalflowTask {
     var isOpen: Bool { status == .open }
     var isCompleted: Bool { status == .completed }
     var plannedDurationSeconds: Int { durationMinutes * 60 }
-    func toDictionary() -> [String: Any] {
+    func toDictionary() throws -> [String: Any] {
         let enc = JSONEncoder()
         enc.dateEncodingStrategy = .iso8601
         enc.outputFormatting = [.sortedKeys]
-        guard let data = try? enc.encode(self),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return [:] }
+        let data = try enc.encode(self)
+        guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw SyncError.validation("Task data could not be encoded. The task was not changed.")
+        }
         return obj
     }
 }

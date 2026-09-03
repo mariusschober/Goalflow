@@ -118,7 +118,7 @@ final class CaptureWindowController: NSObject {
             try store.save(state)
             evm.restore() // will pick up new execution
         } catch {
-            print("[Capture] start focus failed:", error)
+            evm.reportCaptureStartFailure(error)
         }
     }
 }

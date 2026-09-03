@@ -44,8 +44,8 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
     func saveAll(_ tasks: [GoalflowTask]) throws {
         let sorted = tasks.sorted(by: goalflowTaskComparator)
         let previous = try loadAll()
-        let previousValue: Any? = previous.map { $0.toDictionary() }
-        let nextValue: Any? = sorted.map { $0.toDictionary() }
+        let previousValue: Any? = try previous.map { try $0.toDictionary() }
+        let nextValue: Any? = try sorted.map { try $0.toDictionary() }
         let transaction = try buildStagedLocalTransaction(
             storeName: "tasks",
             userKey: "unbound-local-workspace",
@@ -74,7 +74,7 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
     func completeTask(id: String, actualDurationMinutes: Int, flowState: FlowState?) throws -> GoalflowTask {
         var tasks = try loadAll(); guard let idx = tasks.firstIndex(where: { $0.id == id }) else { throw TaskStoreError.notFound }
         guard tasks[idx].isOpen else { throw TaskStoreError.notOpen }
-        let completed = tasks[idx].withCompleted(at: Date(), actualDurationMinutes: actualDurationMinutes, flowState: flowState)
+        let completed = try tasks[idx].withCompleted(at: Date(), actualDurationMinutes: actualDurationMinutes, flowState: flowState)
         tasks[idx] = completed; try saveAll(tasks); return completed
     }
     func updateTask(_ task: GoalflowTask) throws {
@@ -130,7 +130,7 @@ final class DemoCurrentTaskProvider: CurrentTaskProvider, @unchecked Sendable {
     func updateFlowState(taskId: String, flow: FlowState) throws {
         var tasks = try taskStore.loadAll()
         guard let idx = tasks.firstIndex(where: { $0.id == taskId }) else { throw TaskStoreError.notFound }
-        tasks[idx] = tasks[idx].withFlowState(flow)
+        tasks[idx] = try tasks[idx].withFlowState(flow)
         try taskStore.saveAll(tasks)
     }
     func resetDemo() throws {

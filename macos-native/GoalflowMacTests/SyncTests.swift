@@ -118,7 +118,7 @@ final class SyncMetaTests: XCTestCase {
         let meta = try metaStore.load()
         XCTAssertEqual(meta.outbox.count, 1)
         XCTAssertEqual(meta.outbox.first?.entityId, task.id)
-        XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(task.toDictionary()))
+        XCTAssertEqual(stableJson(meta.outbox.first?.payload.value), stableJson(try task.toDictionary()))
     }
 
     func test_pending_local_commit_recovers_after_interrupted_write() throws {

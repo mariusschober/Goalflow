@@ -103,9 +103,6 @@ final class CaptureViewModel: ObservableObject {
             showDatePicker = true
             // default selectedDate to today, selectedMonth to next month
             selectedDate = Date()
-            let today = makeTodayString(from: clock.now())
-            let comps = Calendar.current.dateComponents([.year, .month], from: Date())
-            var next = Date()
             if let d = Calendar.current.date(byAdding: .month, value: 1, to: Date()) {
                 let f = DateFormatter(); f.dateFormat = "yyyy-MM"; f.timeZone = .current; f.locale = Locale(identifier: "en_US_POSIX")
                 selectedMonth = f.string(from: d)
