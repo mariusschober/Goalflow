@@ -3,6 +3,7 @@ import {
   SessionAccountMismatchError,
   supabase
 } from './authService';
+import { readResponseBodyWithLimit, ResponseTooLargeError } from './boundedResponse';
 import { DurableStorageError, storageService, STORES } from './storage';
 import {
   emptySyncMeta,
@@ -31,6 +32,7 @@ export interface CloudSyncDependencies {
   sleep?: (delayMs: number) => Promise<void>;
   random?: () => number;
   requestTimeoutMs?: number;
+  maxResponseBytes?: number;
   maxAttempts?: number;
   signal?: AbortSignal;
 }
@@ -80,6 +82,7 @@ export class SyncProtocolError extends Error {
 export const isPermanentSyncFailure = (error: unknown): boolean =>
   (error instanceof SyncHttpError && error.permanent)
   || error instanceof SyncProtocolError
+  || error instanceof ResponseTooLargeError
   || error instanceof DurableStorageError
   || error instanceof SessionAccountMismatchError;
 
@@ -138,6 +141,10 @@ export const fetchSyncWithRetry = async (
 ): Promise<Response> => {
   const maximumAttempts = Math.max(1, Math.min(5, dependencies.maxAttempts ?? 3));
   const timeoutMs = Math.max(250, Math.min(120_000, dependencies.requestTimeoutMs ?? 15_000));
+  const maximumResponseBytes = Math.max(
+    1,
+    Math.min(16 * 1024 * 1024, dependencies.maxResponseBytes ?? 16 * 1024 * 1024)
+  );
   const sleep = dependencies.sleep ?? defaultSleep;
   const random = dependencies.random ?? Math.random;
   let lastError: unknown;
@@ -157,7 +164,9 @@ export const fetchSyncWithRetry = async (
     try {
       const response = await dependencies.fetch(input, { ...init, signal: controller.signal });
       if (!retryableStatus(response.status) || attempt + 1 >= maximumAttempts) {
-        const body = responseWithoutBody(response.status) ? null : await response.arrayBuffer();
+        const body = responseWithoutBody(response.status)
+          ? null
+          : await readResponseBodyWithLimit(response, maximumResponseBytes);
         return new Response(body, {
           status: response.status,
           statusText: response.statusText,

@@ -1,4 +1,5 @@
 import { createClient, type AuthChangeEvent, type Session } from '@supabase/supabase-js';
+import { readResponseBodyWithLimit } from './boundedResponse';
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 const supabasePublicKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
@@ -69,13 +70,15 @@ export const apiUrl = (input: RequestInfo | URL): RequestInfo | URL => {
 };
 
 const responseWithoutBody = (status: number): boolean => status === 204 || status === 205 || status === 304;
+const MAX_API_RESPONSE_BYTES = 16 * 1024 * 1024;
 
 /** Keeps the deadline active until the complete API response is locally readable. */
 export const fetchApiWithTimeout = async (
   input: RequestInfo | URL,
   init: RequestInit = {},
   timeoutMs = 15_000,
-  fetcher: typeof fetch = globalThis.fetch
+  fetcher: typeof fetch = globalThis.fetch,
+  maximumResponseBytes = MAX_API_RESPONSE_BYTES
 ): Promise<Response> => {
   const parentSignal = init.signal;
   if (parentSignal?.aborted) throw parentSignal.reason ?? new DOMException('Request stopped.', 'AbortError');
@@ -88,7 +91,9 @@ export const fetchApiWithTimeout = async (
   );
   try {
     const response = await fetcher(apiUrl(input), { ...init, signal: controller.signal });
-    const body = responseWithoutBody(response.status) ? null : await response.arrayBuffer();
+    const body = responseWithoutBody(response.status)
+      ? null
+      : await readResponseBodyWithLimit(response, maximumResponseBytes);
     return new Response(body, {
       status: response.status,
       statusText: response.statusText,
