@@ -143,7 +143,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
     },
     assuranceLevel: request.user!.aal
   }));
-  app.use("/api/v1", auth, requireOwnerMfa, createAdminInviteRouter(admin), createAccountRouter(admin, config.TELEGRAM_OIDC_PROVIDER_ID), createSyncRouter(admin), createTaskRouter(admin));
+  app.use("/api/v1", auth, requireOwnerMfa, createAdminInviteRouter(admin), createAccountRouter(admin, config.TELEGRAM_OIDC_PROVIDER_ID, config.TELEGRAM_ENABLED === "true"), createSyncRouter(admin), createTaskRouter(admin));
   app.use("/api/v1/ai", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));
   app.use("/api/gemini", auth, requireOwnerMfa, createAiRouter(config, admin, ai, logger));
   app.all("/api/{*splat}", (_request, response) => {

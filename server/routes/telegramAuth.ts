@@ -24,14 +24,17 @@ const activateBody = z.object({
 });
 
 export const telegramIdentity = (user: User, providerId: string) => {
-  const identity = user.identities?.find((item) =>
-    item.provider === providerId || item.provider.toLowerCase().includes("telegram"));
-  const data = { ...user.user_metadata, ...(identity?.identity_data ?? {}) } as Record<string, unknown>;
-  const rawId = data.telegram_user_id ?? data.id ?? data.sub ?? identity?.id;
-  const match = String(rawId ?? "").match(/\d+/);
-  if (!match) return undefined;
+  const acceptedProviderIds = new Set([providerId, providerId.replace(/^custom:/, "")]);
+  const identity = user.identities?.find(item => acceptedProviderIds.has(item.provider));
+  if (!identity) return undefined;
+  const data = (identity.identity_data ?? {}) as Record<string, unknown>;
+  const rawId = data.telegram_user_id ?? data.id ?? data.sub ?? identity.id;
+  const textId = String(rawId ?? "");
+  if (!/^\d{1,16}$/.test(textId)) return undefined;
+  const id = Number(textId);
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined;
   return {
-    id: Number(match[0]),
+    id,
     username: String(data.username ?? data.preferred_username ?? "")
   };
 };

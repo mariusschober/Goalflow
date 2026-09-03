@@ -286,7 +286,7 @@ export const beginTelegramSignup = async (inviteCode: string, captchaToken = '')
   if (error) throw error;
 };
 
-export const beginOwnerTelegramLink = async (): Promise<void> => {
+export const beginTelegramLink = async (): Promise<void> => {
   if (!supabase) throw new Error('Authentication is not configured.');
   sessionStorage.setItem('goalflow_owner_telegram_link', 'pending');
   const { error } = await supabase.auth.linkIdentity({
@@ -300,6 +300,31 @@ export const beginOwnerTelegramLink = async (): Promise<void> => {
     sessionStorage.removeItem('goalflow_owner_telegram_link');
     throw error;
   }
+};
+
+export interface TelegramBotStatus {
+  enabled: boolean;
+  linked: boolean;
+  username: string | null;
+}
+
+export const getTelegramBotStatus = async (): Promise<TelegramBotStatus> => {
+  const response = await authenticatedFetch('/api/v1/account/telegram');
+  const result = await response.json() as TelegramBotStatus & { error?: { message?: string } };
+  if (!response.ok) throw new Error(result.error?.message || 'Telegram status could not be loaded.');
+  return { enabled: result.enabled === true, linked: result.linked === true, username: result.username ?? null };
+};
+
+export const enableTelegramBotAccess = async (): Promise<void> => {
+  const response = await authenticatedFetch('/api/v1/account/telegram/link', { method: 'POST' });
+  const result = await response.json() as { error?: { message?: string } };
+  if (!response.ok) throw new Error(result.error?.message || 'Telegram could not be linked.');
+};
+
+export const disableTelegramBotAccess = async (): Promise<void> => {
+  const response = await authenticatedFetch('/api/v1/account/telegram/link', { method: 'DELETE' });
+  const result = await response.json() as { error?: { message?: string } };
+  if (!response.ok) throw new Error(result.error?.message || 'Telegram access could not be revoked.');
 };
 
 export const activateOwnerTelegramLink = async (session: Session): Promise<void> => {

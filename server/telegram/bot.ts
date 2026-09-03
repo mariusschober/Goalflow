@@ -2,8 +2,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AppConfig } from "../config";
 import type { Logger } from "../logger";
 import type { SpeechProvider } from "../speech/types";
-import { buildTodayQueue, getPlanningGate, type DailyPlan, type ScheduledTask } from "../../src/domain/scheduling";
 import { parseTelegramCapture } from "./capture";
+import { identityFor, loadQueue, localDateFor } from "./queue";
 import { v5 as uuidv5 } from "uuid";
 
 const TELEGRAM_MUTATION_NAMESPACE = "af6e79e1-c616-4c61-bc96-7207d02c9a95";
@@ -25,19 +25,8 @@ export interface TelegramUpdate { update_id: number; message?: TelegramMessage; 
 
 const escapeHtml = (value: string): string => value
   .replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
-
-const rowToTask = (row: Record<string, unknown>): ScheduledTask => ({
-  id: String(row.id), userId: String(row.user_id), title: String(row.title), notes: String(row.notes ?? ""),
-  tags: Array.isArray(row.tags) ? row.tags.map(String) : [],
-  schedulePrecision: row.schedule_precision as "day" | "month",
-  scheduledFor: row.schedule_precision === "month" ? String(row.scheduled_for).slice(0, 7) : String(row.scheduled_for).slice(0, 10),
-  scheduledTime: row.scheduled_time ? String(row.scheduled_time).slice(0, 5) : undefined,
-  plannedOrder: Number(row.planned_order ?? 0), status: row.status as ScheduledTask["status"],
-  isFrog: Boolean(row.is_frog), frogFailures: Number(row.frog_failures ?? 0), beforeFrog: Boolean(row.before_frog),
-  source: row.source as ScheduledTask["source"], parentTaskId: row.parent_task_id ? String(row.parent_task_id) : undefined,
-  habitId: row.habit_id ? String(row.habit_id) : undefined, createdAt: String(row.created_at), updatedAt: String(row.updated_at),
-  deletedAt: row.deleted_at ? String(row.deleted_at) : undefined, version: Number(row.revision ?? 1)
-});
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
 
 const telegramRequest = async (config: AppConfig, method: string, payload: Record<string, unknown>) => {
   const response = await fetch(`https://api.telegram.org/bot${config.TELEGRAM_BOT_TOKEN}/${method}`, {
@@ -45,7 +34,9 @@ const telegramRequest = async (config: AppConfig, method: string, payload: Recor
     signal: AbortSignal.timeout(10_000)
   });
   if (!response.ok) throw new Error(`Telegram ${method} failed with status ${response.status}.`);
-  return response.json() as Promise<{ ok: boolean; result?: unknown }>;
+  const result = await response.json() as unknown;
+  if (!isRecord(result) || result.ok !== true) throw new Error(`Telegram ${method} returned an unverified acknowledgment.`);
+  return result as { ok: true; result?: unknown };
 };
 
 const send = (config: AppConfig, chatId: number, text: string, replyMarkup?: Record<string, unknown>) =>
@@ -57,14 +48,6 @@ const send = (config: AppConfig, chatId: number, text: string, replyMarkup?: Rec
 const answerCallback = (config: AppConfig, callbackId: string, text?: string) =>
   telegramRequest(config, "answerCallbackQuery", { callback_query_id: callbackId, ...(text ? { text } : {}) });
 
-const identityFor = async (database: SupabaseClient, telegramUserId: number) => {
-  const { data, error } = await database.from("telegram_identities")
-    .select("user_id,telegram_chat_id,bot_access_granted")
-    .eq("telegram_user_id", telegramUserId).maybeSingle();
-  if (error) throw error;
-  return data;
-};
-
 const existingApiReceipt = async (database: SupabaseClient, userId: string, mutationId: string) => {
   const { data, error } = await database.from("api_mutation_receipts")
     .select("operation,response")
@@ -73,26 +56,6 @@ const existingApiReceipt = async (database: SupabaseClient, userId: string, muta
     .maybeSingle();
   if (error) throw error;
   return data as { operation?: string; response?: Record<string, unknown> } | null;
-};
-
-const localDateFor = async (database: SupabaseClient, userId: string): Promise<string> => {
-  const { data } = await database.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
-  const timeZone = String(data?.timezone ?? "UTC");
-  try { return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
-  catch { return new Date().toISOString().slice(0, 10); }
-};
-
-const loadQueue = async (database: SupabaseClient, userId: string, today: string) => {
-  const [{ data: rows, error }, { data: planRow, error: planError }] = await Promise.all([
-    database.from("tasks").select("*").eq("user_id", userId).eq("status", "open").is("deleted_at", null),
-    database.from("daily_plans").select("local_date,confirmed_at,task_ids").eq("user_id", userId).eq("local_date", today).maybeSingle()
-  ]);
-  if (error) throw error; if (planError) throw planError;
-  const tasks = (rows ?? []).map((row) => rowToTask(row as Record<string, unknown>));
-  const plan: DailyPlan | undefined = planRow ? {
-    localDate: String(planRow.local_date), confirmedAt: String(planRow.confirmed_at), taskIds: (planRow.task_ids ?? []).map(String)
-  } : undefined;
-  return { tasks, gate: getPlanningGate(tasks, today, plan), queue: buildTodayQueue(tasks, today) };
 };
 
 const createTask = async (
@@ -122,6 +85,9 @@ const createTask = async (
     }
   });
   if (error) throw error;
+  if (!isRecord(data) || data.id !== taskId || data.user_id !== userId || data.source !== "telegram") {
+    throw new Error("Telegram task storage acknowledgment could not be verified.");
+  }
   return data;
 };
 
@@ -203,8 +169,13 @@ export const createTelegramProcessor = (
     await send(config, message.chat.id, `Link this Telegram account in Goalflow first: ${config.APP_ORIGIN}`);
     return;
   }
-  await database.from("telegram_identities").update({ telegram_chat_id: message.chat.id, updated_at: new Date().toISOString() })
-    .eq("telegram_user_id", from.id);
+  const { data: updatedIdentity, error: identityUpdateError } = await database.from("telegram_identities")
+    .update({ telegram_chat_id: message.chat.id, updated_at: new Date().toISOString() })
+    .eq("telegram_user_id", from.id).eq("user_id", identity.user_id)
+    .select("user_id").maybeSingle();
+  if (identityUpdateError || updatedIdentity?.user_id !== identity.user_id) {
+    throw identityUpdateError ?? new Error("Telegram identity update was not acknowledged.");
+  }
   const userId = String(identity.user_id);
   const today = await localDateFor(database, userId);
 
@@ -339,6 +310,6 @@ export const createTelegramProcessor = (
   try { await captureText(config, database, userId, message.chat.id, captureTextValue, today, update.update_id); }
   catch (error) {
     logger.warn("telegram.capture_rejected", { updateId: update.update_id, userId, category: error instanceof Error ? error.name : "unknown" });
-    await send(config, message.chat.id, error instanceof Error ? escapeHtml(error.message) : "The task could not be added.");
+    await send(config, message.chat.id, "The task was not acknowledged. Please retry the same message.");
   }
 };

@@ -26,7 +26,19 @@ export const rowToTask = (row: Record<string, unknown>): ScheduledTask => ({
   version: Number(row.revision ?? 1)
 });
 
-export const localDateFor = async (database: SupabaseClient, userId: string): Promise<string> => {
+export const identityFor = async (database: SupabaseClient, telegramUserId: number) => {
+  const { data: identity, error: identityError } = await database.from("telegram_identities")
+    .select("user_id,telegram_chat_id,bot_access_granted")
+    .eq("telegram_user_id", telegramUserId).maybeSingle();
+  if (identityError) throw identityError;
+  if (!identity?.bot_access_granted || typeof identity.user_id !== "string") return null;
+  const { data: profile, error: profileError } = await database.from("profiles")
+    .select("status").eq("user_id", identity.user_id).maybeSingle();
+  if (profileError) throw profileError;
+  return profile?.status === "active" ? identity : null;
+};
+
+export const localDateFor = async (database: SupabaseClient, userId: string, at = new Date()): Promise<string> => {
   const { data, error } = await database.from("profiles").select("timezone").eq("user_id", userId).maybeSingle();
   if (error || typeof data?.timezone !== "string" || !data.timezone) {
     throw new Error("The account timezone could not be verified.");
@@ -38,7 +50,7 @@ export const localDateFor = async (database: SupabaseClient, userId: string): Pr
       year: "numeric",
       month: "2-digit",
       day: "2-digit"
-    }).formatToParts(new Date());
+    }).formatToParts(at);
   } catch {
     throw new Error("The account timezone is invalid.");
   }

@@ -80,6 +80,60 @@ $$;
 do $$
 declare
   target_user constant uuid := '11111111-1111-4111-8111-111111111111';
+  other_user constant uuid := '44444444-4444-4444-8444-444444444444';
+  session_id constant uuid := '34343434-3434-4434-8434-343434343434';
+  token_hash constant text := repeat('d', 64);
+  init_hash constant text := repeat('e', 64);
+begin
+  insert into public.telegram_identities (
+    telegram_user_id, user_id, telegram_username, bot_access_granted
+  ) values (4242, target_user, 'migration_test', true)
+  on conflict (user_id) do update set
+    telegram_user_id = excluded.telegram_user_id,
+    bot_access_granted = true,
+    updated_at = now();
+  insert into auth.users (id, email) values (other_user, 'telegram-other@example.invalid')
+  on conflict (id) do nothing;
+  insert into public.profiles (user_id, email, timezone, role, status)
+  values (other_user, 'telegram-other@example.invalid', 'UTC', 'beta', 'active')
+  on conflict (user_id) do nothing;
+
+  if public.goalflow_link_telegram_identity(other_user, 4242, 'attacker') then
+    raise exception 'Telegram identity was linked to a second Goalflow account';
+  end if;
+  if (select user_id from public.telegram_identities where telegram_user_id = 4242) <> target_user then
+    raise exception 'Failed cross-account link changed Telegram ownership';
+  end if;
+
+  if (public.goalflow_create_telegram_mini_session(
+    session_id, token_hash, init_hash, 4242, clock_timestamp(),
+    clock_timestamp() + interval '15 minutes'
+  )->>'state') <> 'created' then
+    raise exception 'Telegram relink session fixture was not created';
+  end if;
+  if not public.goalflow_link_telegram_identity(target_user, 4243, 'replacement') then
+    raise exception 'Telegram identity could not be safely relinked for its owner';
+  end if;
+  if public.goalflow_validate_telegram_mini_session(token_hash) is not null then
+    raise exception 'Relinking Telegram preserved a cached Mini App session';
+  end if;
+  if (select telegram_user_id from public.telegram_identities where user_id = target_user) <> 4243 then
+    raise exception 'Telegram relink did not preserve exact ownership';
+  end if;
+  if not public.goalflow_revoke_user_telegram_access(target_user)
+    or (select bot_access_granted from public.telegram_identities where user_id = target_user) then
+    raise exception 'Telegram unlink did not revoke bot access';
+  end if;
+  if has_function_privilege('authenticated', 'public.goalflow_link_telegram_identity(uuid,bigint,text)', 'EXECUTE')
+    or not has_function_privilege('service_role', 'public.goalflow_link_telegram_identity(uuid,bigint,text)', 'EXECUTE') then
+    raise exception 'Telegram link RPC privilege boundary is invalid';
+  end if;
+end;
+$$;
+
+do $$
+declare
+  target_user constant uuid := '11111111-1111-4111-8111-111111111111';
   session_id constant uuid := '32323232-3232-4232-8232-323232323232';
   replay_session_id constant uuid := '33333333-3333-4333-8333-333333333333';
   token_hash constant text := repeat('a', 64);

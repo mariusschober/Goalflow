@@ -158,7 +158,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, s
                     {activeSection === 'account' && <section className="rounded-xl border border-gray-200 bg-gray-50 p-4 dark:border-slate-600 dark:bg-slate-700/50">
                         <h2 className="mb-4 text-lg font-bold text-gray-900 dark:text-white">Account & Security</h2>
                         {supabase ? <>
-                            <AccountSecurity userEmail={userEmail} isOwner={isOwner} />
+                            <AccountSecurity userEmail={userEmail} />
                             {isOwner && <div className="mt-5"><InviteManager /></div>}
                         </> : <div className="rounded-lg border border-indigo-100 bg-white p-4 text-sm text-gray-600 dark:border-slate-600 dark:bg-slate-800 dark:text-gray-300">
                             Local-only mode is active. There is no account, password, cloud session, or external login. Your data stays in this browser profile on this Mac.

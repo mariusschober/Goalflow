@@ -10,5 +10,6 @@
   "202609030002_account_lifecycle.sql": "3653ad3b92d1c7079fe4190646b1cd4682f88540c9f08408b6c3fe1d65723d4f",
   "202609030003_backup_restore_hardening.sql": "a90f96ef6fe1ba175be4f0335be64f0b1cb4bc96f16f3715612fd7db6a65805c",
   "202609030004_telegram_webhook_claims.sql": "771abee5f25bdfb50537221c73ecd38089dc98cce1274e49fab26fc9eb934665",
-  "202609030005_telegram_mini_sessions.sql": "fb82ad2f2b66af0d599186823a2c77b1a0b1de7d7462121dddf26f0c2ff98e91"
+  "202609030005_telegram_mini_sessions.sql": "fb82ad2f2b66af0d599186823a2c77b1a0b1de7d7462121dddf26f0c2ff98e91",
+  "202609030006_telegram_link_hardening.sql": "fd3cedb8d4ab51c7e4cda32be77932a85ed958c637ece23c90c0467f81c50672"
 }
