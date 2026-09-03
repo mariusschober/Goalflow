@@ -12,6 +12,10 @@ class NativeSyncWorkerPolicyTest {
             nativeSyncFailureDisposition(IOException("offline"), runAttemptCount = 0)
         )
         assertEquals(
+            NativeSyncFailureDisposition.RETRY,
+            nativeSyncFailureDisposition(NativeAuthTransientException("auth unavailable"), runAttemptCount = 0)
+        )
+        assertEquals(
             NativeSyncFailureDisposition.STOP,
             nativeSyncFailureDisposition(IOException("still offline"), runAttemptCount = 5)
         )

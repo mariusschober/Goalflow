@@ -6,6 +6,7 @@ import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -13,9 +14,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.lifecycle.lifecycleScope
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
 import com.mariusschober.goalflow.nativeapp.ui.GoalflowRoot
+import kotlinx.coroutines.launch
 
 const val GOALFLOW_CAPTURE_ACTION = "com.mariusschober.goalflow.CAPTURE"
 
@@ -23,6 +26,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var authClient: NativeAuthClient
     private var pendingCaptureText by mutableStateOf<String?>(null)
     private var pendingCaptureRequest by mutableStateOf(0)
+    private var authSessionRevision by mutableStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         installSplashScreen()
@@ -32,11 +36,12 @@ class MainActivity : ComponentActivity() {
         authClient = NativeAuthClient(application.sessionStore)
         handleIncomingIntent(intent)
         registerCaptureShortcut()
-        if (authClient.acceptCallback(intent)) NativeSyncScheduler.schedule(this)
+        handleAuthCallback(intent)
         setContent {
             GoalflowRoot(
                 externalCaptureText = pendingCaptureText,
                 externalCaptureRequest = pendingCaptureRequest,
+                authSessionRevision = authSessionRevision,
                 onExternalCaptureConsumed = { pendingCaptureText = null }
             )
         }
@@ -46,7 +51,7 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         handleIncomingIntent(intent)
-        if (authClient.acceptCallback(intent)) NativeSyncScheduler.schedule(this)
+        handleAuthCallback(intent)
     }
 
     private fun handleIncomingIntent(intent: Intent?) {
@@ -59,6 +64,25 @@ class MainActivity : ComponentActivity() {
         if (sharedText != null || shortcutCapture) {
             pendingCaptureText = sharedText?.take(MAX_SHARED_TEXT_LENGTH)
             pendingCaptureRequest += 1
+        }
+    }
+
+    private fun handleAuthCallback(intent: Intent?) {
+        lifecycleScope.launch {
+            runCatching { authClient.acceptCallback(intent) }
+                .onSuccess { accepted ->
+                    if (accepted) {
+                        authSessionRevision += 1
+                        NativeSyncScheduler.schedule(this@MainActivity)
+                    }
+                }
+                .onFailure { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        error.message ?: "Sign-in could not be completed.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
         }
     }
 

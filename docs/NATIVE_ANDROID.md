@@ -48,6 +48,20 @@ the production flavor, and sandbox data is isolated by the separate package
 identity. No production credential or fake hosted account is required for
 local use.
 
+Cloud-enabled builds take these non-secret Gradle properties from the command
+line or the developer's untracked Gradle properties file:
+
+```properties
+goalflowApiOrigin=https://api.example.test
+goalflowSupabaseUrl=https://project-ref.supabase.co
+goalflowSupabasePublishableKey=sb_publishable_example
+```
+
+Only the Supabase publishable key belongs in the APK. A Supabase secret or
+service-role key must never be supplied to Gradle. Supabase Auth must allow the
+exact native redirect `goalflow://auth/callback` in the matching staging or
+production project.
+
 ## Local commands
 
 From the repository root, with Java 21 and an Android SDK installed:
@@ -86,6 +100,13 @@ outbox is durable and causally ordered; WorkManager retries network work, but
 the UI never waits for it. Push acknowledgements and pull cursors are accepted
 only after exact payload/version checks. Conflicts retain both sides until the
 user chooses explicitly.
+
+Native email sign-in uses Supabase's PKCE authorization-code flow: the app
+stores a verifier in encrypted preferences, sends its S256 challenge with the
+OTP request, accepts only the registered deep link and matching state, and
+exchanges the single-use code on the same device. Implicit token fragments are
+rejected. Sign-out clears the local session before revoking only that Supabase
+session, so an in-flight sync cannot continue with a detached account.
 
 Encrypted backups use the Goalflow AES-256-GCM/PBKDF2 envelope. Decryption,
 schema, checksum, identity, and outbox-dependency validation happen before a

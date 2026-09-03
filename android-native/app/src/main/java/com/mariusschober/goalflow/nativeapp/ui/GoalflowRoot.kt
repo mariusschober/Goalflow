@@ -142,6 +142,7 @@ import java.time.format.FormatStyle
 import java.util.Locale
 import kotlin.math.ceil
 import androidx.compose.foundation.layout.RowScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -167,6 +168,7 @@ private val primaryDestinations = listOf(
 fun GoalflowRoot(
     externalCaptureText: String? = null,
     externalCaptureRequest: Int = 0,
+    authSessionRevision: Int = 0,
     onExternalCaptureConsumed: () -> Unit = {}
 ) {
     val application = LocalContext.current.applicationContext as GoalflowApplication
@@ -253,6 +255,10 @@ fun GoalflowRoot(
 
     LaunchedEffect(Unit) {
         restoreCheckpointAvailable = application.repository.hasRestoreCheckpoint()
+    }
+
+    LaunchedEffect(authSessionRevision) {
+        sessionActive = application.sessionStore.read() != null
     }
 
     LaunchedEffect(tasks) {
@@ -621,9 +627,19 @@ fun GoalflowRoot(
                         canUseCloud = NativeConfig.canUseCloud,
                         onSignIn = { signInOpen = true },
                         onSignOut = {
-                            application.sessionStore.clear()
                             sessionActive = false
-                            scope.launch { snackbarHostState.showSnackbar("Signed out. Local commitments stay here.") }
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) {
+                                runCatching { NativeAuthClient(application.sessionStore).signOut() }
+                                    .onSuccess {
+                                        snackbarHostState.showSnackbar("Signed out. Local commitments stay here.")
+                                    }
+                                    .onFailure { error ->
+                                        sessionActive = application.sessionStore.read() != null
+                                        snackbarHostState.showSnackbar(
+                                            error.message ?: "Server sign-out could not be confirmed."
+                                        )
+                                    }
+                            }
                         },
                         onExport = {
                             backupError = null

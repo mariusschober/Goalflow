@@ -207,6 +207,37 @@ class NativeSyncEngineTest {
     }
 
     @Test
+    fun `server identity mismatch stops before any local mutation is sent`() = runTest {
+        repository.createTask(
+            title = "Bound to the encrypted account",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        val mutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
+        var pushCalls = 0
+        val engine = engine(
+            transport = NativeSyncTransport { path, _, _, _ ->
+                if (path == "/api/v1/sync/push") pushCalls += 1
+                throw AssertionError("Unexpected request: $path")
+            },
+            serverUserId = "00000000-0000-4000-8000-000000000099"
+        )
+
+        try {
+            engine.synchronize()
+            fail("A mismatched verified account must stop synchronization")
+        } catch (_: NativeSyncProtocolException) {
+            // Expected before the push boundary.
+        }
+
+        assertEquals(0, pushCalls)
+        assertEquals(mutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
+    }
+
+    @Test
     fun `duplicated acknowledgement cannot remove an unacknowledged mutation`() = runTest {
         repeat(2) { index ->
             repository.createTask(
@@ -287,7 +318,8 @@ class NativeSyncEngineTest {
 
     private fun engine(
         transport: NativeSyncTransport,
-        sessionProvider: NativeSessionProvider = NativeSessionProvider { validSession }
+        sessionProvider: NativeSessionProvider = NativeSessionProvider { validSession },
+        serverUserId: String = validSession.userId!!
     ): NativeSyncEngine = NativeSyncEngine(
         repository = repository,
         sessionProvider = sessionProvider,
@@ -295,7 +327,7 @@ class NativeSyncEngineTest {
             when (path) {
                 "/api/v1/sync/status" -> NativeHttpResponse(
                     200,
-                    JSONObject().put("userId", validSession.userId).put("serverVersion", 0)
+                    JSONObject().put("userId", serverUserId).put("serverVersion", 0)
                         .put("unresolvedConflicts", 0).toString()
                 )
                 "/api/v1/sync/conflicts" -> NativeHttpResponse(

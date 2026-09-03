@@ -1,19 +1,22 @@
 package com.mariusschober.goalflow.nativeapp.sync
 
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
+import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.util.Base64
-import kotlinx.coroutines.runBlocking
 
 @RunWith(RobolectricTestRunner::class)
 class NativeAuthClientTest {
@@ -22,8 +25,7 @@ class NativeAuthClientTest {
 
     @Before
     fun setUp() {
-        val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
-        // In-memory store that bypasses AndroidKeyStore
+        val context = ApplicationProvider.getApplicationContext<Context>()
         store = object : SecureSessionStore(context) {
             private var memSession: NativeSession? = null
             private var memState: String? = null
@@ -36,7 +38,7 @@ class NativeAuthClientTest {
             override fun getPendingVerifier(): String? = memVerifier
             override fun clearPendingState() { memState = null; memVerifier = null }
         }
-        client = NativeAuthClient(store)
+        client = testClient()
     }
 
     @After
@@ -45,95 +47,285 @@ class NativeAuthClientTest {
         store.clearPendingState()
     }
 
-    private fun jwt(iss: String = "https://example.supabase.co", aud: String = "anon", exp: Long = System.currentTimeMillis() / 1000 + 3600, sub: String = "user-123"): String {
-        val header = Base64.getUrlEncoder().withoutPadding().encodeToString("""{"alg":"HS256","typ":"JWT"}""".toByteArray())
-        val payload = JSONObject().apply {
-            put("iss", iss)
-            put("aud", aud)
-            put("exp", exp)
-            put("sub", sub)
+    @Test
+    fun `callback rejects mismatched state before exchange`() = runBlocking {
+        store.setPendingState("expected_state_123", VERIFIER)
+
+        expectAuthFailure {
+            client.acceptCallback(callbackIntent("code=auth-code&state=wrong_state_123"))
         }
-        val payloadB64 = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.toString().toByteArray())
-        return "$header.$payloadB64.signature"
-    }
 
-    private fun intentWithFragment(fragment: String): Intent {
-        val uri = Uri.parse("goalflow://auth/callback#$fragment")
-        return Intent().apply { data = uri }
+        assertNull(store.read())
+        assertEquals("expected_state_123", store.getPendingState())
     }
 
     @Test
-    fun `acceptCallback rejects mismatched state`() {
-        store.setPendingState("expected_state_123", "verifier123")
-        val token = jwt()
-        val intent = intentWithFragment("access_token=$token&refresh_token=refresh123&state=wrong_state_123&expires_in=3600")
-        assertFalse(client.acceptCallback(intent))
-    }
+    fun `callback rejects legacy implicit token fragments`() = runBlocking {
+        store.setPendingState("state123", VERIFIER)
 
-    @Test
-    fun `acceptCallback rejects expired JWT`() {
-        store.setPendingState("state123", "verifier")
-        val expiredToken = jwt(exp = System.currentTimeMillis() / 1000 - 3600)
-        val expiredIntent = intentWithFragment("access_token=$expiredToken&refresh_token=refresh123&state=state123&expires_in=3600")
-        assertFalse(client.acceptCallback(expiredIntent))
-    }
-
-    @Test
-    fun `acceptCallback accepts valid state and JWT and clears pending`() {
-        store.setPendingState("valid_state_123456", "verifier")
-        val token = jwt(iss = "", aud = "", exp = System.currentTimeMillis() / 1000 + 3600)
-        val intent = intentWithFragment("access_token=$token&refresh_token=refresh123&state=valid_state_123456&expires_in=3600")
-        assertTrue(client.acceptCallback(intent))
-        assertTrue(store.getPendingState() == null)
-    }
-
-    @Test
-    fun `acceptCallback rejects missing tokens even with valid state`() {
-        store.setPendingState("state123", "verifier")
-        val intent = intentWithFragment("state=state123&expires_in=3600")
-        assertFalse(client.acceptCallback(intent))
-    }
-
-    @Test
-    fun `requestMagicLink stores pending state`() {
-        // This test verifies the store interaction; actual network is not hit
-        store.setPendingState("test_state", "test_verifier")
-        assertTrue(store.getPendingState() == "test_state")
-        assertTrue(store.getPendingVerifier() == "test_verifier")
-        store.clearPendingState()
-        assertTrue(store.getPendingState() == null)
-    }
-
-    @Test
-    fun `codeChallenge is S256 of verifier - RFC7636 vector`() {
-        // RFC 7636 Appendix B
-        val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-        val expected = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
-        assertEquals(expected, client.codeChallenge(verifier))
-    }
-
-    @Test
-    fun `requestMagicLink wires code_challenge S256 and stores verifier`() = runBlocking {
-        var capturedBody: String? = null
-        val capturingClient = object : NativeAuthClient(store, isAuthEnabled = { true }) {
-            override fun request(url: String, method: String, body: String?, headers: Map<String, String>): HttpResponse {
-                capturedBody = body
-                return HttpResponse(200, "{}")
-            }
+        expectAuthFailure {
+            client.acceptCallback(Intent().apply {
+                data = Uri.parse("goalflow://auth/callback?state=state123#access_token=unsafe&refresh_token=unsafe")
+            })
         }
-        capturingClient.requestMagicLink("mris@tuta.io")
+
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `callback exchanges the code and stores only a project bound account`() = runBlocking {
+        store.setPendingState("valid_state_123456", VERIFIER)
+        var capturedUrl = ""
+        var capturedBody = ""
+        var capturedHeaders = emptyMap<String, String>()
+        val exchangingClient = testClient { url, _, body, headers ->
+            capturedUrl = url
+            capturedBody = body.orEmpty()
+            capturedHeaders = headers
+            NativeAuthClient.HttpResponse(200, tokenResponse())
+        }
+
+        assertTrue(exchangingClient.acceptCallback(callbackIntent("code=one-time-code&state=valid_state_123456")))
+
+        val exchange = JSONObject(capturedBody)
+        assertTrue(capturedUrl.endsWith("/auth/v1/token?grant_type=pkce"))
+        assertEquals("one-time-code", exchange.getString("auth_code"))
+        assertEquals(VERIFIER, exchange.getString("code_verifier"))
+        assertEquals(PUBLIC_KEY, capturedHeaders["apikey"])
+        assertEquals("Bearer $PUBLIC_KEY", capturedHeaders["Authorization"])
+        assertEquals(USER_ID, store.read()?.userId)
+        assertNull(store.getPendingState())
+        assertNull(store.getPendingVerifier())
+    }
+
+    @Test
+    fun `expired exchanged token is rejected without writing a session`() = runBlocking {
+        store.setPendingState("state123", VERIFIER)
+        val exchangingClient = testClient { _, _, _, _ ->
+            NativeAuthClient.HttpResponse(
+                200,
+                tokenResponse(accessToken = jwt(exp = System.currentTimeMillis() / 1_000L - 60L))
+            )
+        }
+
+        expectAuthFailure {
+            exchangingClient.acceptCallback(callbackIntent("code=expired-code&state=state123"))
+        }
+
+        assertNull(store.read())
+        assertEquals(VERIFIER, store.getPendingVerifier())
+    }
+
+    @Test
+    fun `exchange account mismatch is rejected without writing a session`() = runBlocking {
+        store.setPendingState("state123", VERIFIER)
+        val exchangingClient = testClient { _, _, _, _ ->
+            NativeAuthClient.HttpResponse(
+                200,
+                tokenResponse(userId = "00000000-0000-4000-8000-000000000099")
+            )
+        }
+
+        expectAuthFailure {
+            exchangingClient.acceptCallback(callbackIntent("code=mismatch-code&state=state123"))
+        }
+
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `exchange rejects a token issued by another Supabase project`() = runBlocking {
+        store.setPendingState("state123", VERIFIER)
+        val exchangingClient = testClient { _, _, _, _ ->
+            NativeAuthClient.HttpResponse(
+                200,
+                tokenResponse(accessToken = jwt(iss = "https://other-project.supabase.co/auth/v1"))
+            )
+        }
+
+        expectAuthFailure {
+            exchangingClient.acceptCallback(callbackIntent("code=wrong-project&state=state123"))
+        }
+
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `exchange rejects a token without the authenticated audience`() = runBlocking {
+        store.setPendingState("state123", VERIFIER)
+        val exchangingClient = testClient { _, _, _, _ ->
+            NativeAuthClient.HttpResponse(200, tokenResponse(accessToken = jwt(aud = "anon")))
+        }
+
+        expectAuthFailure {
+            exchangingClient.acceptCallback(callbackIntent("code=wrong-audience&state=state123"))
+        }
+
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `magic link request sends Supabase PKCE fields and exact native redirect`() = runBlocking {
+        var capturedUrl = ""
+        var capturedBody = ""
+        val capturingClient = testClient { url, _, body, _ ->
+            capturedUrl = url
+            capturedBody = body.orEmpty()
+            NativeAuthClient.HttpResponse(200, "{}")
+        }
+
+        capturingClient.requestMagicLink("person@example.com")
+
         val storedState = store.getPendingState()
         val storedVerifier = store.getPendingVerifier()
-        assertTrue(storedState != null && storedState!!.isNotBlank())
-        assertTrue(storedVerifier != null && storedVerifier!!.length >= 43)
-        val body = JSONObject(capturedBody ?: "{}")
-        val challenge = capturingClient.codeChallenge(storedVerifier!!)
-        // Body must contain code_challenge in options and top-level
-        val options = body.optJSONObject("options")
-        assertTrue(options != null && options!!.optString("code_challenge") == challenge)
-        assertEquals("S256", options!!.optString("code_challenge_method"))
-        assertEquals(challenge, body.optString("code_challenge"))
-        assertTrue(options.optString("redirect_to").contains("code_challenge=$challenge"))
-        assertTrue(options.optString("redirect_to").contains("state=$storedState"))
+        assertNotNull(storedState)
+        assertNotNull(storedVerifier)
+        assertTrue(storedVerifier!!.length in 43..128)
+        val body = JSONObject(capturedBody)
+        assertEquals(false, body.getBoolean("create_user"))
+        assertEquals("s256", body.getString("code_challenge_method"))
+        assertEquals(capturingClient.codeChallenge(storedVerifier), body.getString("code_challenge"))
+        assertFalse(body.has("options"))
+        val redirect = Uri.parse(capturedUrl).getQueryParameter("redirect_to")
+        assertNotNull(redirect)
+        val redirectUri = Uri.parse(redirect)
+        assertEquals(AUTH_REDIRECT, "${redirectUri.scheme}://${redirectUri.host}${redirectUri.path}")
+        assertEquals(storedState, redirectUri.getQueryParameter("state"))
+    }
+
+    @Test
+    fun `code challenge matches the RFC7636 S256 vector`() {
+        val verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
+        assertEquals("E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", client.codeChallenge(verifier))
+    }
+
+    @Test
+    fun `temporary refresh failure retains the durable session`() = runBlocking {
+        val original = session(expiresAtMillis = System.currentTimeMillis() + 30_000L)
+        store.write(original)
+        val refreshingClient = testClient { _, _, _, _ -> NativeAuthClient.HttpResponse(503, "{}") }
+
+        expectTransientAuthFailure { refreshingClient.currentSession() }
+
+        assertEquals(original, store.read())
+    }
+
+    @Test
+    fun `permanent refresh rejection clears tokens but not local data`() = runBlocking {
+        store.write(session(expiresAtMillis = System.currentTimeMillis() + 30_000L))
+        val refreshingClient = testClient { _, _, _, _ -> NativeAuthClient.HttpResponse(400, "{}") }
+
+        expectAuthFailure { refreshingClient.currentSession() }
+
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `sign out clears locally then revokes only the current Supabase session`() = runBlocking {
+        store.write(session())
+        var capturedUrl = ""
+        var capturedHeaders = emptyMap<String, String>()
+        val signingOutClient = testClient { url, _, _, headers ->
+            capturedUrl = url
+            capturedHeaders = headers
+            assertNull(store.read())
+            NativeAuthClient.HttpResponse(204, "")
+        }
+
+        signingOutClient.signOut()
+
+        assertTrue(capturedUrl.endsWith("/auth/v1/logout?scope=local"))
+        assertEquals("Bearer access-token", capturedHeaders["Authorization"])
+        assertNull(store.read())
+    }
+
+    @Test
+    fun `unconfirmed server sign out remains visible while local session stays cleared`() = runBlocking {
+        store.write(session())
+        val signingOutClient = testClient { _, _, _, _ -> NativeAuthClient.HttpResponse(503, "{}") }
+
+        expectAuthFailure { signingOutClient.signOut() }
+
+        assertNull(store.read())
+    }
+
+    private fun testClient(
+        responder: ((String, String, String?, Map<String, String>) -> NativeAuthClient.HttpResponse)? = null
+    ): NativeAuthClient = object : NativeAuthClient(
+        sessionStore = store,
+        isAuthEnabled = { true },
+        supabaseUrl = SUPABASE_URL,
+        supabasePublicKey = PUBLIC_KEY,
+        authRedirectUri = AUTH_REDIRECT
+    ) {
+        override fun request(url: String, method: String, body: String?, headers: Map<String, String>): HttpResponse {
+            return responder?.invoke(url, method, body, headers)
+                ?: throw AssertionError("Network request was not expected: $url")
+        }
+    }
+
+    private fun callbackIntent(query: String): Intent = Intent().apply {
+        data = Uri.parse("$AUTH_REDIRECT?$query")
+    }
+
+    private fun session(expiresAtMillis: Long = System.currentTimeMillis() + 3_600_000L) = NativeSession(
+        accessToken = "access-token",
+        refreshToken = "refresh-token",
+        expiresAtMillis = expiresAtMillis,
+        userId = USER_ID
+    )
+
+    private fun tokenResponse(
+        accessToken: String = jwt(),
+        userId: String = USER_ID
+    ): String = JSONObject()
+        .put("access_token", accessToken)
+        .put("refresh_token", "refresh-token")
+        .put("expires_in", 3_600)
+        .put("user", JSONObject().put("id", userId))
+        .toString()
+
+    private fun jwt(
+        iss: String = "$SUPABASE_URL/auth/v1",
+        aud: String = "authenticated",
+        exp: Long = System.currentTimeMillis() / 1_000L + 3_600L,
+        sub: String = USER_ID
+    ): String {
+        val header = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString("""{"alg":"RS256","typ":"JWT"}""".toByteArray())
+        val payload = JSONObject()
+            .put("iss", iss)
+            .put("aud", aud)
+            .put("exp", exp)
+            .put("sub", sub)
+        val encodedPayload = Base64.getUrlEncoder().withoutPadding()
+            .encodeToString(payload.toString().toByteArray())
+        return "$header.$encodedPayload.synthetic-signature"
+    }
+
+    private suspend fun expectAuthFailure(block: suspend () -> Unit): NativeAuthException {
+        return try {
+            block()
+            throw AssertionError("Expected NativeAuthException")
+        } catch (error: NativeAuthException) {
+            error
+        }
+    }
+
+    private suspend fun expectTransientAuthFailure(block: suspend () -> Unit): NativeAuthTransientException {
+        return try {
+            block()
+            throw AssertionError("Expected NativeAuthTransientException")
+        } catch (error: NativeAuthTransientException) {
+            error
+        }
+    }
+
+    private companion object {
+        const val SUPABASE_URL = "https://project-ref.supabase.co"
+        const val PUBLIC_KEY = "sb_publishable_goalflow_test"
+        const val AUTH_REDIRECT = "goalflow://auth/callback"
+        const val USER_ID = "00000000-0000-4000-8000-000000000001"
+        const val VERIFIER = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
     }
 }

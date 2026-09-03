@@ -14,6 +14,32 @@ def goalflowBuildConfig = { propertyName ->
         .replace('\\', '\\\\')
         .replace('"', '\\"')
 }
+def goalflowSupabasePublicProperty = project.findProperty("goalflowSupabasePublishableKey") != null
+    ? "goalflowSupabasePublishableKey"
+    : "goalflowSupabaseAnonKey"
+def goalflowSupabasePublicValue = (project.findProperty(goalflowSupabasePublicProperty) ?: "").toString().trim()
+if (goalflowSupabasePublicValue) {
+    if (goalflowSupabasePublicValue.startsWith("sb_secret_")) {
+        throw new GradleException("A Supabase server secret cannot be embedded in an Android build.")
+    }
+    if (goalflowSupabasePublicValue.startsWith("eyJ")) {
+        try {
+            def segments = goalflowSupabasePublicValue.split("\\.")
+            if (segments.length != 3) throw new IllegalArgumentException("invalid JWT")
+            def payload = new String(java.util.Base64.getUrlDecoder().decode(segments[1]), java.nio.charset.StandardCharsets.UTF_8)
+            def role = new groovy.json.JsonSlurper().parseText(payload)?.role
+            if (role != "anon") {
+                throw new GradleException("Only a legacy Supabase anon key may be embedded in an Android build.")
+            }
+        } catch (GradleException error) {
+            throw error
+        } catch (Exception ignored) {
+            throw new GradleException("The configured legacy Supabase public key is invalid.")
+        }
+    } else if (!goalflowSupabasePublicValue.startsWith("sb_publishable_")) {
+        throw new GradleException("Android authentication requires a Supabase publishable key.")
+    }
+}
 
 android {
     namespace "com.mariusschober.goalflow.nativeapp"
@@ -89,7 +115,7 @@ android {
         vectorDrawables { useSupportLibrary true }
         buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
         buildConfigField "String", "SUPABASE_URL", "\"${goalflowBuildConfig('goalflowSupabaseUrl')}\""
-        buildConfigField "String", "SUPABASE_ANON_KEY", "\"${goalflowBuildConfig('goalflowSupabaseAnonKey')}\""
+        buildConfigField "String", "SUPABASE_PUBLISHABLE_KEY", "\"${goalflowBuildConfig(goalflowSupabasePublicProperty)}\""
         buildConfigField "boolean", "SANDBOX_BUILD", "false"
         buildConfigField "String", "TEST_ACCESS_CODE", "\"\""
     }

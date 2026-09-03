@@ -413,6 +413,9 @@ class NativeSyncEngine(
         if (!userId.matches(UUID_PATTERN)) {
             throw NativeSyncProtocolException("The authenticated sync account has no stable identity.")
         }
+        if (session.userId != null && session.userId != userId) {
+            throw NativeSyncProtocolException("The authenticated server account did not match the encrypted native session.")
+        }
         return userId
     }
 

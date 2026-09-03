@@ -70,18 +70,37 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
     }
 
     open fun setPendingState(state: String, verifier: String) {
-        check(preferences.edit().putString(KEY_PENDING_STATE, state).putString(KEY_PENDING_VERIFIER, verifier).commit()) {
+        val encrypted = encrypt(JSONObject().put("state", state).put("verifier", verifier).toString())
+        check(preferences.edit()
+            .putString(KEY_PENDING_AUTH, encrypted)
+            .remove(KEY_PENDING_STATE)
+            .remove(KEY_PENDING_VERIFIER)
+            .commit()) {
             "The pending auth state could not be stored."
         }
     }
 
-    open fun getPendingState(): String? = preferences.getString(KEY_PENDING_STATE, null)
+    open fun getPendingState(): String? = readPendingAuth()?.optString("state")?.takeIf(String::isNotBlank)
 
-    open fun getPendingVerifier(): String? = preferences.getString(KEY_PENDING_VERIFIER, null)
+    open fun getPendingVerifier(): String? = readPendingAuth()?.optString("verifier")?.takeIf(String::isNotBlank)
 
     open fun clearPendingState() {
-        check(preferences.edit().remove(KEY_PENDING_STATE).remove(KEY_PENDING_VERIFIER).commit()) {
+        check(preferences.edit()
+            .remove(KEY_PENDING_AUTH)
+            .remove(KEY_PENDING_STATE)
+            .remove(KEY_PENDING_VERIFIER)
+            .commit()) {
             "The pending auth state could not be cleared."
+        }
+    }
+
+    private fun readPendingAuth(): JSONObject? {
+        val encoded = preferences.getString(KEY_PENDING_AUTH, null) ?: return null
+        return runCatching { JSONObject(decrypt(encoded)) }.getOrElse {
+            // An unusable verifier can never complete PKCE. Remove only that
+            // pending request; the independent local database remains intact.
+            preferences.edit().remove(KEY_PENDING_AUTH).commit()
+            null
         }
     }
 
@@ -131,6 +150,8 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val KEY_ALIAS = "goalflow_native_session"
         const val KEY_SESSION = "encrypted_session"
+        const val KEY_PENDING_AUTH = "encrypted_pending_auth"
+        // Removed on every write/clear to purge pre-PKCE plaintext state.
         const val KEY_PENDING_STATE = "pending_oauth_state"
         const val KEY_PENDING_VERIFIER = "pending_code_verifier"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
