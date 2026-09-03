@@ -111,14 +111,6 @@ class NativeSyncEngineTest {
         }
         val engine = engine(transport)
 
-        try {
-            engine.synchronize()
-            fail("The lost response must surface as a retryable failure")
-        } catch (_: SocketTimeoutException) {
-            // The durable outbox is the recovery boundary.
-        }
-        assertEquals(originalMutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
-
         engine.synchronize()
 
         assertEquals(3, pushCalls)
@@ -148,6 +140,67 @@ class NativeSyncEngineTest {
             fail("Authentication expiry must be visible")
         } catch (_: AuthenticationExpiredDuringSync) {
             // Expected.
+        }
+
+        assertEquals(mutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
+    }
+
+    @Test
+    fun `transient server failure is bounded and preserves the pending mutation`() = runTest {
+        repository.createTask(
+            title = "Retry later",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        val mutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
+        var pushCalls = 0
+        val engine = engine(NativeSyncTransport { path, _, _, _ ->
+            if (path != "/api/v1/sync/push") throw AssertionError("Unexpected request: $path")
+            pushCalls += 1
+            NativeHttpResponse(503, "{}")
+        })
+
+        try {
+            engine.synchronize()
+            fail("A bounded transient failure must remain visible")
+        } catch (_: NativeSyncTransientException) {
+            // WorkManager may retry later, but not indefinitely in one run.
+        }
+
+        assertEquals(3, pushCalls)
+        assertEquals(mutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
+    }
+
+    @Test
+    fun `logout while push is in flight discards the response but not the mutation`() = runTest {
+        repository.createTask(
+            title = "Keep through logout",
+            notes = "",
+            schedulePrecision = SchedulePrecision.DAY,
+            scheduledFor = LocalDate.now().toString(),
+            scheduledTime = null,
+            isFrog = false
+        )
+        val mutationId = repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId
+        var currentSession: NativeSession? = validSession
+        val engine = engine(
+            transport = NativeSyncTransport { path, _, _, body ->
+                if (path != "/api/v1/sync/push") throw AssertionError("Unexpected request: $path")
+                val response = acceptedPush(body!!)
+                currentSession = null
+                response
+            },
+            sessionProvider = NativeSessionProvider { currentSession }
+        )
+
+        try {
+            engine.synchronize()
+            fail("Logout must invalidate an in-flight acknowledgement")
+        } catch (_: NativeSyncSessionChangedDuringSync) {
+            // The server may have committed; the exact mutation remains retryable.
         }
 
         assertEquals(mutationId, repository.pendingSyncMutations().single { it.entityType == "tasks" }.mutationId)
@@ -232,9 +285,12 @@ class NativeSyncEngineTest {
         assertNull(repository.syncMetadata("_cursor"))
     }
 
-    private fun engine(transport: NativeSyncTransport): NativeSyncEngine = NativeSyncEngine(
+    private fun engine(
+        transport: NativeSyncTransport,
+        sessionProvider: NativeSessionProvider = NativeSessionProvider { validSession }
+    ): NativeSyncEngine = NativeSyncEngine(
         repository = repository,
-        sessionProvider = NativeSessionProvider { validSession },
+        sessionProvider = sessionProvider,
         transport = NativeSyncTransport { path, token, method, body ->
             when (path) {
                 "/api/v1/sync/status" -> NativeHttpResponse(
@@ -249,8 +305,38 @@ class NativeSyncEngineTest {
                 else -> transport.request(path, token, method, body)
             }
         },
-        cloudAvailable = { true }
+        cloudAvailable = { true },
+        retryPolicy = NativeSyncRetryPolicy(
+            initialDelayMillis = 0,
+            maximumDelayMillis = 0,
+            jitterMillis = { 0 },
+            wait = {}
+        )
     )
+
+    private fun acceptedPush(body: String): NativeHttpResponse {
+        val mutation = JSONObject(body).getJSONArray("mutations").getJSONObject(0)
+        return NativeHttpResponse(
+            200,
+            JSONObject().put(
+                "results",
+                JSONArray().put(
+                    JSONObject()
+                        .put("mutationId", mutation.getString("mutationId"))
+                        .put("accepted", true)
+                        .put("serverVersion", 1)
+                        .put("record", JSONObject()
+                            .put("entityType", mutation.getString("entityType"))
+                            .put("entityId", mutation.getString("entityId"))
+                            .put("version", mutation.getLong("version"))
+                            .put("serverVersion", 1)
+                            .put("payload", mutation.get("payload"))
+                            .put("updatedAt", mutation.getString("updatedAt"))
+                            .put("deletedAt", mutation.get("deletedAt")))
+                )
+            ).toString()
+        )
+    }
 
     private fun emptyPull(): NativeHttpResponse = NativeHttpResponse(
         200,

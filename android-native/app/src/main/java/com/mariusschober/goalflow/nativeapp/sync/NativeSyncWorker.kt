@@ -13,7 +13,14 @@ import androidx.work.WorkerParameters
 import androidx.work.ExistingPeriodicWorkPolicy
 import com.mariusschober.goalflow.nativeapp.GoalflowApplication
 import com.mariusschober.goalflow.nativeapp.widget.GoalflowWidgetUpdater
+import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+internal enum class NativeSyncFailureDisposition { RETRY, STOP }
+
+internal fun nativeSyncFailureDisposition(error: Throwable, runAttemptCount: Int): NativeSyncFailureDisposition =
+    if (error is IOException && runAttemptCount < 5) NativeSyncFailureDisposition.RETRY
+    else NativeSyncFailureDisposition.STOP
 
 class NativeSyncWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
@@ -29,11 +36,19 @@ class NativeSyncWorker(context: Context, params: WorkerParameters) : CoroutineWo
                 GoalflowWidgetUpdater.refresh(application)
                 Result.success()
             },
-            // Pending Room mutations are never discarded. WorkManager keeps an
-            // exponential retry alive through network flapping and restarts.
-            onFailure = {
+            // Pending Room mutations are never discarded. Transient failures
+            // have a finite WorkManager budget; periodic work can resume later.
+            onFailure = { error ->
                 GoalflowWidgetUpdater.refresh(application)
-                Result.retry()
+                if (error is AuthenticationExpiredDuringSync) {
+                    // A revoked/disabled session is permanent until the user
+                    // authenticates again. Local Room state and outbox remain.
+                    runCatching { application.sessionStore.clear() }
+                }
+                when (nativeSyncFailureDisposition(error, runAttemptCount)) {
+                    NativeSyncFailureDisposition.RETRY -> Result.retry()
+                    NativeSyncFailureDisposition.STOP -> Result.failure()
+                }
             }
         )
     }

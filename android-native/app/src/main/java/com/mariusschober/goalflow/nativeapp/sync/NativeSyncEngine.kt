@@ -6,6 +6,7 @@ import com.mariusschober.goalflow.nativeapp.data.NativeRemoteRecord
 import com.mariusschober.goalflow.nativeapp.data.NativeServerConflict
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
@@ -15,14 +16,19 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.time.Instant
 import java.util.concurrent.TimeUnit
+import kotlin.math.min
+import kotlin.random.Random
 
 // P1-5: OkHttp singleton with HTTP/2 + 30s pool for NativeSyncEngine
 private val okHttpSingleton: OkHttpClient by lazy {
     OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(20, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
         .connectionPool(ConnectionPool(5, 5, TimeUnit.MINUTES))
         .protocols(listOf(Protocol.HTTP_2, Protocol.HTTP_1_1))
         .build()
@@ -40,7 +46,25 @@ fun interface NativeSyncTransport {
 }
 
 class AuthenticationExpiredDuringSync : IllegalStateException("Authentication expired during synchronization.")
+class NativeSyncSessionChangedDuringSync : IllegalStateException(
+    "The local cloud session changed while synchronization was running. Local changes remain pending."
+)
 class NativeSyncProtocolException(message: String) : IllegalStateException(message)
+class NativeSyncTransientException(message: String, cause: Throwable? = null) : IOException(message, cause)
+
+data class NativeSyncRetryPolicy(
+    val maxAttempts: Int = 3,
+    val initialDelayMillis: Long = 500L,
+    val maximumDelayMillis: Long = 5_000L,
+    val jitterMillis: () -> Long = { Random.nextLong(0L, 251L) },
+    val wait: suspend (Long) -> Unit = { delay(it) }
+) {
+    init {
+        require(maxAttempts in 1..5)
+        require(initialDelayMillis in 0L..maximumDelayMillis)
+        require(maximumDelayMillis <= 30_000L)
+    }
+}
 
 /**
  * At-least-once sync adapter. Network responses never mutate Room piecemeal:
@@ -52,7 +76,8 @@ class NativeSyncEngine(
     private val repository: GoalflowRepository,
     private val sessionProvider: NativeSessionProvider,
     private val transport: NativeSyncTransport = NativeSyncTransport(::httpRequest),
-    private val cloudAvailable: () -> Boolean = { NativeConfig.canUseCloud }
+    private val cloudAvailable: () -> Boolean = { NativeConfig.canUseCloud },
+    private val retryPolicy: NativeSyncRetryPolicy = NativeSyncRetryPolicy()
 ) {
     suspend fun resolveConflictWithCloud(conflict: SyncConflictEntity) = withContext(Dispatchers.IO) {
         if (cloudAvailable() && conflict.mutationId != null) {
@@ -61,19 +86,16 @@ class NativeSyncEngine(
                 throw AuthenticationExpiredDuringSync()
             }
             repository.bindSyncAccount(verifiedUserId(session))
-            val response = transport.request(
+            val response = requestForSession(
+                session,
                 "/api/v1/sync/conflicts/resolve",
-                session.accessToken,
                 "POST",
                 JSONObject()
                     .put("mutationId", conflict.mutationId)
                     .put("choice", "cloud")
                     .toString()
             )
-            ensureAuthorized(response)
-            if (response.code !in 200..299) {
-                throw NativeSyncProtocolException("The server conflict could not be resolved; both versions remain preserved.")
-            }
+            ensureSuccessful(response, "The server conflict could not be resolved; both versions remain preserved.")
         }
         repository.resolveConflictWithCloud(conflict.id)
     }
@@ -107,14 +129,13 @@ class NativeSyncEngine(
                         ?.let { put("resolvesConflictId", it) }
                 }) }
             }
-            val response = transport.request(
+            val response = requestForSession(
+                session,
                 "/api/v1/sync/push",
-                session.accessToken,
                 "POST",
                 JSONObject().put("mutations", mutations).toString()
             )
-            ensureAuthorized(response)
-            if (response.code !in 200..299) throw NativeSyncProtocolException("Sync push failed with HTTP ${response.code}.")
+            ensureSuccessful(response, "Sync push failed. Local changes remain pending.")
             val body = parseObject(response.body, "Sync push response is not valid JSON.")
             val array = body.optJSONArray("results")
                 ?: throw NativeSyncProtocolException("Sync push response has no result set.")
@@ -184,14 +205,13 @@ class NativeSyncEngine(
         var cursor = repository.syncMetadata(SYNC_CURSOR_KEY)?.cursor ?: 0L
         var hasMore: Boolean
         do {
-            val response = transport.request(
+            val response = requestForSession(
+                session,
                 "/api/v1/sync/pull?cursor=$cursor&limit=100",
-                session.accessToken,
                 "GET",
                 null
             )
-            ensureAuthorized(response)
-            if (response.code !in 200..299) throw NativeSyncProtocolException("Sync pull failed with HTTP ${response.code}.")
+            ensureSuccessful(response, "Sync pull failed. The local cursor was not advanced.")
             val body = parseObject(response.body, "Sync pull response is not valid JSON.")
             val array = body.optJSONArray("records")
                 ?: throw NativeSyncProtocolException("Sync pull response has no record set.")
@@ -246,16 +266,13 @@ class NativeSyncEngine(
             cursor = nextCursor
         } while (hasMore)
 
-        val conflictResponse = transport.request(
+        val conflictResponse = requestForSession(
+            session,
             "/api/v1/sync/conflicts",
-            session.accessToken,
             "GET",
             null
         )
-        ensureAuthorized(conflictResponse)
-        if (conflictResponse.code !in 200..299) {
-            throw NativeSyncProtocolException("Server conflicts could not be verified; existing local state was not changed.")
-        }
+        ensureSuccessful(conflictResponse, "Server conflicts could not be verified; existing local state was not changed.")
         val conflictBody = parseObject(conflictResponse.body, "Sync conflict response is not valid JSON.")
         val conflictArray = conflictBody.optJSONArray("conflicts")
             ?: throw NativeSyncProtocolException("Sync conflict response has no conflict set.")
@@ -334,12 +351,63 @@ class NativeSyncEngine(
         if (response.code == 401 || response.code == 403) throw AuthenticationExpiredDuringSync()
     }
 
-    private fun verifiedUserId(session: NativeSession): String {
-        val response = transport.request("/api/v1/sync/status", session.accessToken, "GET", null)
+    private fun ensureSuccessful(response: NativeHttpResponse, message: String) {
         ensureAuthorized(response)
-        if (response.code !in 200..299) {
-            throw NativeSyncProtocolException("The authenticated sync account could not be verified.")
+        if (response.code in 200..299) return
+        if (isRetryableStatus(response.code)) throw NativeSyncTransientException(message)
+        throw NativeSyncProtocolException(message)
+    }
+
+    private fun requireUnchangedSession(expected: NativeSession) {
+        val current = sessionProvider.read() ?: throw NativeSyncSessionChangedDuringSync()
+        if (current != expected || current.expiresAtMillis <= System.currentTimeMillis() + 60_000L) {
+            throw NativeSyncSessionChangedDuringSync()
         }
+    }
+
+    private suspend fun requestForSession(
+        session: NativeSession,
+        path: String,
+        method: String,
+        body: String?
+    ): NativeHttpResponse {
+        var lastFailure: IOException? = null
+        for (attempt in 0 until retryPolicy.maxAttempts) {
+            requireUnchangedSession(session)
+            val response = try {
+                transport.request(path, session.accessToken, method, body)
+            } catch (error: IOException) {
+                requireUnchangedSession(session)
+                lastFailure = error
+                if (attempt + 1 >= retryPolicy.maxAttempts) {
+                    throw NativeSyncTransientException("Synchronization could not reach the server.", error)
+                }
+                waitBeforeRetry(attempt)
+                continue
+            }
+            // A logout or token/account replacement while the request was in
+            // flight invalidates the response. The server may have committed;
+            // keeping the exact mutation ID pending makes the next retry safe.
+            requireUnchangedSession(session)
+            ensureAuthorized(response)
+            if (!isRetryableStatus(response.code) || attempt + 1 >= retryPolicy.maxAttempts) return response
+            waitBeforeRetry(attempt)
+        }
+        throw NativeSyncTransientException("Synchronization could not reach the server.", lastFailure)
+    }
+
+    private suspend fun waitBeforeRetry(attempt: Int) {
+        val exponential = min(
+            retryPolicy.initialDelayMillis * (1L shl attempt.coerceAtMost(10)),
+            retryPolicy.maximumDelayMillis
+        )
+        val jitter = retryPolicy.jitterMillis().coerceIn(0L, 1_000L)
+        retryPolicy.wait(exponential + jitter)
+    }
+
+    private suspend fun verifiedUserId(session: NativeSession): String {
+        val response = requestForSession(session, "/api/v1/sync/status", "GET", null)
+        ensureSuccessful(response, "The authenticated sync account could not be verified.")
         val userId = parseObject(response.body, "Sync account response is not valid JSON.")
             .optString("userId").trim()
         if (!userId.matches(UUID_PATTERN)) {
@@ -350,6 +418,7 @@ class NativeSyncEngine(
 
     private companion object {
         const val SYNC_CURSOR_KEY = "_cursor"
+        val RETRYABLE_STATUS = setOf(408, 425, 429)
         val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
 
         fun parseObject(value: String, message: String): JSONObject =
@@ -386,6 +455,8 @@ class NativeSyncEngine(
         }
 
         const val MAX_SAFE_JSON_INTEGER = 9_007_199_254_740_991.0
+
+        fun isRetryableStatus(code: Int): Boolean = code >= 500 || code in RETRYABLE_STATUS
 
         fun JSONObject.nullableString(key: String): String? =
             if (!has(key) || isNull(key)) null else optString(key).takeIf(String::isNotBlank)
