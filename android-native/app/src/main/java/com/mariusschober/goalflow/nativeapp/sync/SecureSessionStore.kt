@@ -18,7 +18,8 @@ data class NativeSession(
     val accessToken: String,
     val refreshToken: String,
     val expiresAtMillis: Long,
-    val userId: String?
+    val userId: String?,
+    val assuranceLevel: String = "aal1"
 )
 
 fun interface NativeSessionProvider {
@@ -37,7 +38,8 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
             refreshToken = json.getString("refreshToken"),
             expiresAtMillis = json.getLong("expiresAtMillis"),
             userId = if (!json.has("userId") || json.isNull("userId")) null
-                else json.optString("userId").takeIf(String::isNotBlank)
+                else json.optString("userId").takeIf(String::isNotBlank),
+            assuranceLevel = if (json.optString("assuranceLevel") == "aal2") "aal2" else "aal1"
         )
     }.recoverCatching { e ->
         // KeyStore wipe or AEAD tag failure makes old ciphertext undecryptable.
@@ -57,6 +59,7 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
             put("refreshToken", session.refreshToken)
             put("expiresAtMillis", session.expiresAtMillis)
             put("userId", session.userId ?: JSONObject.NULL)
+            put("assuranceLevel", if (session.assuranceLevel == "aal2") "aal2" else "aal1")
         }
         check(preferences.edit().putString(KEY_SESSION, encrypt(json.toString())).commit()) {
             "The cloud session could not be stored durably."

@@ -222,11 +222,16 @@ fun GoalflowRoot(
     var editTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var backupAction by rememberSaveable { mutableStateOf<String?>(null) }
     var backupError by rememberSaveable { mutableStateOf<String?>(null) }
+    var authError by rememberSaveable { mutableStateOf<String?>(null) }
     var signInOpen by rememberSaveable { mutableStateOf(false) }
+    var mfaOpen by rememberSaveable { mutableStateOf(false) }
     var circadianOpen by rememberSaveable { mutableStateOf(false) }
     var focusTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var focusStartedAt by remember { mutableStateOf<Long?>(null) }
     var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
+    var sessionAssuranceLevel by remember {
+        mutableStateOf(application.sessionStore.read()?.assuranceLevel ?: "aal1")
+    }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
@@ -258,7 +263,9 @@ fun GoalflowRoot(
     }
 
     LaunchedEffect(authSessionRevision) {
-        sessionActive = application.sessionStore.read() != null
+        val currentSession = application.sessionStore.read()
+        sessionActive = currentSession != null
+        sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
     }
 
     LaunchedEffect(tasks) {
@@ -311,7 +318,9 @@ fun GoalflowRoot(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 goalflowViewModel.refreshToday()
-                sessionActive = application.sessionStore.read() != null
+                val currentSession = application.sessionStore.read()
+                sessionActive = currentSession != null
+                sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -325,7 +334,7 @@ fun GoalflowRoot(
 
     BackHandler(enabled = destination != RootDestination.CURRENT && !captureOpen && editTask == null &&
         datePickerForTask == null && breakdownTask == null && backupAction == null && restorePreview == null &&
-        !replaceRestoreConfirmation && !signInOpen && focusTask == null) {
+        !replaceRestoreConfirmation && !signInOpen && !mfaOpen && focusTask == null) {
         destination = if (destination == RootDestination.INSIGHTS) RootDestination.GOALS else RootDestination.CURRENT
     }
 
@@ -623,18 +632,26 @@ fun GoalflowRoot(
                     )
                     RootDestination.SETTINGS -> SettingsScreen(
                         signedIn = sessionActive,
+                        mfaVerified = sessionAssuranceLevel == "aal2",
                         canUseAuthentication = NativeConfig.canUseAuthentication,
                         canUseCloud = NativeConfig.canUseCloud,
                         onSignIn = { signInOpen = true },
+                        onVerifyMfa = {
+                            authError = null
+                            mfaOpen = true
+                        },
                         onSignOut = {
                             sessionActive = false
+                            sessionAssuranceLevel = "aal1"
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                 runCatching { NativeAuthClient(application.sessionStore).signOut() }
                                     .onSuccess {
                                         snackbarHostState.showSnackbar("Signed out. Local commitments stay here.")
                                     }
                                     .onFailure { error ->
-                                        sessionActive = application.sessionStore.read() != null
+                                        val currentSession = application.sessionStore.read()
+                                        sessionActive = currentSession != null
+                                        sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
                                         snackbarHostState.showSnackbar(
                                             error.message ?: "Server sign-out could not be confirmed."
                                         )
@@ -903,10 +920,10 @@ fun GoalflowRoot(
 
     if (signInOpen) {
         SignInDialog(
-            error = backupError,
+            error = authError,
             onDismiss = {
                 signInOpen = false
-                backupError = null
+                authError = null
             },
             onConfirm = { email, onComplete, onFailure ->
                 scope.launch {
@@ -918,7 +935,38 @@ fun GoalflowRoot(
                         }
                         .onFailure {
                             onFailure()
-                            backupError = it.message ?: "Sign-in failed"
+                            authError = it.message ?: "Sign-in failed"
+                        }
+                }
+            }
+        )
+    }
+
+    if (mfaOpen) {
+        MfaDialog(
+            error = authError,
+            onDismiss = {
+                mfaOpen = false
+                authError = null
+            },
+            onConfirm = { code, onComplete, onFailure ->
+                scope.launch {
+                    runCatching { NativeAuthClient(application.sessionStore).completeMfa(code) }
+                        .onSuccess { elevated ->
+                            onComplete()
+                            sessionActive = true
+                            sessionAssuranceLevel = elevated.assuranceLevel
+                            authError = null
+                            mfaOpen = false
+                            NativeSyncScheduler.schedule(context)
+                            snackbarHostState.showSnackbar("Owner session verified. Cloud sync can continue.")
+                        }
+                        .onFailure { error ->
+                            onFailure()
+                            val currentSession = application.sessionStore.read()
+                            sessionActive = currentSession != null
+                            sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+                            authError = error.message ?: "Owner verification failed"
                         }
                 }
             }
@@ -1899,9 +1947,11 @@ private fun GoalRow(goal: GoalflowGoal) {
 @Composable
 private fun SettingsScreen(
     signedIn: Boolean,
+    mfaVerified: Boolean,
     canUseAuthentication: Boolean,
     canUseCloud: Boolean,
     onSignIn: () -> Unit,
+    onVerifyMfa: () -> Unit,
     onSignOut: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
@@ -1924,7 +1974,8 @@ private fun SettingsScreen(
             SettingsCard(
                 title = "Cloud sync",
                 body = when {
-                    signedIn && canUseCloud -> "Connected. Local actions stay immediate; queued changes sync when the network returns."
+                    signedIn && canUseCloud && mfaVerified -> "Connected with owner verification. Local actions stay immediate; queued changes sync when the network returns."
+                    signedIn && canUseCloud -> "Signed in at basic assurance. Beta accounts can sync; owner accounts must verify an authenticator before cloud sync can continue."
                     canUseCloud -> "Optional. Sign in to sync across devices. Local execution never waits for it."
                     else -> "Not configured in this build. Local execution is complete without a backend."
                 },
@@ -1935,6 +1986,12 @@ private fun SettingsScreen(
                 },
                 onAction = if (signedIn) onSignOut else onSignIn
             )
+            if (signedIn && canUseAuthentication && !mfaVerified) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = onVerifyMfa, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                    Text("Verify owner session")
+                }
+            }
         }
         item {
             SettingsCard(
@@ -2146,6 +2203,56 @@ private fun SignInDialog(
             ) { Text(if (sending) "Sending…" else "Send link") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+@Composable
+private fun MfaDialog(
+    error: String?,
+    onDismiss: () -> Unit,
+    onConfirm: (String, () -> Unit, () -> Unit) -> Unit
+) {
+    var code by rememberSaveable { mutableStateOf("") }
+    var verifying by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(error) {
+        if (error != null) verifying = false
+    }
+    AlertDialog(
+        onDismissRequest = { if (!verifying) onDismiss() },
+        title = { Text("Verify owner session") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    "Enter the six-digit code from the authenticator enrolled for the owner account.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                OutlinedTextField(
+                    value = code,
+                    onValueChange = { code = it.filter(Char::isDigit).take(6) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Authenticator code") },
+                    singleLine = true,
+                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                        keyboardType = KeyboardType.NumberPassword,
+                        imeAction = ImeAction.Done
+                    ),
+                    visualTransformation = PasswordVisualTransformation()
+                )
+                error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    if (!verifying) {
+                        verifying = true
+                        onConfirm(code, { verifying = false }, { verifying = false })
+                    }
+                },
+                enabled = code.length == 6 && !verifying
+            ) { Text(if (verifying) "Verifying…" else "Verify") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !verifying) { Text("Cancel") } }
     )
 }
 

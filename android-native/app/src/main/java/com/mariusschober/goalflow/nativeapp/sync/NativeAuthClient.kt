@@ -79,6 +79,68 @@ open class NativeAuthClient(
 
     suspend fun refreshIfNeeded(): NativeSession? = currentSession()
 
+    suspend fun completeMfa(code: String): NativeSession = withContext(Dispatchers.IO) {
+        requireSafeAuthConfiguration()
+        val cleanCode = code.trim()
+        if (!cleanCode.matches(Regex("^[0-9]{6}$"))) {
+            throw NativeAuthException("Enter the six-digit authenticator code.")
+        }
+        val current = sessionStore.read()
+            ?: throw NativeAuthException("Sign in before verifying the owner session.")
+        if (current.assuranceLevel == "aal2") return@withContext current
+
+        val userResponse = request(
+            url = "$supabaseUrl/auth/v1/user",
+            method = "GET",
+            body = null,
+            headers = authHeaders(current.accessToken)
+        )
+        requireMfaResponse(userResponse, current, "The authenticator enrollment could not be loaded.")
+        val factors = runCatching { JSONObject(userResponse.body).optJSONArray("factors") }
+            .getOrNull()
+            ?: throw NativeAuthException("Enroll an authenticator in the web app before verifying this device.")
+        val factorId = (0 until factors.length())
+            .mapNotNull { factors.optJSONObject(it) }
+            .firstOrNull {
+                it.optString("factor_type") == "totp" && it.optString("status") == "verified"
+            }
+            ?.optString("id")
+            ?.takeIf { it.matches(UUID_PATTERN) }
+            ?: throw NativeAuthException("Enroll an authenticator in the web app before verifying this device.")
+        requireUnchangedSession(current)
+
+        val challengeResponse = request(
+            url = "$supabaseUrl/auth/v1/factors/$factorId/challenge",
+            method = "POST",
+            body = JSONObject().put("factorId", factorId).toString(),
+            headers = authHeaders(current.accessToken)
+        )
+        requireMfaResponse(challengeResponse, current, "The authenticator challenge could not be created.")
+        val challenge = runCatching { JSONObject(challengeResponse.body) }.getOrNull()
+            ?: throw NativeAuthException("The authentication server returned invalid challenge data.")
+        val challengeId = challenge.optString("id").takeIf { it.matches(UUID_PATTERN) }
+            ?: throw NativeAuthException("The authentication server returned invalid challenge data.")
+        if (challenge.optString("type") != "totp") {
+            throw NativeAuthException("The authentication server returned an unsupported challenge.")
+        }
+        requireUnchangedSession(current)
+
+        val verifyResponse = request(
+            url = "$supabaseUrl/auth/v1/factors/$factorId/verify",
+            method = "POST",
+            body = JSONObject().put("challenge_id", challengeId).put("code", cleanCode).toString(),
+            headers = authHeaders(current.accessToken)
+        )
+        requireMfaResponse(verifyResponse, current, "The authenticator code was not accepted.")
+        val elevated = parseSessionResponse(verifyResponse.body, current.refreshToken)
+        if (elevated.userId != current.userId || elevated.assuranceLevel != "aal2") {
+            throw NativeAuthException("The verified session did not match this account at AAL2.")
+        }
+        requireUnchangedSession(current)
+        sessionStore.write(elevated)
+        elevated
+    }
+
     suspend fun acceptCallback(intent: Intent?): Boolean = withContext(Dispatchers.IO) {
         val uri = intent?.data ?: return@withContext false
         if (uri.scheme != "goalflow" || uri.host != "auth" || uri.path != "/callback") return@withContext false
@@ -188,7 +250,20 @@ open class NativeAuthClient(
             }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-            HttpResponse(code, stream?.bufferedReader()?.use { it.readText() }.orEmpty())
+            val responseBody = stream?.bufferedReader(StandardCharsets.UTF_8)?.use { reader ->
+                val content = StringBuilder()
+                val buffer = CharArray(4_096)
+                while (true) {
+                    val count = reader.read(buffer)
+                    if (count < 0) break
+                    if (content.length + count > MAX_AUTH_RESPONSE_CHARS) {
+                        throw NativeAuthException("The authentication response was too large.")
+                    }
+                    content.append(buffer, 0, count)
+                }
+                content.toString()
+            }.orEmpty()
+            HttpResponse(code, responseBody)
         } finally {
             connection.disconnect()
         }
@@ -200,7 +275,8 @@ open class NativeAuthClient(
         val issuer: String,
         val subject: String,
         val expiresAtSeconds: Long,
-        val authenticatedAudience: Boolean
+        val authenticatedAudience: Boolean,
+        val assuranceLevel: String
     )
 
     private fun authHeaders(accessToken: String = supabasePublicKey): Map<String, String> = mapOf(
@@ -252,7 +328,8 @@ open class NativeAuthClient(
             accessToken = accessToken,
             refreshToken = refreshToken,
             expiresAtMillis = minOf(now + expiresIn * 1_000L, tokenExpiryMillis),
-            userId = responseUserId
+            userId = responseUserId,
+            assuranceLevel = claims.assuranceLevel
         )
     }
 
@@ -273,9 +350,36 @@ open class NativeAuthClient(
             issuer = payload.optString("iss"),
             subject = payload.optString("sub"),
             expiresAtSeconds = (payload.opt("exp") as? Number)?.toLong() ?: 0L,
-            authenticatedAudience = audience
+            authenticatedAudience = audience,
+            assuranceLevel = if (payload.optString("aal") == "aal2") "aal2" else "aal1"
         )
     }.getOrNull()
+
+    private fun requireMfaResponse(response: HttpResponse, expected: NativeSession, message: String) {
+        if (response.code in 200..299) return
+        if (response.code == 401 || response.code == 403) {
+            clearSessionIfUnchanged(expected)
+            throw NativeAuthException("The cloud session expired or was revoked. Local commitments remain available.")
+        }
+        if (isRetryableStatus(response.code)) {
+            throw NativeAuthTransientException("Authentication is temporarily unavailable. Local commitments remain available.")
+        }
+        throw NativeAuthException(message)
+    }
+
+    private fun requireUnchangedSession(expected: NativeSession) {
+        val current = sessionStore.read()
+        if (current?.accessToken != expected.accessToken || current?.userId != expected.userId) {
+            throw NativeAuthException("The signed-in account changed during verification. Try again with the current account.")
+        }
+    }
+
+    private fun clearSessionIfUnchanged(expected: NativeSession) {
+        val current = sessionStore.read()
+        if (current?.accessToken == expected.accessToken && current?.userId == expected.userId) {
+            sessionStore.clear()
+        }
+    }
 
     private fun secureEquals(left: String, right: String): Boolean = MessageDigest.isEqual(
         left.toByteArray(StandardCharsets.UTF_8),
@@ -301,6 +405,7 @@ open class NativeAuthClient(
 
     private companion object {
         const val EXPIRY_SAFETY_WINDOW_MILLIS = 60_000L
+        const val MAX_AUTH_RESPONSE_CHARS = 256 * 1024
         val PKCE_VERIFIER_PATTERN = Regex("^[A-Za-z0-9._~-]+$")
         val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
         val RETRYABLE_STATUS = setOf(408, 425, 429)

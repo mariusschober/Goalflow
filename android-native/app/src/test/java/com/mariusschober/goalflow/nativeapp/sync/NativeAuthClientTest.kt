@@ -200,6 +200,96 @@ class NativeAuthClientTest {
     }
 
     @Test
+    fun `owner authenticator challenge stores an exact aal2 session`() = runBlocking {
+        store.write(session())
+        val requests = mutableListOf<Pair<String, String?>>()
+        val mfaClient = testClient { url, method, body, headers ->
+            assertEquals("Bearer access-token", headers["Authorization"])
+            requests += ("$method $url" to body)
+            when {
+                url.endsWith("/auth/v1/user") -> NativeAuthClient.HttpResponse(
+                    200,
+                    JSONObject().put("factors", org.json.JSONArray().put(JSONObject()
+                        .put("id", FACTOR_ID)
+                        .put("factor_type", "totp")
+                        .put("status", "verified"))).toString()
+                )
+                url.endsWith("/factors/$FACTOR_ID/challenge") -> NativeAuthClient.HttpResponse(
+                    200,
+                    JSONObject().put("id", CHALLENGE_ID).put("type", "totp").toString()
+                )
+                url.endsWith("/factors/$FACTOR_ID/verify") -> NativeAuthClient.HttpResponse(
+                    200,
+                    tokenResponse(accessToken = jwt(aal = "aal2"))
+                )
+                else -> throw AssertionError("Unexpected MFA request: $url")
+            }
+        }
+
+        val elevated = mfaClient.completeMfa("123456")
+
+        assertEquals("aal2", elevated.assuranceLevel)
+        assertEquals(USER_ID, elevated.userId)
+        assertEquals(elevated, store.read())
+        assertEquals(3, requests.size)
+        assertEquals(FACTOR_ID, JSONObject(requests[1].second!!).getString("factorId"))
+        val verification = JSONObject(requests[2].second!!)
+        assertEquals(CHALLENGE_ID, verification.getString("challenge_id"))
+        assertEquals("123456", verification.getString("code"))
+    }
+
+    @Test
+    fun `invalid authenticator code is rejected before network and retains session`() = runBlocking {
+        val original = session()
+        store.write(original)
+        val mfaClient = testClient { _, _, _, _ ->
+            throw AssertionError("Network request was not expected")
+        }
+
+        expectAuthFailure { mfaClient.completeMfa("12 34") }
+
+        assertEquals(original, store.read())
+    }
+
+    @Test
+    fun `mfa verification never overwrites a session changed during challenge`() = runBlocking {
+        val original = session()
+        val replacement = session(
+            accessToken = "replacement-token",
+            userId = "00000000-0000-4000-8000-000000000099"
+        )
+        store.write(original)
+        var requestCount = 0
+        val mfaClient = testClient { url, _, _, _ ->
+            requestCount += 1
+            if (!url.endsWith("/auth/v1/user")) throw AssertionError("Only the factor lookup was expected")
+            store.write(replacement)
+            NativeAuthClient.HttpResponse(
+                200,
+                JSONObject().put("factors", org.json.JSONArray().put(JSONObject()
+                    .put("id", FACTOR_ID)
+                    .put("factor_type", "totp")
+                    .put("status", "verified"))).toString()
+            )
+        }
+
+        expectAuthFailure { mfaClient.completeMfa("123456") }
+
+        assertEquals(1, requestCount)
+        assertEquals(replacement, store.read())
+    }
+
+    @Test
+    fun `revoked mfa session clears only the matching cloud session`() = runBlocking {
+        store.write(session())
+        val mfaClient = testClient { _, _, _, _ -> NativeAuthClient.HttpResponse(401, "{}") }
+
+        expectAuthFailure { mfaClient.completeMfa("123456") }
+
+        assertNull(store.read())
+    }
+
+    @Test
     fun `temporary refresh failure retains the durable session`() = runBlocking {
         val original = session(expiresAtMillis = System.currentTimeMillis() + 30_000L)
         store.write(original)
@@ -268,11 +358,17 @@ class NativeAuthClientTest {
         data = Uri.parse("$AUTH_REDIRECT?$query")
     }
 
-    private fun session(expiresAtMillis: Long = System.currentTimeMillis() + 3_600_000L) = NativeSession(
-        accessToken = "access-token",
+    private fun session(
+        expiresAtMillis: Long = System.currentTimeMillis() + 3_600_000L,
+        accessToken: String = "access-token",
+        userId: String = USER_ID,
+        assuranceLevel: String = "aal1"
+    ) = NativeSession(
+        accessToken = accessToken,
         refreshToken = "refresh-token",
         expiresAtMillis = expiresAtMillis,
-        userId = USER_ID
+        userId = userId,
+        assuranceLevel = assuranceLevel
     )
 
     private fun tokenResponse(
@@ -289,7 +385,8 @@ class NativeAuthClientTest {
         iss: String = "$SUPABASE_URL/auth/v1",
         aud: String = "authenticated",
         exp: Long = System.currentTimeMillis() / 1_000L + 3_600L,
-        sub: String = USER_ID
+        sub: String = USER_ID,
+        aal: String = "aal1"
     ): String {
         val header = Base64.getUrlEncoder().withoutPadding()
             .encodeToString("""{"alg":"RS256","typ":"JWT"}""".toByteArray())
@@ -298,6 +395,7 @@ class NativeAuthClientTest {
             .put("aud", aud)
             .put("exp", exp)
             .put("sub", sub)
+            .put("aal", aal)
         val encodedPayload = Base64.getUrlEncoder().withoutPadding()
             .encodeToString(payload.toString().toByteArray())
         return "$header.$encodedPayload.synthetic-signature"
@@ -326,6 +424,8 @@ class NativeAuthClientTest {
         const val PUBLIC_KEY = "sb_publishable_goalflow_test"
         const val AUTH_REDIRECT = "goalflow://auth/callback"
         const val USER_ID = "00000000-0000-4000-8000-000000000001"
+        const val FACTOR_ID = "00000000-0000-4000-8000-000000000002"
+        const val CHALLENGE_ID = "00000000-0000-4000-8000-000000000003"
         const val VERIFIER = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
     }
 }
