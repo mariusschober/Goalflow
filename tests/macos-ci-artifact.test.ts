@@ -5,6 +5,10 @@ const workflow = readFileSync(
   new URL('../.github/workflows/ci.yml', import.meta.url),
   'utf8'
 );
+const sourceGate = readFileSync(
+  new URL('../macos-native/scripts/verify-project-sources.sh', import.meta.url),
+  'utf8'
+);
 
 describe('macOS beta artifact', () => {
   it('labels, verifies, fingerprints, and retains the ad-hoc candidate honestly', () => {
@@ -16,5 +20,11 @@ describe('macOS beta artifact', () => {
     expect(workflow).toContain('notarization=not-requested');
     expect(workflow).toContain('name: goalflow-macos-ad-hoc-beta');
     expect(workflow).toContain('if-no-files-found: error');
+  });
+
+  it('fails closed when Swift source discovery is empty or ambiguous', () => {
+    expect(sourceGate).toContain('[ -s "$source_list" ]');
+    expect(sourceGate).toContain('Duplicate Swift basenames');
+    expect(sourceGate).not.toContain('done < <(cd "$repo_root"');
   });
 });
