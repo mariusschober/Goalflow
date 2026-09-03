@@ -105,7 +105,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
     crossOriginEmbedderPolicy: false
   }));
   app.use(express.json({ limit: "256kb" }));
-  app.use(rateLimit({
+  app.use("/api", rateLimit({
     windowMs: 60_000,
     limit: 180,
     standardHeaders: "draft-8",
