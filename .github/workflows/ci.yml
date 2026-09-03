@@ -59,9 +59,16 @@ jobs:
           GITLEAKS_ENABLE_COMMENTS: false
       - name: Scan complete history and candidate tree
         run: |
+          set -euo pipefail
           echo "Scanning complete Git history and candidate HEAD $(git rev-parse HEAD)"
-          gitleaks git --config .gitleaks.toml --redact --verbose --log-opts="--all" .
-          gitleaks dir --config .gitleaks.toml --redact --verbose .
+          history_status=0
+          tree_status=0
+          gitleaks git --config .gitleaks.toml --redact --verbose --log-opts="--all" . || history_status=$?
+          gitleaks dir --config .gitleaks.toml --redact --verbose . || tree_status=$?
+          if [ "$history_status" -ne 0 ] || [ "$tree_status" -ne 0 ]; then
+            echo "Secret scan failed: history_status=$history_status tree_status=$tree_status" >&2
+            exit 1
+          fi
 
   migrations:
     runs-on: ubuntu-latest
