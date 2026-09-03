@@ -30,6 +30,22 @@ For each independent project, retain outside the repository:
 - custom SMTP configuration;
 - two synthetic staging identities used by the isolation matrix.
 
+The fail-closed hosted CI job reads these GitHub Actions secrets. Values must
+belong only to Goalflow staging; never reuse production credentials:
+
+- `GOALFLOW_STAGING_APP_ORIGIN`;
+- `GOALFLOW_STAGING_SUPABASE_URL`;
+- `GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY`;
+- `GOALFLOW_STAGING_USER_A_EMAIL`, `GOALFLOW_STAGING_USER_A_PASSWORD`, and
+  `GOALFLOW_STAGING_USER_A_ID`;
+- `GOALFLOW_STAGING_USER_B_EMAIL`, `GOALFLOW_STAGING_USER_B_PASSWORD`, and
+  `GOALFLOW_STAGING_USER_B_ID`.
+
+Both identities must have active `beta` profiles. `npm run
+test:hosted:staging` additionally requires the explicit non-secret guard
+`GOALFLOW_HOSTED_TEST_CONFIRM=staging`. It creates uniquely identified test
+tasks and finishes them as tombstones; it never targets production.
+
 Only the publishable key may enter `VITE_SUPABASE_PUBLISHABLE_KEY` or a native
 application configuration. The secret key must exist only in the corresponding
 Railway environment. Do not use secret-key behavior as RLS evidence because the

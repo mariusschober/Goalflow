@@ -28,6 +28,7 @@
     "verify:room-hashes": "node scripts/verify-room-schema-hashes.mjs",
     "verify:identifiers": "node scripts/check-durable-identifiers.mjs",
     "test:migrations:postgres": "bash scripts/test-postgres-migrations.sh",
+    "test:hosted:staging": "node --import tsx scripts/test-hosted-staging.ts",
     "restore:backup": "tsx scripts/restore-production-backup.ts",
     "verify:release": "npm run lint && npm test && npm run build && npm run verify:server && npm run verify:maintenance && npm run verify:client-secrets && npm run verify:client-artifacts && npm audit --audit-level=high",
     "test:e2e": "playwright test",
