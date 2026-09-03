@@ -415,6 +415,13 @@ const run = async () => {
   );
   await verifyServerSession(sessionB.access_token, sessionB.user.id);
 
+  const cleanupResults = await Promise.all([
+    databaseA.auth.signOut({ scope: 'local' }),
+    databaseASecond.auth.signOut({ scope: 'local' }),
+    databaseB.auth.signOut({ scope: 'local' })
+  ]);
+  for (const result of cleanupResults) assert.ifError(result.error);
+
   const maximumRequestMs = Math.ceil(Math.max(...requestDurations));
   assert(maximumRequestMs < 5_000, `Hosted API exceeded the beta latency ceiling (${maximumRequestMs}ms)`);
   process.stdout.write(`${JSON.stringify({

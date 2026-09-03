@@ -32,6 +32,8 @@ describe('hosted browser release gate', () => {
     expect(journey).toContain("getByRole('button', { name: 'Create Task'");
     expect(journey).toContain("getByRole('button', { name: 'Save'");
     expect(journey).toContain("getByTitle('Delete')");
+    expect(journey).toContain('await signOutLocally(firstA.page)');
+    expect(journey).toContain("await expect(secondA.page.locator('header')).toBeVisible()");
     expect(journey).toContain("window.dispatchEvent(new Event('goalflow:sync-retry'))");
   });
 

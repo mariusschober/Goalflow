@@ -119,6 +119,12 @@ const openPlan = async (page: Page) => {
 const taskCard = (page: Page, title: string) =>
   page.locator('[data-rfd-draggable-id]').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
 
+const signOutLocally = async (page: Page) => {
+  await page.getByRole('button', { name: 'Open account menu', exact: true }).click();
+  await page.getByRole('button', { name: 'Logout', exact: true }).click();
+  await expect(page.getByLabel('Email')).toBeVisible();
+};
+
 test.afterEach(async ({}, testInfo) => {
   const diagnostics = diagnosticsByTest.get(testInfo.testId) ?? [];
   await testInfo.attach('redacted-browser-diagnostics', {
@@ -188,6 +194,12 @@ test('real browsers converge within one account and isolate a second account', a
     await expect(firstA.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
     await waitForFreshDurableSync(userB.page);
     await expect(userB.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
+
+    await signOutLocally(firstA.page);
+    await expect(secondA.page.locator('header')).toBeVisible();
+    await waitForFreshDurableSync(secondA.page);
+    await signOutLocally(secondA.page);
+    await signOutLocally(userB.page);
   } finally {
     await Promise.all(contexts.map(context => context.close()));
   }
