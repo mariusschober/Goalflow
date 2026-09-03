@@ -71,7 +71,19 @@ android {
                     if (!hasB64 || !hasStorePass || !hasAlias || !hasKeyPass) {
                         throw new GradleException("Partial signing configuration — all of ANDROID_KEYSTORE_BASE64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD must be present together. Failing closed. Use -PgoalflowSkipSigning=true for unsigned local builds.")
                     }
-                    def decoded = new File("/tmp/goalflow.keystore")
+                    def decoded = File.createTempFile("goalflow-native-signing-", ".keystore")
+                    decoded.setReadable(false, false)
+                    decoded.setWritable(false, false)
+                    decoded.setExecutable(false, false)
+                    if (!decoded.setReadable(true, true) || !decoded.setWritable(true, true)) {
+                        decoded.delete()
+                        throw new GradleException("Could not restrict the temporary Android keystore to the current user.")
+                    }
+                    gradle.buildFinished {
+                        if (decoded.exists() && !decoded.delete()) {
+                            throw new GradleException("Could not remove the temporary Android keystore after the build.")
+                        }
+                    }
                     decoded.bytes = java.util.Base64.getDecoder().decode(b64)
                     storeFile decoded
                     storePassword hasStorePass

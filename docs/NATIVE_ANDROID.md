@@ -40,7 +40,7 @@ silently discard those records.
 | Variant | Application ID | Label | Purpose |
 | --- | --- | --- | --- |
 | `productionDebug` | `com.mariusschober.goalflow.dev` | Goalflow | Local/debug production-auth path |
-| `productionRelease` | `com.mariusschober.goalflow` | Goalflow | Unsigned release assembly |
+| `productionRelease` | `com.mariusschober.goalflow` | Goalflow | Signed only with complete explicit release credentials; ordinary CI compiles it unsigned with `-PgoalflowSkipSigning=true` |
 | `sandboxDebug` | `com.mariusschober.goalflow.sandbox.dev` | Goalflow Test | Isolated local test build; entry code `123456` |
 
 The sandbox gate is compile-time flavor configuration. It is not present in
@@ -91,7 +91,9 @@ android-native/app/build/outputs/apk/sandbox/debug/
 ```
 
 The native Gradle wrapper, JVM 21 alignment, Room migrations, and test-only
-JSON runtime are committed. Production release signing material is not.
+JSON runtime are committed. Production release signing material is not. When a
+release job supplies a base64 keystore, Gradle decodes it into a unique
+owner-readable temporary file and requires deletion at build completion.
 
 ## Reliability boundaries
 
