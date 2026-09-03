@@ -33,7 +33,11 @@
     "202608310001_telegram_auth_state_pkce.sql",
     "202609030001_access_boundary_hardening.sql",
     "202609030002_account_lifecycle.sql",
-    "202609030003_backup_restore_hardening.sql"
+    "202609030003_backup_restore_hardening.sql",
+    "202609030004_telegram_webhook_claims.sql",
+    "202609030005_telegram_mini_sessions.sql",
+    "202609030006_telegram_link_hardening.sql",
+    "202609030007_telegram_capture_confirmation.sql"
   ],
   "roomSchemaFiles": [
     "1.json",
