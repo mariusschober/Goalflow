@@ -15,6 +15,7 @@ const accountLifecycle = migrations.find(item => item.file === '202609030002_acc
 const backupHardening = migrations.find(item => item.file === '202609030003_backup_restore_hardening.sql');
 const telegramCaptureConfirmation = migrations.find(item => item.file === '202609030007_telegram_capture_confirmation.sql');
 const emailOtpActivation = migrations.find(item => item.file === '202609040001_email_otp_activation.sql');
+const realtimeSyncWakeup = migrations.find(item => item.file === '202609040003_realtime_sync_wakeup.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
@@ -24,6 +25,7 @@ assert(accountLifecycle, 'Account lifecycle migration is missing.');
 assert(backupHardening, 'Backup/restore hardening migration is missing.');
 assert(telegramCaptureConfirmation, 'Atomic Telegram capture confirmation migration is missing.');
 assert(emailOtpActivation, 'Typed email OTP activation migration is missing.');
+assert(realtimeSyncWakeup, 'Transactional Realtime sync wake-up migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -145,6 +147,24 @@ assert(
     && emailOtpActivation.sql.includes('revoke all on function public.activate_goalflow_email_beta')
     && !emailOtpActivation.sql.includes('user_metadata'),
   'Typed OTP binding, rate limits, one-use activation, or metadata retirement is incomplete.'
+);
+assert(
+  realtimeSyncWakeup.sql.includes('create table if not exists public.sync_wakeup_state')
+    && realtimeSyncWakeup.sql.includes('alter table public.sync_wakeup_state force row level security')
+    && realtimeSyncWakeup.sql.includes('grant select on table public.sync_wakeup_state to authenticated')
+    && realtimeSyncWakeup.sql.includes('(select auth.uid()) = user_id')
+    && realtimeSyncWakeup.sql.includes('create or replace function public.tsurfing_signal_sync_wakeup')
+    && realtimeSyncWakeup.sql.includes('security definer')
+    && realtimeSyncWakeup.sql.includes('set search_path = pg_catalog')
+    && realtimeSyncWakeup.sql.includes("'{}'::jsonb")
+    && realtimeSyncWakeup.sql.includes("'sync_wakeup'")
+    && realtimeSyncWakeup.sql.includes("'tsurfing:user:' || target_user_id::text")
+    && realtimeSyncWakeup.sql.includes('after insert or update or delete on public.sync_records')
+    && realtimeSyncWakeup.sql.includes('create policy "users receive own sync wakeups"')
+    && realtimeSyncWakeup.sql.includes('(select realtime.topic()) =')
+    && realtimeSyncWakeup.sql.includes("realtime.messages.extension = 'broadcast'")
+    && !/create\s+policy[\s\S]{0,160}?for\s+insert[\s\S]{0,160}?to\s+authenticated/i.test(realtimeSyncWakeup.sql),
+  'Transactional payload-free wake-up, exact private topic authorization, or client forgery denial is incomplete.'
 );
 const backupWithoutBodies = backupHardening.sql.replace(/\$\$[\s\S]*?\$\$/g, '$$BODY$$').toLowerCase();
 for (const forbidden of [/\bdrop\s+table\b/, /\btruncate\b/, /\bdrop\s+column\b/, /\bdelete\s+from\b/]) {

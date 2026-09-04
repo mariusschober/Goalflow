@@ -43,7 +43,8 @@ for migration in \
   "${repository_root}/supabase/migrations/202609030006_telegram_link_hardening.sql" \
   "${repository_root}/supabase/migrations/202609030007_telegram_capture_confirmation.sql" \
   "${repository_root}/supabase/migrations/202609040001_email_otp_activation.sql" \
-  "${repository_root}/supabase/migrations/202609040002_telegram_oidc_activation.sql"; do
+  "${repository_root}/supabase/migrations/202609040002_telegram_oidc_activation.sql" \
+  "${repository_root}/supabase/migrations/202609040003_realtime_sync_wakeup.sql"; do
   psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${migration}" >/dev/null
 done
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${repository_root}/scripts/migration-integrity-assertions.sql" >/dev/null
@@ -56,5 +57,8 @@ psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${account_assertions}" >/de
 telegram_assertions="${repository_root}/scripts/migration-telegram-assertions.sql"
 psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${telegram_assertions}" >/dev/null
 psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${telegram_assertions}" >/dev/null
+realtime_wakeup_assertions="${repository_root}/scripts/migration-realtime-wakeup-assertions.sql"
+psql -v ON_ERROR_STOP=1 -d "${empty_database}" -f "${realtime_wakeup_assertions}" >/dev/null
+psql -v ON_ERROR_STOP=1 -d "${upgrade_database}" -f "${realtime_wakeup_assertions}" >/dev/null
 
-echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","backupDryRun":"PASS","quotaRewind":"DENIED","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","typedEmailOtpActivation":"PASS","telegramOidcActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS","telegramWebhookClaims":"PASS","telegramMiniSessions":"PASS","telegramAccountBinding":"PASS","telegramCaptureConfirmation":"ATOMIC"}'
+echo '{"status":"PASS","emptyDatabase":"PASS","currentSchemaUpgrade":"PASS","idempotency":"PASS","conflictPreservation":"PASS","cursorRebase":"PASS","atomicRestore":"PASS","backupDryRun":"PASS","quotaRewind":"DENIED","nativeTaskEvents":"PASS","unknownPayloadPreservation":"PASS","directDataApi":"DENIED","rlsIsolation":"PASS","sameOwnerRelations":"PASS","typedEmailOtpActivation":"PASS","telegramOidcActivation":"PASS","sessionRevocation":"PASS","ownerBootstrap":"PASS","telegramWebhookClaims":"PASS","telegramMiniSessions":"PASS","telegramAccountBinding":"PASS","telegramCaptureConfirmation":"ATOMIC","realtimeWakeup":"PASS","wakeupRollback":"PASS","topicForgery":"DENIED"}'
