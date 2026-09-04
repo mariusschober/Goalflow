@@ -37,7 +37,13 @@ service after the first staging restore succeeds.
    conflict/tombstone behavior, refresh, revocation, and two authenticated
    sessions. The second proves create/edit/delete convergence between two real
    browser profiles for user A while a user-B browser remains isolated.
-5. Promote the same source and independently configured production variables
+5. Run the `hosted-cross-client` Beta Gate job for the exact candidate. It must
+   seed one durable task through the hosted UI, pull/edit/push it through the
+   production Android sync engine, verify that edit in a fresh browser,
+   pull/edit/push it through the production macOS transport, verify again, and
+   delete/recheck the fixture with both test accounts. Retain the Actions run
+   and job IDs. A compile-only native test or synthetic API is not a substitute.
+6. Promote the same source and independently configured production variables
    only after every staging gate passes.
 
 ## Scheduled backup

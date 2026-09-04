@@ -10,7 +10,7 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Candidate implementation | `chore/railway-beta-gate` implementation tree at `aa014fe898b2beb9d0aee95770338fd86c4ecc50` | CANDIDATE ONLY |
+| Candidate implementation | `chore/railway-beta-gate` implementation tree at `3f401ea0d28679bad24504e5403afa732064a667` | CANDIDATE ONLY |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
 | Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
@@ -19,13 +19,20 @@ or `IN PROGRESS`.
 ## CI and build evidence
 
 The exact-implementation [Beta Gate run
-33806219844](https://github.com/mariusschober/Goalflow/actions/runs/33806219844)
-completed at `aa014fe898b2beb9d0aee95770338fd86c4ecc50`. Its `verify`, clean
+33818026484](https://github.com/mariusschober/Goalflow/actions/runs/33818026484)
+completed at `3f401ea0d28679bad24504e5403afa732064a667`. Its `verify`, clean
 PostgreSQL `migrations`, `web-release`, legacy `android`, `native-android`, and
 `macos` jobs succeeded. Chromium and WebKit completed all eight critical
-journeys. The macOS job completed 175 tests and a build, and retained ad-hoc
-artifact `9913119768` (1,148,530 bytes; artifact digest
-`sha256:390c933811b80144693002c3ca4861ead08b93a6ad718bf9ba0e935e8df3652f`).
+journeys. The pinned npm 11.9.0 advisory gate completed twice and reported zero
+vulnerabilities; a failed install, version mismatch, three-minute audit timeout,
+registry error, or high-severity finding remains fatal.
+
+The macOS job executed 176 tests with one explicitly skipped live-staging test
+and zero failures, built and verified the ad-hoc signed application, and
+retained artifact `9917273034` (1,148,146 bytes; artifact digest
+`sha256:0a254b390d64bf17425094bfa10b01348bf8b7dd3effeb77598aad735083d5de`).
+The skipped test is the real hosted transport handoff and is not represented as
+live evidence.
 
 The native API-30 gate proved a clean install and visible `Current`/`Capture`
 semantics, ran exactly seven Compose/Room instrumentation tests, and installed
@@ -37,25 +44,24 @@ device emitted `UPGRADE_DATA_PRESERVATION=PASS`, `UPGRADE_MATRIX=PASS`, and
 `EMULATOR_GATE=PASS`.
 
 The same run's event-commit scan and candidate-tree scan found no leaks. The
-complete-history scan examined 311 commits and found exactly the one unresolved
+complete-history scan examined 317 commits and found exactly the one unresolved
 historical Firebase/GCP key (`history_status=1`, `tree_status=0`). Therefore
 the aggregate `beta-gate` correctly failed. The `hosted-staging` result was
-only the allowed absent-configuration preflight for this short-lived branch;
-all hosted proof steps were skipped. `android-internal-beta` was also skipped
-because this is not `integration/beta` and no signer/staging configuration has
-been supplied. Neither skip is release evidence.
+only the allowed absent-configuration preflight for this short-lived branch.
+The new `hosted-cross-client` job also passed only its preflight; its browser,
+Android, macOS, verification, and cleanup steps were all skipped because no
+staging configuration exists. `android-internal-beta` was skipped because this
+is not `integration/beta` and no signer/staging configuration has been
+supplied. None of those skips is release evidence.
 
-Local verification at the implementation tree passed 49 Vitest files / 254
-tests, TypeScript, production client/server/Mini App builds, client and
-built-artifact secret scans, production boot and one-shot maintenance
-fail-closed checks, all 14 migration hashes, all 8 Room schema hashes, durable
-identifier checks, shell syntax checks, and the high-severity dependency audit
-with zero reported vulnerabilities. The browser transport now caps complete
-API/sync response bodies as well as request time, and treats an oversized sync
-response as a permanent visible failure instead of retrying it. Local
-Playwright did not execute because this workspace could not download the
-Chromium binary and lacks WebKit system libraries; hosted CI is the browser
-authority.
+Local verification after the audit repair passed 51 Vitest files / 260 tests,
+TypeScript, production client/server/Mini App builds, client and built-artifact
+secret scans, workflow parsing, and the pinned high-severity dependency audit
+with zero reported vulnerabilities. CI independently passed production boot,
+one-shot maintenance fail-closed behavior, all 14 migration hashes, all 8 Room
+schema hashes, and durable identifier checks. Local Playwright did not execute
+because this workspace could not download the Chromium binary and lacks WebKit
+system libraries; hosted CI is the browser authority.
 
 ## Database and Supabase evidence
 
@@ -98,8 +104,8 @@ identity A and B UUIDs/passwords must never be recorded in this file.
 | Offline mutations survive restart/reconnect | IndexedDB/Room outbox tests pass | No two-client staging drill | NOT RUN |
 | Conflict and tombstone convergence | Shared protocol and PostgreSQL tests pass | No live cross-client drill | NOT RUN |
 | User A cannot inject/read user B | Server/RLS test harness exists | Two real staging users absent | NOT RUN |
-| Web to native Android | API-30 visible-UI, seven-test instrumentation, and exact installed v2→v3 preservation gates pass | No signed build or staging account | NOT RUN |
-| Web to native macOS | Swift tests and ad-hoc build gate exist | No staging login/sync drill | NOT RUN |
+| Web to native Android | API-30 visible-UI, seven-test instrumentation, exact installed v2→v3 preservation, and a production-transport handoff harness compile | Hosted handoff skipped; no signed build or staging account | NOT RUN |
+| Web to native macOS | 176 Swift tests, temporary-Keychain login, production URL-session handoff harness, and ad-hoc build gate compile | Hosted handoff skipped; no staging login/sync drill | NOT RUN |
 | Telegram to linked Goalflow account | Disabled implementation and adversarial tests exist | BotFather test bot absent | DISABLED / NOT RUN |
 
 Synthetic tests qualify a candidate for hosted testing; they do not prove zero
@@ -122,9 +128,11 @@ client convergence evidence is therefore `NOT RUN`.
 The intended topology is one private Railway project with isolated persistent
 `staging` and `production` environments. Each has one web/API service and one
 one-shot maintenance service from the same commit. Staging follows `develop`
-after CI; production follows `main` only by explicit promotion. The Railway
-project currently has only an empty production environment, so there is no
-staging or production URL to record.
+after CI; production follows `main` only by explicit promotion. Read-only
+verification on 2026-09-03 found Railway project
+`58c0b3aa-f2ad-459a-bb6f-194b130c3e68`, only its empty `production`
+environment `e7ed6925-b96b-4a17-af4e-ae78b2a934fb`, and zero services. There
+is no staging or production URL to record.
 
 Before production exists, rollback means do not promote: leave `main` and the
 production environment untouched. After release, rollback is to redeploy the

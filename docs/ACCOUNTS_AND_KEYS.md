@@ -42,14 +42,24 @@ belong only to Goalflow staging; never reuse production credentials:
   `GOALFLOW_STAGING_USER_B_ID`.
 
 Both identities must have active `beta` profiles. `npm run
-test:hosted:staging` and `npm run test:hosted:browser` additionally require the
-explicit non-secret guard `GOALFLOW_HOSTED_TEST_CONFIRM=staging`. The protocol
-harness creates uniquely identified test tasks and finishes them as tombstones.
-The browser harness signs in through the real UI with two independent user-A
-browser profiles and one user-B profile, then creates, edits, synchronizes, and
-deletes a uniquely named task. Neither harness may target production.
+test:hosted:staging`, `npm run test:hosted:browser`, and the CI-only
+`hosted-cross-client` job additionally require the explicit non-secret guard
+`GOALFLOW_HOSTED_TEST_CONFIRM=staging`. The protocol harness creates uniquely
+identified test tasks and finishes them as tombstones. The browser harness
+signs in through the real UI with two independent user-A browser profiles and
+one user-B profile, then creates, edits, synchronizes, and deletes a uniquely
+named task.
 
-The hosted browser configuration deliberately retains no trace, video,
+The cross-client job hands one durable browser-created task through the actual
+production Android sync engine and production macOS URL-session transport,
+verifying each edit through a fresh browser before deleting and rechecking the
+fixture with both accounts. Its private handoff file contains only the durable
+task UUID and unique test titles, lives in the CI runner temporary directory,
+and is removed after verified cleanup. Test-only password sign-in obtains
+short-lived user-A sessions; no server credential enters either client. None of
+these harnesses may target production.
+
+The hosted browser configurations deliberately retain no trace, video,
 screenshot, or HTML action report because those artifacts could capture the
 real test password. CI retains only explicitly redacted console, page-error,
 and network-status diagnostics.
