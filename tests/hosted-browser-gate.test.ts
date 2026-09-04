@@ -5,6 +5,7 @@ describe('hosted browser release gate', () => {
   const localConfig = fs.readFileSync('playwright.config.ts', 'utf8');
   const hostedConfig = fs.readFileSync('playwright.hosted.config.ts', 'utf8');
   const journey = fs.readFileSync('tests/e2e/hosted-staging.spec.ts', 'utf8');
+  const hostedAuth = fs.readFileSync('tests/e2e/hosted-auth.ts', 'utf8');
   const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
 
   it('cannot run against the local synthetic Playwright server', () => {
@@ -24,6 +25,10 @@ describe('hosted browser release gate', () => {
     expect(hostedConfig).not.toContain("['html'");
     expect(journey).toContain("testInfo.attach('redacted-browser-diagnostics'");
     expect(journey).toContain(".replace(/Bearer\\s+\\S+/gi, 'Bearer <redacted>')");
+    expect(journey).toContain('installHostedTestSession');
+    expect(journey).not.toContain("getByLabel('Password')");
+    expect(hostedAuth).toContain('persistSession: false');
+    expect(hostedAuth).toContain('window.localStorage.setItem(key, value)');
   });
 
   it('proves two browsers converge while a distinct account remains isolated', () => {

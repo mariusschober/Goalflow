@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { expect, test, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import { installHostedTestSession } from './hosted-auth';
 
 const secretEnvironmentNames = [
   'GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY',
@@ -59,16 +60,21 @@ const createAccountPage = async (
   testInfo: TestInfo,
   label: string,
   email: string,
-  password: string
+  password: string,
+  expectedUserId: string
 ): Promise<{ context: BrowserContext; page: Page }> => {
   const context = await browser.newContext();
+  await installHostedTestSession(
+    context,
+    process.env.GOALFLOW_STAGING_SUPABASE_URL!,
+    setting('GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY'),
+    email,
+    password,
+    expectedUserId
+  );
   const page = await context.newPage();
   observePage(page, testInfo, label);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
-  await expect(page.getByLabel('Email')).toBeVisible();
-  await page.getByLabel('Email').fill(email);
-  await page.getByLabel('Password').fill(password);
-  await page.getByRole('button', { name: 'Log in', exact: true }).last().click();
   await expect(page.locator('header')).toBeVisible();
   return { context, page };
 };
@@ -143,7 +149,8 @@ test('real browsers converge within one account and isolate a second account', a
   try {
     const firstA = await createAccountPage(
       browser, testInfo, 'user-a-browser-1',
-      setting('GOALFLOW_STAGING_USER_A_EMAIL'), setting('GOALFLOW_STAGING_USER_A_PASSWORD')
+      setting('GOALFLOW_STAGING_USER_A_EMAIL'), setting('GOALFLOW_STAGING_USER_A_PASSWORD'),
+      process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(firstA.context);
     await waitForFreshDurableSync(firstA.page);
@@ -152,7 +159,8 @@ test('real browsers converge within one account and isolate a second account', a
 
     const secondA = await createAccountPage(
       browser, testInfo, 'user-a-browser-2',
-      setting('GOALFLOW_STAGING_USER_A_EMAIL'), setting('GOALFLOW_STAGING_USER_A_PASSWORD')
+      setting('GOALFLOW_STAGING_USER_A_EMAIL'), setting('GOALFLOW_STAGING_USER_A_PASSWORD'),
+      process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(secondA.context);
     await waitForFreshDurableSync(secondA.page);
@@ -161,7 +169,8 @@ test('real browsers converge within one account and isolate a second account', a
 
     const userB = await createAccountPage(
       browser, testInfo, 'user-b-browser',
-      setting('GOALFLOW_STAGING_USER_B_EMAIL'), setting('GOALFLOW_STAGING_USER_B_PASSWORD')
+      setting('GOALFLOW_STAGING_USER_B_EMAIL'), setting('GOALFLOW_STAGING_USER_B_PASSWORD'),
+      process.env.GOALFLOW_STAGING_USER_B_ID!
     );
     contexts.push(userB.context);
     await waitForFreshDurableSync(userB.page);

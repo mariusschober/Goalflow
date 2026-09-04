@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 const workflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const browserConfig = readFileSync(new URL('../playwright.cross-client.config.ts', import.meta.url), 'utf8');
 const browserJourney = readFileSync(new URL('./e2e/hosted-cross-client.spec.ts', import.meta.url), 'utf8');
+const hostedAuth = readFileSync(new URL('./e2e/hosted-auth.ts', import.meta.url), 'utf8');
 const androidTest = readFileSync(new URL(
   '../android-native/app/src/test/java/com/mariusschober/goalflow/nativeapp/sync/NativeSyncEngineTest.kt',
   import.meta.url
@@ -46,6 +47,10 @@ describe('hosted cross-client release gate', () => {
     expect(browserConfig).toContain("video: 'off'");
     expect(browserConfig).toContain("reporter: 'list'");
     expect(browserJourney).toContain(".replace(/Bearer\\s+\\S+/gi, 'Bearer <redacted>')");
+    expect(browserJourney).toContain('installHostedTestSession');
+    expect(browserJourney).not.toContain("getByLabel('Password')");
+    expect(hostedAuth).toContain('persistSession: false');
+    expect(hostedAuth).toContain('window.localStorage.setItem(key, value)');
     expect(browserJourney).toContain('writeState(seeded)');
     expect(browserJourney).toContain('cardById(userB.page, seeded.taskId)');
     expect(workflow).toContain("if: always() && steps.preflight.outputs.run == 'true' && steps.seed.outcome != 'skipped'");
