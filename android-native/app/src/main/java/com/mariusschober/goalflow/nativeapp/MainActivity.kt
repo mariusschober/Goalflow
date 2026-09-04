@@ -73,6 +73,7 @@ class MainActivity : ComponentActivity() {
                 .onSuccess { accepted ->
                     if (accepted) {
                         authSessionRevision += 1
+                        (application as GoalflowApplication).foregroundSyncCoordinator.sessionChanged()
                         NativeSyncScheduler.schedule(this@MainActivity)
                     }
                 }
@@ -81,6 +82,7 @@ class MainActivity : ComponentActivity() {
                     // retryable activation/link acknowledgement is pending.
                     // Re-evaluate encrypted auth state without exposing it.
                     authSessionRevision += 1
+                    (application as GoalflowApplication).foregroundSyncCoordinator.sessionChanged()
                     Toast.makeText(
                         this@MainActivity,
                         error.message ?: "Sign-in could not be completed.",

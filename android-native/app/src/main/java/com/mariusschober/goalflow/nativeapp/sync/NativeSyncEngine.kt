@@ -7,6 +7,8 @@ import com.mariusschober.goalflow.nativeapp.data.NativeServerConflict
 import com.mariusschober.goalflow.nativeapp.data.SyncConflictEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.ConnectionPool
 import okhttp3.MediaType.Companion.toMediaType
@@ -26,7 +28,7 @@ import kotlin.math.min
 import kotlin.random.Random
 
 // P1-5: OkHttp singleton with HTTP/2 + 30s pool for NativeSyncEngine
-private val okHttpSingleton: OkHttpClient by lazy {
+internal val nativeOkHttpClient: OkHttpClient by lazy {
     OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
@@ -108,6 +110,8 @@ class NativeSyncEngine(
     private val cloudAvailable: () -> Boolean = { NativeConfig.canUseCloud },
     private val retryPolicy: NativeSyncRetryPolicy = NativeSyncRetryPolicy()
 ) {
+    private val synchronizationMutex = Mutex()
+
     suspend fun resolveConflictWithCloud(conflict: SyncConflictEntity) = withContext(Dispatchers.IO) {
         val serverLedgerConflict = runCatching { java.util.UUID.fromString(conflict.id) }.isSuccess
         if (serverLedgerConflict) {
@@ -147,7 +151,9 @@ class NativeSyncEngine(
         repository.resolveConflictWithCloud(conflict.id)
     }
 
-    suspend fun synchronize(): SyncResult = withContext(Dispatchers.IO) {
+    suspend fun synchronize(): SyncResult = synchronizationMutex.withLock { synchronizeOnce() }
+
+    private suspend fun synchronizeOnce(): SyncResult = withContext(Dispatchers.IO) {
         if (!cloudAvailable()) return@withContext SyncResult.Skipped
         val session = sessionProvider.read() ?: return@withContext SyncResult.Skipped
         if (session.expiresAtMillis <= System.currentTimeMillis() + 60_000L) {
@@ -540,7 +546,7 @@ class NativeSyncEngine(
                 "GET" -> builder.get()
                 else -> builder.method(method, requestBody)
             }.build()
-            okHttpSingleton.newCall(request).execute().use { response ->
+            nativeOkHttpClient.newCall(request).execute().use { response ->
                 val code = response.code
                 val responseBody = readNativeSyncResponse(response.body)
                 return NativeHttpResponse(code, responseBody)

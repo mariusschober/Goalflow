@@ -317,6 +317,7 @@ fun GoalflowRoot(
     }
 
     LaunchedEffect(sessionActive, sessionAssuranceLevel, authSessionRevision) {
+        application.foregroundSyncCoordinator.sessionChanged()
         if (!sessionActive || !NativeConfig.canUseTelegram) {
             telegramStatus = null
             telegramStatusMessage = null
@@ -385,6 +386,7 @@ fun GoalflowRoot(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
+                application.foregroundSyncCoordinator.start()
                 goalflowViewModel.refreshToday()
                 scope.launch {
                     val authClient = NativeAuthClient(application.sessionStore)
@@ -409,14 +411,20 @@ fun GoalflowRoot(
                     sessionStorageProblem = application.sessionStore.readProblem()
                     if (sessionActive) NativeSyncScheduler.schedule(context)
                 }
+            } else if (event == Lifecycle.Event.ON_PAUSE) {
+                application.foregroundSyncCoordinator.stop()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            application.foregroundSyncCoordinator.stop()
+        }
     }
 
     LaunchedEffect(Unit) {
         withFrameNanos { }
+        application.foregroundSyncCoordinator.start()
         NativeSyncScheduler.schedule(context)
     }
 
