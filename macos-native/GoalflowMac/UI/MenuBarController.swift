@@ -49,8 +49,12 @@ final class MenuBarController: NSObject {
         if popover.isShown { popover.performClose(nil) } else { viewModel.restore(); updateStatusTitle(); popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY); popover.contentViewController?.view.window?.makeKey() }
     }
 
-    @objc private func appDidBecomeActive() { viewModel.restore(); updateStatusTitle(); if viewModel.isOnBreak { updateBreakCover() } }
+    @objc private func appDidBecomeActive() { viewModel.applicationDidBecomeActive(); viewModel.restore(); updateStatusTitle(); if viewModel.isOnBreak { updateBreakCover() } }
     @objc private func appearanceDidChange() { updateStatusTitle() }
+
+    func stop() {
+        viewModel?.applicationWillTerminate()
+    }
 
     // MARK: - Capture
 

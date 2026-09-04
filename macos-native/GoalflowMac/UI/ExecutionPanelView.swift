@@ -66,6 +66,10 @@ final class ExecutionViewModel: ObservableObject {
     private let syncMetaStore: SyncMetaStore
     private let syncEngine: SyncEngine
     private let authService: SupabaseAuthService
+    private lazy var foregroundSyncCoordinator = MacForegroundSyncCoordinator(
+        canSynchronize: { [weak self] in self?.isAuthenticated == true },
+        synchronize: { [weak self] in await self?.performForegroundSync() }
+    )
     private var verifiedProfile: GoalflowSessionProfile?
     private var cancellables: Set<AnyCancellable> = []
     private var lastTickOvertime: Int = 0
@@ -87,9 +91,11 @@ final class ExecutionViewModel: ObservableObject {
             if let message = notification.object as? String { self?.cloudError = message }
             Task { @MainActor in await self?.refreshCloudState() }
         }.store(in: &cancellables)
+        NotificationCenter.default.publisher(for: .syncMutationCommitted).receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.triggerSyncIfNeeded()
+        }.store(in: &cancellables)
+        foregroundSyncCoordinator.start()
         Task { await refreshCloudState() }
-        // Periodic sync every 5min when authenticated
-        Timer.publish(every: 300, on: .main, in: .common).autoconnect().sink { [weak self] _ in self?.triggerSyncIfNeeded() }.store(in: &cancellables)
     }
     private func setupTimerBindings() {
         timer.$remainingSeconds.receive(on: DispatchQueue.main).sink { [weak self] v in self?.remainingSeconds = v }.store(in: &cancellables)
@@ -208,6 +214,7 @@ final class ExecutionViewModel: ObservableObject {
             cloudState = .disconnected(authService.configurationProblem ?? "Cloud sync is not configured.")
             return
         }
+        defer { foregroundSyncCoordinator.sessionChanged() }
         cloudState = .authenticating
         do {
             let profile = try await authService.validateCurrentSession()
@@ -264,16 +271,26 @@ final class ExecutionViewModel: ObservableObject {
     }
 
     func triggerSyncIfNeeded() {
+        foregroundSyncCoordinator.requestSync()
+    }
+
+    private func performForegroundSync() async {
         guard isAuthenticated else { return }
-        Task { @MainActor in
-            do {
-                try await syncEngine.synchronize()
-                self.cloudError = nil
-                self.restore()
-            } catch {
-                self.cloudError = error.localizedDescription
-            }
+        do {
+            try await syncEngine.synchronize()
+            cloudError = nil
+            restore()
+        } catch {
+            cloudError = error.localizedDescription
         }
+    }
+
+    func applicationDidBecomeActive() {
+        foregroundSyncCoordinator.applicationDidBecomeActive()
+    }
+
+    func applicationWillTerminate() {
+        foregroundSyncCoordinator.shutdown()
     }
 
     func signOut() {
@@ -283,10 +300,12 @@ final class ExecutionViewModel: ObservableObject {
                 verifiedProfile = nil
                 cloudState = .signedOut
                 cloudError = nil
+                foregroundSyncCoordinator.sessionChanged()
             } catch {
                 verifiedProfile = nil
                 cloudState = .signedOut
                 cloudError = error.localizedDescription
+                foregroundSyncCoordinator.sessionChanged()
             }
         }
     }

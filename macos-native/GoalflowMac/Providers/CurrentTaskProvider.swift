@@ -62,6 +62,7 @@ final class LocalTaskStore: TaskStore, @unchecked Sendable {
         } else { nextMeta = currentMeta }
         let data = try encoder.encode(sorted)
         try syncMetaStore.commitLocalValue(fileURL: fileURL, walKey: walKey, data: data, nextMeta: nextMeta)
+        NotificationCenter.default.post(name: .syncMutationCommitted, object: nil)
     }
 
     private static let orderLock = NSLock()

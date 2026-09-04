@@ -50,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        menuBar?.stop()
         hotkey?.unregister()
     }
 }
