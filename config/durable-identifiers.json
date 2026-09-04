@@ -39,7 +39,8 @@
     "202609030006_telegram_link_hardening.sql",
     "202609030007_telegram_capture_confirmation.sql",
     "202609040001_email_otp_activation.sql",
-    "202609040002_telegram_oidc_activation.sql"
+    "202609040002_telegram_oidc_activation.sql",
+    "202609040003_realtime_sync_wakeup.sql"
   ],
   "roomSchemaFiles": [
     "1.json",
