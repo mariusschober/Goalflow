@@ -22,6 +22,16 @@ data class NativeSession(
     val assuranceLevel: String = "aal1"
 )
 
+data class PendingEmailOtpAttempt(
+    val attemptToken: String,
+    val email: String,
+    val purpose: String,
+    val expiresAtMillis: Long,
+    val resendAtMillis: Long,
+    val verifiedUserId: String? = null,
+    val verifiedAccessTokenHash: String? = null
+)
+
 fun interface NativeSessionProvider {
     fun read(): NativeSession?
 }
@@ -98,6 +108,57 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
             .remove(KEY_PENDING_VERIFIER)
             .commit()) {
             "The pending auth state could not be cleared."
+        }
+    }
+
+    open fun setPendingEmailOtp(attempt: PendingEmailOtpAttempt) {
+        val encrypted = encrypt(JSONObject().apply {
+            put("attemptToken", attempt.attemptToken)
+            put("email", attempt.email)
+            put("purpose", attempt.purpose)
+            put("expiresAtMillis", attempt.expiresAtMillis)
+            put("resendAtMillis", attempt.resendAtMillis)
+            put("verifiedUserId", attempt.verifiedUserId ?: JSONObject.NULL)
+            put("verifiedAccessTokenHash", attempt.verifiedAccessTokenHash ?: JSONObject.NULL)
+        }.toString())
+        check(preferences.edit().putString(KEY_PENDING_EMAIL_OTP, encrypted).commit()) {
+            "The pending email-code request could not be stored."
+        }
+    }
+
+    open fun getPendingEmailOtp(): PendingEmailOtpAttempt? {
+        val encoded = preferences.getString(KEY_PENDING_EMAIL_OTP, null) ?: return null
+        return runCatching {
+            val json = JSONObject(decrypt(encoded))
+            PendingEmailOtpAttempt(
+                attemptToken = json.getString("attemptToken"),
+                email = json.getString("email"),
+                purpose = json.getString("purpose"),
+                expiresAtMillis = json.getLong("expiresAtMillis"),
+                resendAtMillis = json.getLong("resendAtMillis"),
+                verifiedUserId = if (!json.has("verifiedUserId") || json.isNull("verifiedUserId")) null
+                    else json.optString("verifiedUserId").takeIf(String::isNotBlank),
+                verifiedAccessTokenHash = if (!json.has("verifiedAccessTokenHash") || json.isNull("verifiedAccessTokenHash")) null
+                    else json.optString("verifiedAccessTokenHash").takeIf(String::isNotBlank)
+            ).takeIf {
+                val hasVerifiedIdentity = it.verifiedUserId != null || it.verifiedAccessTokenHash != null
+                it.attemptToken.matches(Regex("^[A-Za-z0-9_-]{43}$"))
+                    && it.email == it.email.trim().lowercase()
+                    && it.purpose in setOf("sign_in", "activation")
+                    && (!hasVerifiedIdentity || (
+                        it.verifiedUserId?.matches(Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")) == true
+                            && it.verifiedAccessTokenHash?.matches(Regex("^[0-9a-f]{64}$")) == true
+                    ))
+            } ?: throw IllegalArgumentException("Invalid pending email OTP")
+        }.getOrElse {
+            preferences.edit().remove(KEY_PENDING_EMAIL_OTP).commit()
+            null
+        }
+    }
+
+    open fun clearPendingEmailOtp() {
+        check(preferences.edit().remove(KEY_PENDING_EMAIL_OTP).commit()) {
+            "The pending email-code request could not be cleared."
         }
     }
 
@@ -189,6 +250,7 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
         const val KEY_SESSION = "encrypted_session"
         const val KEY_SESSION_READ_PROBLEM = "session_read_problem"
         const val KEY_PENDING_AUTH = "encrypted_pending_auth"
+        const val KEY_PENDING_EMAIL_OTP = "encrypted_pending_email_otp"
         // Removed on every write/clear to purge pre-PKCE plaintext state.
         const val KEY_PENDING_STATE = "pending_oauth_state"
         const val KEY_PENDING_VERIFIER = "pending_code_verifier"

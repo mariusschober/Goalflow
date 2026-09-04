@@ -133,6 +133,7 @@ import com.mariusschober.goalflow.nativeapp.data.NativeBackupPreview
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
+import com.mariusschober.goalflow.nativeapp.sync.PendingEmailOtpAttempt
 import com.mariusschober.goalflow.nativeapp.time.datePickerMillisToLocalDate
 import com.mariusschober.goalflow.nativeapp.time.localDateToDatePickerMillis
 import java.time.LocalDate
@@ -228,7 +229,12 @@ fun GoalflowRoot(
     var circadianOpen by rememberSaveable { mutableStateOf(false) }
     var focusTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var focusStartedAt by remember { mutableStateOf<Long?>(null) }
-    var sessionActive by remember { mutableStateOf(application.sessionStore.read() != null) }
+    var sessionActive by remember {
+        mutableStateOf(
+            application.sessionStore.read() != null
+                && application.sessionStore.getPendingEmailOtp() == null
+        )
+    }
     var sessionAssuranceLevel by remember {
         mutableStateOf(application.sessionStore.read()?.assuranceLevel ?: "aal1")
     }
@@ -270,10 +276,23 @@ fun GoalflowRoot(
     }
 
     LaunchedEffect(authSessionRevision) {
+        val authClient = NativeAuthClient(application.sessionStore)
+        val resumed = if (application.sessionStore.getPendingEmailOtp() != null
+            && application.sessionStore.read() != null
+        ) {
+            runCatching { authClient.resumePendingEmailActivation() }
+                .onFailure { authError = it.message ?: "Account activation could not be completed." }
+                .getOrNull()
+        } else null
         val currentSession = application.sessionStore.read()
-        sessionActive = currentSession != null
-        sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
+        sessionActive = currentSession != null && application.sessionStore.getPendingEmailOtp() == null
+        sessionAssuranceLevel = if (sessionActive) currentSession?.assuranceLevel ?: "aal1" else "aal1"
         sessionStorageProblem = application.sessionStore.readProblem()
+        if (resumed != null) {
+            authError = null
+            NativeSyncScheduler.schedule(context)
+            snackbarHostState.showSnackbar("Email verification completed after reconnecting.")
+        }
     }
 
     LaunchedEffect(tasks) {
@@ -326,10 +345,21 @@ fun GoalflowRoot(
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 goalflowViewModel.refreshToday()
-                val currentSession = application.sessionStore.read()
-                sessionActive = currentSession != null
-                sessionAssuranceLevel = currentSession?.assuranceLevel ?: "aal1"
-                sessionStorageProblem = application.sessionStore.readProblem()
+                scope.launch {
+                    val authClient = NativeAuthClient(application.sessionStore)
+                    if (application.sessionStore.getPendingEmailOtp() != null
+                        && application.sessionStore.read() != null
+                    ) {
+                        runCatching { authClient.resumePendingEmailActivation() }
+                            .onFailure { authError = it.message ?: "Account activation could not be completed." }
+                    }
+                    val currentSession = application.sessionStore.read()
+                    sessionActive = currentSession != null
+                        && application.sessionStore.getPendingEmailOtp() == null
+                    sessionAssuranceLevel = if (sessionActive) currentSession?.assuranceLevel ?: "aal1" else "aal1"
+                    sessionStorageProblem = application.sessionStore.readProblem()
+                    if (sessionActive) NativeSyncScheduler.schedule(context)
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -930,23 +960,53 @@ fun GoalflowRoot(
     }
 
     if (signInOpen) {
+        val pendingEmailOtp = remember(signInOpen, authSessionRevision) {
+            application.sessionStore.getPendingEmailOtp()
+                ?.takeIf { it.expiresAtMillis > System.currentTimeMillis() }
+        }
         SignInDialog(
             error = authError,
+            pendingAttempt = pendingEmailOtp,
             onDismiss = {
                 signInOpen = false
                 authError = null
             },
-            onConfirm = { email, onComplete, onFailure ->
+            onRequest = { email, purpose, inviteCode, captchaToken, onComplete, onFailure ->
                 scope.launch {
-                    runCatching { NativeAuthClient(application.sessionStore).requestMagicLink(email) }
-                        .onSuccess {
-                            onComplete()
-                            signInOpen = false
-                            snackbarHostState.showSnackbar("Sign-in link sent")
+                    runCatching {
+                        NativeAuthClient(application.sessionStore).requestEmailCode(
+                            email = email,
+                            purpose = purpose,
+                            inviteCode = inviteCode,
+                            captchaToken = captchaToken
+                        )
+                    }
+                        .onSuccess { attempt ->
+                            onComplete(attempt)
+                            snackbarHostState.showSnackbar("If approved, a six-digit email code is on its way")
                         }
                         .onFailure {
                             onFailure()
                             authError = it.message ?: "Sign-in failed"
+                        }
+                }
+            },
+            onVerify = { email, code, onComplete, onFailure ->
+                scope.launch {
+                    runCatching { NativeAuthClient(application.sessionStore).verifyEmailCode(email, code) }
+                        .onSuccess { verified ->
+                            onComplete()
+                            sessionActive = true
+                            sessionAssuranceLevel = verified.assuranceLevel
+                            sessionStorageProblem = application.sessionStore.readProblem()
+                            authError = null
+                            signInOpen = false
+                            NativeSyncScheduler.schedule(context)
+                            snackbarHostState.showSnackbar("Email verified. Cloud sync is connected.")
+                        }
+                        .onFailure { failure ->
+                            onFailure()
+                            authError = failure.message ?: "Email verification failed"
                         }
                 }
             }
@@ -2178,46 +2238,154 @@ private fun ReplaceRestoreDialog(
 @Composable
 private fun SignInDialog(
     error: String?,
+    pendingAttempt: PendingEmailOtpAttempt?,
     onDismiss: () -> Unit,
-    onConfirm: (String, () -> Unit, () -> Unit) -> Unit
+    onRequest: (String, String, String, String, (PendingEmailOtpAttempt) -> Unit, () -> Unit) -> Unit,
+    onVerify: (String, String, () -> Unit, () -> Unit) -> Unit
 ) {
-    var email by rememberSaveable { mutableStateOf("") }
-    var sending by rememberSaveable { mutableStateOf(false) }
+    var email by rememberSaveable(pendingAttempt?.attemptToken) { mutableStateOf(pendingAttempt?.email ?: "") }
+    var inviteCode by rememberSaveable { mutableStateOf("") }
+    var emailCode by rememberSaveable { mutableStateOf("") }
+    var joiningBeta by rememberSaveable(pendingAttempt?.attemptToken) {
+        mutableStateOf(pendingAttempt?.purpose == "activation")
+    }
+    var codeRequested by rememberSaveable(pendingAttempt?.attemptToken) {
+        mutableStateOf(pendingAttempt != null)
+    }
+    var working by rememberSaveable { mutableStateOf(false) }
+    var captchaToken by rememberSaveable { mutableStateOf("") }
+    var captchaRevision by rememberSaveable { mutableStateOf(0) }
+    var captchaMessage by rememberSaveable { mutableStateOf("") }
+    var resendAtMillis by rememberSaveable(pendingAttempt?.attemptToken) {
+        mutableStateOf(pendingAttempt?.resendAtMillis ?: 0L)
+    }
+    var clockMillis by remember { mutableStateOf(System.currentTimeMillis()) }
+    val resendSeconds = ceil(
+        (resendAtMillis - clockMillis).coerceAtLeast(0L) / 1_000.0
+    ).toInt()
     LaunchedEffect(error) {
-        if (error != null) sending = false
+        if (error != null) working = false
+    }
+    LaunchedEffect(codeRequested, resendAtMillis) {
+        while (codeRequested && System.currentTimeMillis() < resendAtMillis) {
+            clockMillis = System.currentTimeMillis()
+            delay(1_000)
+        }
+        clockMillis = System.currentTimeMillis()
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!working) onDismiss() },
         title = { Text("Sign in to sync") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Tsurfing will send a secure sign-in message. Your local commitments stay available either way.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                OutlinedTextField(
-                    value = email,
-                    onValueChange = { email = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    label = { Text("Email") },
-                    singleLine = true,
-                    keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                        keyboardType = KeyboardType.Email,
-                        imeAction = ImeAction.Done
+                if (!codeRequested) {
+                    Text(
+                        "Tsurfing sends a typed email code. Your local commitments stay available either way.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                )
+                    OutlinedTextField(
+                        value = email,
+                        onValueChange = { email = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Email") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.Email,
+                            imeAction = ImeAction.Next
+                        )
+                    )
+                    if (joiningBeta) {
+                        OutlinedTextField(
+                            value = inviteCode,
+                            onValueChange = { inviteCode = it.take(128) },
+                            modifier = Modifier.fillMaxWidth(),
+                            label = { Text("Beta invite code") },
+                            singleLine = true
+                        )
+                    }
+                    TextButton(onClick = { joiningBeta = !joiningBeta }, enabled = !working) {
+                        Text(if (joiningBeta) "I already have an account" else "Join with a beta invite")
+                    }
+                    NativeCaptchaView(
+                        revision = captchaRevision,
+                        onToken = {
+                            captchaToken = it
+                            captchaMessage = "Human verification complete."
+                        },
+                        onError = { captchaMessage = it }
+                    )
+                    if (captchaMessage.isNotBlank()) {
+                        Text(captchaMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    Text(
+                        "Enter the six-digit code sent to ${email.trim().lowercase()}.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    OutlinedTextField(
+                        value = emailCode,
+                        onValueChange = { emailCode = it.filter(Char::isDigit).take(6) },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text("Email code") },
+                        singleLine = true,
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = KeyboardType.NumberPassword,
+                            imeAction = ImeAction.Done
+                        )
+                    )
+                    TextButton(onClick = {
+                        codeRequested = false
+                        emailCode = ""
+                        captchaToken = ""
+                        captchaMessage = ""
+                        captchaRevision += 1
+                    }, enabled = !working && resendSeconds == 0) {
+                        Text(if (resendSeconds > 0) "Request another code in ${resendSeconds}s" else "Request another code")
+                    }
+                }
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
-                    if (!sending) {
-                        sending = true
-                        onConfirm(email, { sending = false }, { sending = false })
+                    if (!working) {
+                        working = true
+                        if (codeRequested) {
+                            onVerify(
+                                email,
+                                emailCode,
+                                { working = false },
+                                { working = false }
+                            )
+                        } else {
+                            onRequest(
+                                email,
+                                if (joiningBeta) "activation" else "sign_in",
+                                if (joiningBeta) inviteCode else "",
+                                captchaToken,
+                                { attempt ->
+                                    working = false
+                                    email = attempt.email
+                                    joiningBeta = attempt.purpose == "activation"
+                                    codeRequested = true
+                                    resendAtMillis = attempt.resendAtMillis
+                                    clockMillis = System.currentTimeMillis()
+                                    captchaToken = ""
+                                },
+                                { working = false }
+                            )
+                        }
                     }
                 },
-                enabled = email.isNotBlank() && !sending
-            ) { Text(if (sending) "Sending…" else "Send link") }
+                enabled = !working && if (codeRequested) {
+                    emailCode.length == 6
+                } else {
+                    email.isNotBlank() && captchaToken.isNotBlank() && (!joiningBeta || inviteCode.length >= 6)
+                }
+            ) { Text(if (working) "Working…" else if (codeRequested) "Verify code" else "Send email code") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !working) { Text("Cancel") } }
     )
 }
 

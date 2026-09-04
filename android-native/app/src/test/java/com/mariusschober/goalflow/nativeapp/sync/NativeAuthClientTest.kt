@@ -8,7 +8,6 @@ import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -30,6 +29,7 @@ class NativeAuthClientTest {
             private var memSession: NativeSession? = null
             private var memState: String? = null
             private var memVerifier: String? = null
+            private var memEmailOtp: PendingEmailOtpAttempt? = null
             override fun read(): NativeSession? = memSession
             override fun write(session: NativeSession) { memSession = session }
             override fun clear() { memSession = null }
@@ -37,6 +37,9 @@ class NativeAuthClientTest {
             override fun getPendingState(): String? = memState
             override fun getPendingVerifier(): String? = memVerifier
             override fun clearPendingState() { memState = null; memVerifier = null }
+            override fun setPendingEmailOtp(attempt: PendingEmailOtpAttempt) { memEmailOtp = attempt }
+            override fun getPendingEmailOtp(): PendingEmailOtpAttempt? = memEmailOtp
+            override fun clearPendingEmailOtp() { memEmailOtp = null }
         }
         client = testClient()
     }
@@ -45,6 +48,7 @@ class NativeAuthClientTest {
     fun tearDown() {
         store.clear()
         store.clearPendingState()
+        store.clearPendingEmailOtp()
     }
 
     @Test
@@ -165,32 +169,145 @@ class NativeAuthClientTest {
     }
 
     @Test
-    fun `magic link request sends Supabase PKCE fields and exact native redirect`() = runBlocking {
+    fun `email code request uses server preflight and retains only opaque activation authority`() = runBlocking {
         var capturedUrl = ""
         var capturedBody = ""
-        val capturingClient = testClient { url, _, body, _ ->
+        val capturingClient = testClient { url, method, body, headers ->
             capturedUrl = url
             capturedBody = body.orEmpty()
-            NativeAuthClient.HttpResponse(200, "{}")
+            assertEquals("POST", method)
+            assertTrue(headers.isEmpty())
+            NativeAuthClient.HttpResponse(202, JSONObject()
+                .put("accepted", true)
+                .put("attemptToken", ATTEMPT_TOKEN)
+                .put("expiresInSeconds", 600)
+                .put("resendAfterSeconds", 60)
+                .toString())
         }
 
-        capturingClient.requestMagicLink("person@example.com")
+        val attempt = capturingClient.requestEmailCode(
+            email = " Person@Example.com ",
+            purpose = "activation",
+            inviteCode = "invite-secret",
+            captchaToken = "captcha-proof"
+        )
 
-        val storedState = store.getPendingState()
-        val storedVerifier = store.getPendingVerifier()
-        assertNotNull(storedState)
-        assertNotNull(storedVerifier)
-        assertTrue(storedVerifier!!.length in 43..128)
         val body = JSONObject(capturedBody)
-        assertEquals(false, body.getBoolean("create_user"))
-        assertEquals("s256", body.getString("code_challenge_method"))
-        assertEquals(capturingClient.codeChallenge(storedVerifier), body.getString("code_challenge"))
-        assertFalse(body.has("options"))
-        val redirect = Uri.parse(capturedUrl).getQueryParameter("redirect_to")
-        assertNotNull(redirect)
-        val redirectUri = Uri.parse(redirect)
-        assertEquals(AUTH_REDIRECT, "${redirectUri.scheme}://${redirectUri.host}${redirectUri.path}")
-        assertEquals(storedState, redirectUri.getQueryParameter("state"))
+        assertEquals("$API_ORIGIN/api/v1/auth/email/preflight", capturedUrl)
+        assertEquals("person@example.com", body.getString("email"))
+        assertEquals("activation", body.getString("purpose"))
+        assertEquals("invite-secret", body.getString("code"))
+        assertEquals("captcha-proof", body.getString("captchaToken"))
+        assertEquals(ATTEMPT_TOKEN, attempt.attemptToken)
+        assertEquals(attempt, store.getPendingEmailOtp())
+        assertNull(store.getPendingState())
+    }
+
+    @Test
+    fun `typed email code verifies through Supabase then activates before exposing session`() = runBlocking {
+        store.setPendingEmailOtp(PendingEmailOtpAttempt(
+            ATTEMPT_TOKEN,
+            "person@example.com",
+            "sign_in",
+            System.currentTimeMillis() + 600_000L,
+            System.currentTimeMillis() + 60_000L
+        ))
+        val requests = mutableListOf<Pair<String, String?>>()
+        val verifyingClient = testClient { url, _, body, headers ->
+            requests += url to body
+            when {
+                url.endsWith("/auth/v1/verify") -> {
+                    assertEquals(PUBLIC_KEY, headers["apikey"])
+                    val verification = JSONObject(body!!)
+                    assertEquals("person@example.com", verification.getString("email"))
+                    assertEquals("123456", verification.getString("token"))
+                    assertEquals("email", verification.getString("type"))
+                    NativeAuthClient.HttpResponse(200, tokenResponse())
+                }
+                url.endsWith("/api/v1/auth/email/activate") -> {
+                    assertEquals("Bearer ${jwt()}", headers["Authorization"])
+                    assertEquals(ATTEMPT_TOKEN, JSONObject(body!!).getString("attemptToken"))
+                    NativeAuthClient.HttpResponse(200, "{\"activated\":true}")
+                }
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        val session = verifyingClient.verifyEmailCode("person@example.com", "123456")
+
+        assertEquals(USER_ID, session.userId)
+        assertEquals(session, store.read())
+        assertNull(store.getPendingEmailOtp())
+        assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun `transient activation failure retains encrypted session and one-use attempt for retry`() = runBlocking {
+        val attempt = PendingEmailOtpAttempt(
+            ATTEMPT_TOKEN,
+            "person@example.com",
+            "sign_in",
+            System.currentTimeMillis() + 600_000L,
+            System.currentTimeMillis() + 60_000L
+        )
+        store.setPendingEmailOtp(attempt)
+        var verifyCount = 0
+        var activationCount = 0
+        val verifyingClient = testClient { url, _, _, _ ->
+            when {
+                url.endsWith("/auth/v1/verify") -> {
+                    verifyCount += 1
+                    NativeAuthClient.HttpResponse(200, tokenResponse())
+                }
+                url.endsWith("/api/v1/auth/email/activate") -> {
+                    activationCount += 1
+                    NativeAuthClient.HttpResponse(
+                        if (activationCount == 1) 503 else 200,
+                        if (activationCount == 1) "{}" else "{\"activated\":true}"
+                    )
+                }
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        expectTransientAuthFailure { verifyingClient.verifyEmailCode("person@example.com", "123456") }
+
+        assertNotNull(store.read())
+        val retained = store.getPendingEmailOtp()
+        assertEquals(attempt.attemptToken, retained?.attemptToken)
+        assertEquals(USER_ID, retained?.verifiedUserId)
+        assertNotNull(retained?.verifiedAccessTokenHash)
+        assertEquals(store.read(), verifyingClient.resumePendingEmailActivation())
+        assertEquals(1, verifyCount)
+        assertEquals(2, activationCount)
+        assertNull(store.getPendingEmailOtp())
+    }
+
+    @Test
+    fun `pre-existing session never bypasses typed email code verification`() = runBlocking {
+        store.setPendingEmailOtp(PendingEmailOtpAttempt(
+            ATTEMPT_TOKEN,
+            "person@example.com",
+            "activation",
+            System.currentTimeMillis() + 600_000L,
+            System.currentTimeMillis() + 60_000L
+        ))
+        store.write(session(accessToken = "pre-existing-session"))
+        val requestedPaths = mutableListOf<String>()
+        val verifyingClient = testClient { url, _, _, _ ->
+            requestedPaths += url
+            when {
+                url.endsWith("/auth/v1/verify") -> NativeAuthClient.HttpResponse(200, tokenResponse())
+                url.endsWith("/api/v1/auth/email/activate") -> NativeAuthClient.HttpResponse(200, "{\"activated\":true}")
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        verifyingClient.verifyEmailCode("person@example.com", "123456")
+
+        assertEquals(2, requestedPaths.size)
+        assertTrue(requestedPaths[0].endsWith("/auth/v1/verify"))
+        assertTrue(requestedPaths[1].endsWith("/api/v1/auth/email/activate"))
     }
 
     @Test
@@ -346,6 +463,7 @@ class NativeAuthClientTest {
         isAuthEnabled = { true },
         supabaseUrl = SUPABASE_URL,
         supabasePublicKey = PUBLIC_KEY,
+        apiOrigin = API_ORIGIN,
         authRedirectUri = AUTH_REDIRECT
     ) {
         override fun request(url: String, method: String, body: String?, headers: Map<String, String>): HttpResponse {
@@ -421,11 +539,13 @@ class NativeAuthClientTest {
 
     private companion object {
         const val SUPABASE_URL = "https://project-ref.supabase.co"
+        const val API_ORIGIN = "https://app.tsurfing.com"
         const val PUBLIC_KEY = "sb_publishable_goalflow_test"
         const val AUTH_REDIRECT = "tsurfing://auth/callback"
         const val USER_ID = "00000000-0000-4000-8000-000000000001"
         const val FACTOR_ID = "00000000-0000-4000-8000-000000000002"
         const val CHALLENGE_ID = "00000000-0000-4000-8000-000000000003"
         const val VERIFIER = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFG"
+        const val ATTEMPT_TOKEN = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     }
 }

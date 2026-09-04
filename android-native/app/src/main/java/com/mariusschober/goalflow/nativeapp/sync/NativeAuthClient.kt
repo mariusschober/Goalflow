@@ -17,56 +17,130 @@ import java.security.SecureRandom
 class NativeAuthException(message: String) : IllegalStateException(message)
 class NativeAuthTransientException(message: String) : IOException(message)
 
-/**
- * Uses the existing Supabase magic-link flow. No local/demo account is ever
- * synthesized; without configured public Supabase settings the native app is
- * simply local-first and unauthenticated.
- */
+/** Typed Supabase email OTP with server-bound approval and encrypted state. */
 open class NativeAuthClient(
     private val sessionStore: SecureSessionStore,
     private val isAuthEnabled: () -> Boolean = { NativeConfig.canUseAuthentication },
     private val supabaseUrl: String = NativeConfig.supabaseUrl,
     private val supabasePublicKey: String = NativeConfig.supabasePublicKey,
+    private val apiOrigin: String = NativeConfig.apiOrigin,
     private val authRedirectUri: String = NativeConfig.authRedirectUri
 ) {
-    suspend fun requestMagicLink(email: String) = withContext(Dispatchers.IO) {
+    suspend fun requestEmailCode(
+        email: String,
+        purpose: String = "sign_in",
+        inviteCode: String = "",
+        captchaToken: String = ""
+    ): PendingEmailOtpAttempt = withContext(Dispatchers.IO) {
         requireSafeAuthConfiguration()
-        val cleanEmail = email.trim()
+        val cleanEmail = email.trim().lowercase()
         if (!android.util.Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
             throw NativeAuthException("Enter a valid email address.")
         }
-        val state = generateState()
-        val verifier = generateCodeVerifier()
-        sessionStore.setPendingState(state, verifier)
-        val codeChallenge = codeChallenge(verifier)
-        val redirectWithState = Uri.parse(authRedirectUri).buildUpon()
-            .appendQueryParameter("state", state)
-            .build()
-            .toString()
-        val requestUrl = Uri.parse("$supabaseUrl/auth/v1/otp").buildUpon()
-            .appendQueryParameter("redirect_to", redirectWithState)
-            .build()
-            .toString()
+        if (purpose !in setOf("sign_in", "activation")) {
+            throw NativeAuthException("The email-code request type is invalid.")
+        }
+        if (purpose == "activation" && inviteCode.trim().length !in 6..128) {
+            throw NativeAuthException("Enter a valid beta invite.")
+        }
         val body = JSONObject().apply {
             put("email", cleanEmail)
-            put("create_user", false)
-            put("code_challenge", codeChallenge)
-            put("code_challenge_method", "s256")
+            put("purpose", purpose)
+            put("code", if (purpose == "activation") inviteCode.trim() else "")
+            put("captchaToken", captchaToken)
         }
         val response = request(
-            url = requestUrl,
+            url = "$apiOrigin/api/v1/auth/email/preflight",
             method = "POST",
             body = body.toString(),
+            headers = emptyMap()
+        )
+        if (response.code !in 200..299) {
+            if (isRetryableStatus(response.code)) {
+                throw NativeAuthTransientException("Email-code delivery is temporarily unavailable. Local commitments remain available.")
+            }
+            throw NativeAuthException("Email-code delivery could not be started.")
+        }
+        val result = runCatching { JSONObject(response.body) }.getOrNull()
+            ?: throw NativeAuthException("The authentication server returned invalid data.")
+        val attemptToken = result.optString("attemptToken")
+            .takeIf { it.matches(OPAQUE_TOKEN_PATTERN) }
+            ?: throw NativeAuthException("The authentication server returned invalid request authority.")
+        val expiresInSeconds = result.optLong("expiresInSeconds", 0L).takeIf { it in 1L..600L }
+            ?: throw NativeAuthException("The authentication server returned an invalid expiry.")
+        val resendAfterSeconds = result.optLong("resendAfterSeconds", 0L).takeIf { it in 60L..600L }
+            ?: throw NativeAuthException("The authentication server returned an invalid resend cooldown.")
+        val now = System.currentTimeMillis()
+        val attempt = PendingEmailOtpAttempt(
+            attemptToken = attemptToken,
+            email = cleanEmail,
+            purpose = purpose,
+            expiresAtMillis = now + expiresInSeconds * 1_000L,
+            resendAtMillis = now + resendAfterSeconds * 1_000L
+        )
+        sessionStore.setPendingEmailOtp(attempt)
+        attempt
+    }
+
+    suspend fun verifyEmailCode(email: String, code: String): NativeSession = withContext(Dispatchers.IO) {
+        requireSafeAuthConfiguration()
+        val cleanEmail = email.trim().lowercase()
+        val cleanCode = code.trim()
+        val attempt = sessionStore.getPendingEmailOtp()
+            ?: throw NativeAuthException("Request a new email code on this device.")
+        if (attempt.expiresAtMillis <= System.currentTimeMillis()) {
+            sessionStore.clearPendingEmailOtp()
+            throw NativeAuthException("The email-code request expired. Request a new code.")
+        }
+        if (!secureEquals(cleanEmail, attempt.email) || !cleanCode.matches(EMAIL_OTP_PATTERN)) {
+            throw NativeAuthException("Enter the six-digit code sent to this email address.")
+        }
+        // Retry only if this exact encrypted session was produced by the
+        // earlier OTP verification. A pre-existing session must never skip
+        // the typed code.
+        sessionStore.read()?.takeIf { attempt.matchesVerifiedSession(it) }?.let { existing ->
+            activateEmailOtp(existing, attempt)
+            return@withContext existing
+        }
+        val response = request(
+            url = "$supabaseUrl/auth/v1/verify",
+            method = "POST",
+            body = JSONObject()
+                .put("email", cleanEmail)
+                .put("token", cleanCode)
+                .put("type", "email")
+                .toString(),
             headers = authHeaders()
         )
         if (response.code !in 200..299) {
-            // The email may have been accepted even if its acknowledgement was
-            // lost. Preserve the verifier so an arriving link remains usable.
-            throw NativeAuthException("Sign-in delivery could not be confirmed. Use the link if it arrives, or request a new one.")
+            if (isRetryableStatus(response.code)) {
+                throw NativeAuthTransientException("Email verification is temporarily unavailable. Try again without requesting another code.")
+            }
+            throw NativeAuthException("The email code is invalid or expired.")
         }
+        val session = parseSessionResponse(response.body)
+        sessionStore.write(session)
+        val verifiedAttempt = attempt.copy(
+            verifiedUserId = session.userId,
+            verifiedAccessTokenHash = accessTokenHash(session.accessToken)
+        )
+        sessionStore.setPendingEmailOtp(verifiedAttempt)
+        activateEmailOtp(session, verifiedAttempt)
+        session
+    }
+
+    suspend fun resumePendingEmailActivation(): NativeSession? = withContext(Dispatchers.IO) {
+        val attempt = sessionStore.getPendingEmailOtp() ?: return@withContext null
+        val session = sessionStore.read() ?: return@withContext null
+        if (!attempt.matchesVerifiedSession(session)) return@withContext null
+        // Let the server decide expiry: an activation committed before a lost
+        // response remains an exact idempotent success after ten minutes.
+        activateEmailOtp(session, attempt)
+        session
     }
 
     suspend fun currentSession(): NativeSession? = withContext(Dispatchers.IO) {
+        if (sessionStore.getPendingEmailOtp() != null) return@withContext null
         val current = sessionStore.read() ?: return@withContext null
         // Proactive refresh 5 minutes before expiry to avoid race with sync
         if (current.expiresAtMillis > System.currentTimeMillis() + 5 * 60_000L) return@withContext current
@@ -192,13 +266,19 @@ open class NativeAuthClient(
             && uri.userInfo == null
     }
 
-    fun clearSession() = sessionStore.clear()
+    fun clearSession() {
+        sessionStore.clear()
+        sessionStore.clearPendingEmailOtp()
+        sessionStore.clearPendingState()
+    }
 
     suspend fun signOut() {
         val current = sessionStore.read()
         // Clear first so an in-flight worker stops before another authenticated
         // request. Room data and the outbox are deliberately untouched.
         sessionStore.clear()
+        sessionStore.clearPendingEmailOtp()
+        sessionStore.clearPendingState()
         if (current == null || !isAuthEnabled()) return
         requireSafeAuthConfiguration()
         val response = withContext(Dispatchers.IO) {
@@ -223,7 +303,10 @@ open class NativeAuthClient(
             headers = authHeaders()
         )
         if (response.code !in 200..299) {
-            if (!isRetryableStatus(response.code)) sessionStore.clear()
+            if (!isRetryableStatus(response.code)) {
+                sessionStore.clear()
+                sessionStore.clearPendingEmailOtp()
+            }
             if (isRetryableStatus(response.code)) {
                 throw NativeAuthTransientException("Session refresh is temporarily unavailable. Local commitments are still available.")
             }
@@ -280,6 +363,46 @@ open class NativeAuthClient(
 
     internal data class HttpResponse(val code: Int, val body: String)
 
+    private fun activateEmailOtp(session: NativeSession, attempt: PendingEmailOtpAttempt) {
+        if (!attempt.matchesVerifiedSession(session)) {
+            throw NativeAuthException("Enter the current email code before activating this session.")
+        }
+        requireUnchangedSession(session)
+        val response = request(
+            url = "$apiOrigin/api/v1/auth/email/activate",
+            method = "POST",
+            body = JSONObject().put("attemptToken", attempt.attemptToken).toString(),
+            headers = mapOf("Authorization" to "Bearer ${session.accessToken}")
+        )
+        requireUnchangedSession(session)
+        if (response.code in 200..299) {
+            val activated = runCatching { JSONObject(response.body).optBoolean("activated", false) }.getOrDefault(false)
+            if (!activated) {
+                clearSessionIfUnchanged(session)
+                sessionStore.clearPendingEmailOtp()
+                throw NativeAuthException("The email-code request was not activated.")
+            }
+            sessionStore.clearPendingEmailOtp()
+            return
+        }
+        if (isRetryableStatus(response.code)) {
+            // Keep both encrypted pieces so a lost acknowledgement can be
+            // retried idempotently after a restart without reusing the OTP.
+            throw NativeAuthTransientException("Account activation is temporarily unavailable. Retry without requesting another code.")
+        }
+        clearSessionIfUnchanged(session)
+        sessionStore.clearPendingEmailOtp()
+        runCatching {
+            request(
+                url = "$supabaseUrl/auth/v1/logout?scope=local",
+                method = "POST",
+                body = null,
+                headers = authHeaders(session.accessToken)
+            )
+        }
+        throw NativeAuthException("The email-code request is invalid or expired.")
+    }
+
     private data class TokenClaims(
         val issuer: String,
         val subject: String,
@@ -298,6 +421,8 @@ open class NativeAuthClient(
         if (!isAuthEnabled()
             || origin?.scheme != "https"
             || origin?.host.isNullOrBlank()
+            || runCatching { Uri.parse(apiOrigin) }.getOrNull()?.scheme != "https"
+            || runCatching { Uri.parse(apiOrigin) }.getOrNull()?.host.isNullOrBlank()
             || supabasePublicKey.isBlank()
             || authRedirectUri != NativeConfig.authRedirectUri
         ) {
@@ -395,6 +520,17 @@ open class NativeAuthClient(
         right.toByteArray(StandardCharsets.UTF_8)
     )
 
+    private fun accessTokenHash(token: String): String = MessageDigest.getInstance("SHA-256")
+        .digest(token.toByteArray(StandardCharsets.UTF_8))
+        .joinToString("") { byte -> "%02x".format(byte) }
+
+    private fun PendingEmailOtpAttempt.matchesVerifiedSession(session: NativeSession): Boolean =
+        session.userId != null
+            && verifiedUserId != null
+            && secureEquals(verifiedUserId.lowercase(), session.userId.lowercase())
+            && verifiedAccessTokenHash != null
+            && secureEquals(verifiedAccessTokenHash, accessTokenHash(session.accessToken))
+
     internal fun codeChallenge(verifier: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(verifier.toByteArray(StandardCharsets.US_ASCII))
         return Base64.encodeToString(digest, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
@@ -416,6 +552,8 @@ open class NativeAuthClient(
         const val EXPIRY_SAFETY_WINDOW_MILLIS = 60_000L
         const val MAX_AUTH_RESPONSE_CHARS = 256 * 1024
         val PKCE_VERIFIER_PATTERN = Regex("^[A-Za-z0-9._~-]+$")
+        val OPAQUE_TOKEN_PATTERN = Regex("^[A-Za-z0-9_-]{43}$")
+        val EMAIL_OTP_PATTERN = Regex("^[0-9]{6}$")
         val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
         val RETRYABLE_STATUS = setOf(408, 425, 429)
 
