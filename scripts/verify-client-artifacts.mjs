@@ -49,11 +49,15 @@ if (!miniIndexContents.includes('https://telegram.org/js/telegram-web-app.js')) 
 }
 
 const javascriptFiles = [];
+const miniJavascriptFiles = [];
 const collectJavascript = async directory => {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) await collectJavascript(target);
-    else if (entry.name.endsWith('.js')) javascriptFiles.push(target);
+    else if (entry.name.endsWith('.js')) {
+      javascriptFiles.push(target);
+      if (target.startsWith(`${miniRoot}${path.sep}`)) miniJavascriptFiles.push(target);
+    }
   }
 };
 await collectJavascript(clientRoot);
@@ -66,11 +70,29 @@ for (const forbidden of ['__storageService', '__STORES', '123456']) {
   }
 }
 
+const miniJavascript = (await Promise.all(miniJavascriptFiles.map(file => readFile(file, 'utf8')))).join('\n');
+for (const forbidden of [
+  'goalflow.telegram-mini.session',
+  'Bearer ',
+  'tokenType',
+  'initData=',
+  '/session?'
+]) {
+  if (miniJavascript.includes(forbidden)) {
+    throw new Error(`Telegram Mini App bundle contains retired credential transport ${forbidden}.`);
+  }
+}
+for (const required of ['/events', 'text/event-stream', 'same-origin']) {
+  if (!miniJavascript.includes(required)) {
+    throw new Error(`Telegram Mini App bundle is missing secure wake transport marker ${required}.`);
+  }
+}
+
 console.log(JSON.stringify({
   status: 'PASS',
   manifest: exactFields,
   requiredIcons: 2,
-  telegramMiniApp: 'present',
+  telegramMiniApp: 'secure-cookie-and-wake-relay',
   javascriptFiles: javascriptFiles.length,
   testBackdoors: 'absent'
 }));

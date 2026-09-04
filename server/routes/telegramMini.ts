@@ -9,6 +9,11 @@ import type { AppConfig } from "../config";
 import type { Logger } from "../logger";
 import { createMiniTask, getMiniCurrent, getMiniToday } from "../telegram/miniApp";
 import { initDataAuthorization, MiniAppAuthError, validateInitData } from "../telegram/miniAppAuth";
+import {
+  subscribeMiniWakeups,
+  type MiniWakeSubscriber,
+  type MiniWakeSubscription
+} from "../telegram/miniWakeRelay";
 import { localDateFor } from "../telegram/queue";
 
 const uuid = z.string().uuid();
@@ -34,7 +39,12 @@ interface CaptureInput {
   estimatedMinutes?: number;
   tags?: string[];
 }
-interface MiniPrincipal { userId: string; telegramUserId: number; tokenHash: string }
+interface MiniPrincipal {
+  userId: string;
+  telegramUserId: number;
+  tokenHash: string;
+  expiresAtMs: number;
+}
 
 export interface TelegramMiniDependencies {
   now?: () => Date;
@@ -42,15 +52,27 @@ export interface TelegramMiniDependencies {
   current?: typeof getMiniCurrent;
   today?: typeof getMiniToday;
   createTask?: typeof createMiniTask;
+  subscribeWakeups?: MiniWakeSubscriber;
+  sseGlobalLimit?: number;
+  ssePerUserLimit?: number;
+  sseHeartbeatMs?: number;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value));
 const hash = (value: string): string => crypto.createHash("sha256").update(value).digest("hex");
-const bearerSessionToken = (request: Request): string | undefined => {
-  const match = request.header("authorization")?.match(/^Bearer ([A-Za-z0-9_-]{43})$/);
-  return match?.[1];
+const miniCookieName = "__Host-tsurfing-mini";
+const miniSessionToken = (request: Request): string | undefined => {
+  const value = request.header("cookie")?.split(";")
+    .map(part => part.trim())
+    .find(part => part.startsWith(`${miniCookieName}=`))
+    ?.slice(miniCookieName.length + 1);
+  return value && /^[A-Za-z0-9_-]{43}$/.test(value) ? value : undefined;
 };
+const miniSessionCookie = (token: string, maxAgeSeconds: number): string =>
+  `${miniCookieName}=${token}; Path=/; Max-Age=${maxAgeSeconds}; HttpOnly; Secure; SameSite=Strict; Priority=High`;
+const clearMiniSessionCookie = (): string =>
+  `${miniCookieName}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict; Priority=High`;
 
 const publicTask = (value: unknown) => {
   if (!isRecord(value) || typeof value.id !== "string" || !value.id
@@ -82,8 +104,42 @@ export const createTelegramMiniRouter = (
   const loadCurrent = dependencies.current ?? getMiniCurrent;
   const loadToday = dependencies.today ?? getMiniToday;
   const persistTask = dependencies.createTask ?? createMiniTask;
+  const subscribeWakeups = dependencies.subscribeWakeups ?? subscribeMiniWakeups;
+  const sseGlobalLimit = Math.max(1, dependencies.sseGlobalLimit ?? 50);
+  const ssePerUserLimit = Math.max(1, dependencies.ssePerUserLimit ?? 2);
+  const sseHeartbeatMs = Math.max(1_000, dependencies.sseHeartbeatMs ?? 15_000);
+  const activeSseByUser = new Map<string, number>();
+  let activeSseTotal = 0;
   const exchangeLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
   const apiLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false });
+
+  const hasExactOrigin = (request: Request): boolean =>
+    request.header("origin") === new URL(config.APP_ORIGIN).origin;
+
+  const requireExactOrigin = (request: Request, response: Response): boolean => {
+    if (hasExactOrigin(request)) return true;
+    response.status(403).json({ error: { code: "mini_origin_invalid", message: "The Mini App origin could not be verified." } });
+    return false;
+  };
+
+  const validateMiniSession = async (tokenHash: string): Promise<MiniPrincipal | null> => {
+    const { data, error } = await database!.rpc("goalflow_validate_telegram_mini_session", {
+      target_token_hash: tokenHash
+    });
+    if (error) throw new Error("Mini App session validation failed.");
+    const expiresAtMs = isRecord(data) && typeof data.expiresAt === "string"
+      ? Date.parse(data.expiresAt)
+      : Number.NaN;
+    if (!isRecord(data) || !uuid.safeParse(data.userId).success
+      || !Number.isSafeInteger(data.telegramUserId) || Number(data.telegramUserId) <= 0
+      || !Number.isFinite(expiresAtMs) || expiresAtMs <= now().getTime()) return null;
+    return {
+      userId: String(data.userId),
+      telegramUserId: Number(data.telegramUserId),
+      tokenHash,
+      expiresAtMs
+    };
+  };
 
   router.use("/mini", (_request, response, next) => {
     response.setHeader("cache-control", "no-store");
@@ -94,6 +150,7 @@ export const createTelegramMiniRouter = (
     if (config.TELEGRAM_ENABLED !== "true" || !config.TELEGRAM_BOT_TOKEN || !database) {
       response.status(503).json({ error: { code: "telegram_not_configured", message: "Telegram is not configured." } }); return;
     }
+    if (!requireExactOrigin(request, response)) return;
     try {
       const rawInitData = initDataAuthorization(request);
       if (!rawInitData) {
@@ -129,7 +186,8 @@ export const createTelegramMiniRouter = (
         || data.telegramUserId !== validated.telegramUserId) {
         response.status(503).json({ error: { code: "session_unavailable", message: "Telegram session could not be verified." } }); return;
       }
-      response.status(201).json({ token, tokenType: "Bearer", expiresAt: expiresAt.toISOString() });
+      response.setHeader("set-cookie", miniSessionCookie(token, config.TELEGRAM_MINI_SESSION_TTL_SECONDS));
+      response.status(201).json({ expiresAt: expiresAt.toISOString() });
     } catch (error) {
       if (error instanceof MiniAppAuthError) {
         const status = error.code === "invalid_format" ? 400 : 401;
@@ -144,27 +202,132 @@ export const createTelegramMiniRouter = (
     if (config.TELEGRAM_ENABLED !== "true" || !database) {
       response.status(503).json({ error: { code: "telegram_not_configured", message: "Telegram is not configured." } }); return;
     }
-    const token = bearerSessionToken(request);
+    const token = miniSessionToken(request);
     if (!token) {
       response.status(401).json({ error: { code: "mini_session_required", message: "A valid Mini App session is required." } }); return;
     }
     const tokenHash = hash(token);
-    const { data, error } = await database.rpc("goalflow_validate_telegram_mini_session", { target_token_hash: tokenHash });
-    if (error) {
+    let principal: MiniPrincipal | null;
+    try {
+      principal = await validateMiniSession(tokenHash);
+    } catch {
       response.status(503).json({ error: { code: "session_check_unavailable", message: "Telegram access could not be verified." } }); return;
     }
-    if (!isRecord(data) || !uuid.safeParse(data.userId).success
-      || !Number.isSafeInteger(data.telegramUserId) || Number(data.telegramUserId) <= 0) {
+    if (!principal) {
+      response.setHeader("set-cookie", clearMiniSessionCookie());
       response.status(401).json({ error: { code: "mini_session_invalid", message: "The Mini App session is expired or revoked." } }); return;
     }
-    principals.set(request, { userId: String(data.userId), telegramUserId: Number(data.telegramUserId), tokenHash });
+    principals.set(request, principal);
     next();
   };
 
   router.use("/mini", apiLimiter);
   router.use("/mini", requireMiniSession);
 
+  router.post("/mini/events", async (request, response) => {
+    if (!requireExactOrigin(request, response)) return;
+    const principal = principals.get(request)!;
+    const activeForUser = activeSseByUser.get(principal.userId) ?? 0;
+    if (activeSseTotal >= sseGlobalLimit || activeForUser >= ssePerUserLimit) {
+      response.status(429).json({ error: { code: "mini_stream_limit", message: "Too many Mini App wake connections are active." } });
+      return;
+    }
+    activeSseTotal += 1;
+    activeSseByUser.set(principal.userId, activeForUser + 1);
+
+    let closed = false;
+    let streamReady = false;
+    let wakeBeforeReady = false;
+    let heartbeat: NodeJS.Timeout | undefined;
+    let expiry: NodeJS.Timeout | undefined;
+    let subscription: MiniWakeSubscription | undefined;
+    let eventQueue = Promise.resolve();
+
+    const releaseSlot = () => {
+      activeSseTotal = Math.max(0, activeSseTotal - 1);
+      const remaining = Math.max(0, (activeSseByUser.get(principal.userId) ?? 1) - 1);
+      if (remaining === 0) activeSseByUser.delete(principal.userId);
+      else activeSseByUser.set(principal.userId, remaining);
+    };
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      if (expiry) clearTimeout(expiry);
+      releaseSlot();
+      if (!response.writableEnded) response.end();
+      if (subscription) void subscription.close();
+    };
+    response.once("close", close);
+    request.once("aborted", close);
+
+    const validateAndWrite = (emitWake: boolean) => {
+      eventQueue = eventQueue.then(async () => {
+        if (closed) return;
+        let current: MiniPrincipal | null;
+        try { current = await validateMiniSession(principal.tokenHash); }
+        catch { close(); return; }
+        if (!current || current.userId !== principal.userId
+          || current.telegramUserId !== principal.telegramUserId) {
+          close();
+          return;
+        }
+        const chunk = emitWake ? "event: wake\ndata: {}\n\n" : ": keepalive\n\n";
+        try {
+          if (!response.write(chunk)) close();
+        } catch {
+          close();
+        }
+      });
+    };
+    const onWake = () => {
+      if (!streamReady) {
+        wakeBeforeReady = true;
+        return;
+      }
+      validateAndWrite(true);
+    };
+
+    try {
+      subscription = await subscribeWakeups(database!, principal.userId, onWake, close);
+      if (closed) {
+        await subscription.close();
+        return;
+      }
+      response.status(200);
+      response.setHeader("content-type", "text/event-stream; charset=utf-8");
+      response.setHeader("cache-control", "no-cache, no-store, must-revalidate");
+      response.setHeader("connection", "keep-alive");
+      response.setHeader("x-accel-buffering", "no");
+      response.flushHeaders();
+      response.write(": connected\n\n");
+      streamReady = true;
+      if (wakeBeforeReady) validateAndWrite(true);
+
+      const lifetimeMs = Math.max(1, Math.min(
+        principal.expiresAtMs - now().getTime(),
+        config.TELEGRAM_MINI_SESSION_TTL_SECONDS * 1_000
+      ));
+      expiry = setTimeout(close, lifetimeMs);
+      expiry.unref();
+      heartbeat = setInterval(() => validateAndWrite(false), sseHeartbeatMs);
+      heartbeat.unref();
+    } catch (error) {
+      logger.error("telegram.mini_stream_failed", {
+        requestId: request.requestId,
+        userId: principal.userId,
+        category: error instanceof Error ? error.name : "unknown"
+      });
+      if (!closed) {
+        closed = true;
+        releaseSlot();
+        response.status(503).json({ error: { code: "mini_stream_unavailable", message: "Live updates are temporarily unavailable." } });
+      }
+    }
+  });
+
   router.delete("/mini/session", async (request, response) => {
+    if (!requireExactOrigin(request, response)) return;
     const principal = principals.get(request)!;
     const { data, error } = await database!.rpc("goalflow_revoke_telegram_mini_session", {
       target_token_hash: principal.tokenHash
@@ -172,6 +335,7 @@ export const createTelegramMiniRouter = (
     if (error || data !== true) {
       response.status(503).json({ error: { code: "session_revoke_failed", message: "The Mini App session could not be revoked." } }); return;
     }
+    response.setHeader("set-cookie", clearMiniSessionCookie());
     response.status(204).end();
   });
 
@@ -205,6 +369,7 @@ export const createTelegramMiniRouter = (
   });
 
   router.post("/mini/capture", async (request, response) => {
+    if (!requireExactOrigin(request, response)) return;
     const principal = principals.get(request)!;
     const operationId = request.header("idempotency-key");
     if (!operationId || !uuid.safeParse(operationId).success) {

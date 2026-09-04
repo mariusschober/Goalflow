@@ -41,7 +41,7 @@ const environmentSchema = z.object({
   TELEGRAM_OIDC_PROVIDER_ID: z.string().regex(/^custom:[a-z0-9:-]+$/).default("custom:telegram"),
   TELEGRAM_INIT_DATA_MAX_AGE_SECONDS: z.coerce.number().int().min(60).max(900).default(300),
   TELEGRAM_INIT_DATA_FUTURE_SKEW_SECONDS: z.coerce.number().int().min(0).max(60).default(30),
-  TELEGRAM_MINI_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(3_600).default(900),
+  TELEGRAM_MINI_SESSION_TTL_SECONDS: z.coerce.number().int().min(60).max(600).default(600),
   VOICE_ENABLED: enabledFlag,
   OPENAI_API_KEY: optionalString(z.string().min(20)),
   OPENAI_API_BASE: z.string().url().default("https://api.openai.com/v1"),

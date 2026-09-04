@@ -40,6 +40,11 @@ describe("production environment contract", () => {
     expect(config.AI_ENABLED).toBe("false");
     expect(config.VOICE_ENABLED).toBe("false");
     expect(config.BACKUPS_ENABLED).toBe("false");
+    expect(config.TELEGRAM_MINI_SESSION_TTL_SECONDS).toBe(600);
+  });
+
+  it("does not permit a Mini App session to outlive the ten-minute cookie boundary", () => {
+    expect(() => readConfig({ TELEGRAM_MINI_SESSION_TTL_SECONDS: "601" })).toThrow();
   });
 
   it("supports legacy server key names during migration but prefers current opaque keys", () => {
