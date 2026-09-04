@@ -10,7 +10,8 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Candidate implementation | `chore/railway-beta-gate` implementation tree at `7d491c882ccb9e02691e2fe007ee0efce91eceee` | CANDIDATE ONLY |
+| Candidate head | `chore/railway-beta-gate` at `01f864720df7acfa211745e64edec8b5163ab612`; implementation parent `7d491c882ccb9e02691e2fe007ee0efce91eceee` | CANDIDATE ONLY |
+| Active local handover | `docs/handover/LOCAL_CODEX_START_PROMPT.md` and `docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md` | DOCUMENTED |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
 | Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
@@ -27,6 +28,14 @@ WebKit completed all eight critical journeys. The OSV Scanner action, pinned to
 an immutable commit, scanned the exact lockfile's 749 packages and reported no
 issues. A missing lockfile, scanner error, timeout, or vulnerability remains
 fatal to the aggregate gate.
+
+The documentation head was independently rerun as [Beta Gate run
+33823362114](https://github.com/mariusschober/Goalflow/actions/runs/33823362114)
+at `01f864720df7acfa211745e64edec8b5163ab612`. Verification, migrations,
+dependency audit, Web, legacy Android, native Android, and macOS all succeeded.
+The aggregate again failed only because the complete-history secret job found
+the same unresolved historical key. Hosted jobs again proved only their
+unconfigured preflight, and the signed internal-beta job was correctly skipped.
 
 The macOS job executed 176 tests with one explicitly skipped live-staging test
 and zero failures, built and verified the ad-hoc signed application, and
@@ -97,6 +106,14 @@ verification, invite activation, login, reset, refresh, revocation, owner AAL2,
 and redirect allowlists are therefore `NOT RUN` against a live provider. Test
 identity A and B UUIDs/passwords must never be recorded in this file.
 
+The requested beta authentication is not yet complete in source. Web exposes
+password login and a magic-link request; native Android and macOS expose
+magic-link PKCE. None of the three currently verifies a user-entered email OTP,
+and native Android/macOS do not implement Telegram OIDC. Web Telegram OIDC and
+linking are disabled scaffolding pending live provider configuration. The active
+implementation sequence is recorded in
+`docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md`.
+
 ## Synchronization matrix
 
 | Journey | Synthetic/protocol evidence | Hosted evidence | Release state |
@@ -112,6 +129,13 @@ identity A and B UUIDs/passwords must never be recorded in this file.
 
 Synthetic tests qualify a candidate for hosted testing; they do not prove zero
 data loss or cross-user isolation in the deployed system.
+
+The current implementation is durable but not instant. Web's visible-page poll
+runs every 60 seconds, macOS polls every 300 seconds, and Android's durable
+background WorkManager interval is 15 minutes, with faster one-shot pushes for
+local edits. There is no Supabase Realtime wake-up layer. Near-instant
+cross-client convergence therefore remains implementation and hosted-proof work,
+not a current capability.
 
 ## Backup and restore evidence
 

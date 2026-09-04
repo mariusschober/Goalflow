@@ -14,6 +14,14 @@ The application retains the complete Goalflow experience: Current, daily and mon
 
 ## Beta reconciliation
 
+The active local Codex handover is
+[docs/handover/LOCAL_CODEX_START_PROMPT.md](./docs/handover/LOCAL_CODEX_START_PROMPT.md),
+with the full execution contract in
+[docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md](./docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md).
+At the 2026-09-04 handover, `chore/railway-beta-gate` was the complete candidate;
+always fetch and review its current remote tip before starting. Do not execute
+the older root-level starter prompts.
+
 The current reconciliation authority is
 [docs/reconciliation/BETA_PROVENANCE.md](./docs/reconciliation/BETA_PROVENANCE.md).
 Deployment prerequisites and procedures live in

@@ -1,8 +1,11 @@
 # Goalflow beta account and key inventory
 
 This is an inventory of external prerequisites, not a place to record secret
-values. `integration/beta` is the current temporary integration source; `main`
-remains obsolete until release proof is complete.
+values. At the 2026-09-04 handover, `chore/railway-beta-gate` was the complete
+candidate and `integration/beta` was 86 commits behind it. Advance
+`integration/beta` only after the protected staging/signing configuration can
+run honestly; `main` remains obsolete until release proof is complete. Always
+fetch before relying on this checkpoint.
 
 ## Current external state
 
