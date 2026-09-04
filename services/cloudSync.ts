@@ -61,6 +61,33 @@ const dependenciesForUser = (userKey: string, signal?: AbortSignal): CloudSyncDe
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RETRYABLE_STATUS = new Set([408, 425, 429]);
+export const FOREGROUND_SYNC_INTERVAL_MS = 30_000;
+
+export const syncWakeupTopicForUser = (userId: string): string | null =>
+  UUID_PATTERN.test(userId) ? `tsurfing:user:${userId.toLowerCase()}` : null;
+
+type ConfiguredSupabaseClient = NonNullable<typeof supabase>;
+
+/** Subscribe only to the immutable account's private, payload-free wake-up topic. */
+export const subscribeToSyncWakeups = (
+  client: ConfiguredSupabaseClient,
+  userId: string,
+  onWake: () => void
+): (() => void) => {
+  const topic = syncWakeupTopicForUser(userId);
+  if (!topic) return () => undefined;
+  const realtimeChannel = client
+    .channel(topic, { config: { private: true } })
+    .on('broadcast', { event: 'sync_wakeup' }, () => onWake())
+    .subscribe(status => {
+      // A successful initial join or rejoin is itself a catch-up hint. The
+      // cursor pull remains authoritative even if every Broadcast was missed.
+      if (status === 'SUBSCRIBED') onWake();
+    });
+  return () => {
+    void client.removeChannel(realtimeChannel).catch(() => undefined);
+  };
+};
 
 export class SyncHttpError extends Error {
   readonly permanent: boolean;
@@ -401,6 +428,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
   const onChannel = (event: MessageEvent) => {
     if (event.data?.type === 'complete') window.dispatchEvent(new CustomEvent('goalflow:sync-state', { detail: event.data }));
   };
+  const stopRealtimeWakeups = subscribeToSyncWakeups(supabase, userKey, () => void synchronize());
 
   window.addEventListener('goalflow:local-change', onLocalChange);
   window.addEventListener('online', onOnline);
@@ -410,7 +438,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
   channel?.addEventListener('message', onChannel);
   const interval = window.setInterval(() => {
     if (document.visibilityState === 'visible') void synchronize();
-  }, 60_000);
+  }, FOREGROUND_SYNC_INTERVAL_MS);
   void synchronize();
 
   return () => {
@@ -423,6 +451,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
     window.removeEventListener('goalflow:sync-retry', onRetry);
     window.removeEventListener('focus', onFocus);
     document.removeEventListener('visibilitychange', onFocus);
+    stopRealtimeWakeups();
     channel?.removeEventListener('message', onChannel);
     channel?.close();
   };
