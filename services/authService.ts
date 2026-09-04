@@ -12,7 +12,19 @@ const localDemo = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_DEMO 
 const testBuild = import.meta.env.VITE_TEST_MODE === 'true';
 const testCode = import.meta.env.VITE_TEST_CODE || '';
 const testAccessStorageKey = 'goalflow-test-access';
-const emailActivationMetadataKey = 'goalflow_beta_activation_id';
+const emailOtpAttemptStorageKey = 'goalflow_email_otp_attempt';
+let emailOtpActivationInFlight = false;
+
+export type EmailOtpPurpose = 'sign_in' | 'activation';
+
+interface PendingEmailOtpAttempt {
+  attemptToken: string;
+  email: string;
+  purpose: EmailOtpPurpose;
+  expiresAt: number;
+  verifiedUserId?: string;
+  verifiedSessionId?: string;
+}
 
 export interface ServerAccount {
   id: string;
@@ -131,6 +143,7 @@ export const onSessionChange = (callback: (session: Session | null, event: AuthC
         sessionStorage.removeItem('goalflow_telegram_state');
         sessionStorage.removeItem('goalflow_telegram_verifier');
         sessionStorage.removeItem('goalflow_owner_telegram_link');
+        sessionStorage.removeItem(emailOtpAttemptStorageKey);
       } catch {}
     }
     if (event === 'TOKEN_REFRESHED' || event === 'SIGNED_IN') {
@@ -148,52 +161,216 @@ export const refreshSession = async (): Promise<Session | null> => {
   return data.session;
 };
 
-export const requestOwnerMagicLink = async (email: string): Promise<void> => {
-  if (!supabase) throw new Error('Authentication is not configured.');
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: { emailRedirectTo: window.location.origin, shouldCreateUser: false }
-  });
-  if (error) throw error;
-};
-
-export const registerWithEmail = async (
+export const requestEmailOtp = async (
   email: string,
-  password: string,
-  inviteCode: string,
+  purpose: EmailOtpPurpose,
+  inviteCode = '',
   captchaToken = ''
-): Promise<{ verificationRequired: boolean }> => {
+): Promise<{ expiresInSeconds: number; resendAfterSeconds: number }> => {
   if (!supabase) throw new Error('Authentication is not configured.');
   const normalizedEmail = email.trim().toLowerCase();
   const preflight = await fetchApiWithTimeout('/api/v1/auth/email/preflight', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email: normalizedEmail, code: inviteCode.trim(), captchaToken })
+    body: JSON.stringify({ email: normalizedEmail, purpose, code: inviteCode.trim(), captchaToken })
   });
   const preflightBody = await preflight.json() as {
-    activationId?: string;
+    accepted?: boolean;
+    attemptToken?: string;
     expiresInSeconds?: number;
+    resendAfterSeconds?: number;
     error?: { message?: string };
   };
-  if (!preflight.ok || !preflightBody.activationId) {
-    throw new Error(preflightBody.error?.message || 'Email signup could not be started.');
+  if (!preflight.ok
+    || preflightBody.accepted !== true
+    || !preflightBody.attemptToken?.match(/^[A-Za-z0-9_-]{43}$/)) {
+    throw new Error(preflightBody.error?.message || 'Email code delivery could not be started.');
   }
-  const { data, error } = await supabase.auth.signUp({
+  const expiresInSeconds = Math.max(1, Math.min(600, preflightBody.expiresInSeconds ?? 600));
+  const resendAfterSeconds = Math.max(60, Math.min(600, preflightBody.resendAfterSeconds ?? 60));
+  const pending: PendingEmailOtpAttempt = {
+    attemptToken: preflightBody.attemptToken,
     email: normalizedEmail,
-    password,
-    options: {
-      emailRedirectTo: `${window.location.origin}/?auth=email`,
-      data: { [emailActivationMetadataKey]: preflightBody.activationId }
-    }
-  });
-  if (error) throw error;
-  return { verificationRequired: !data.session };
+    purpose,
+    expiresAt: Date.now() + expiresInSeconds * 1_000
+  };
+  sessionStorage.setItem(emailOtpAttemptStorageKey, JSON.stringify(pending));
+  return { expiresInSeconds, resendAfterSeconds };
 };
 
-export const signInWithEmail = async (email: string, password: string): Promise<void> => {
+const pendingEmailOtpAttempt = (): PendingEmailOtpAttempt | null => {
+  try {
+    const encoded = sessionStorage.getItem(emailOtpAttemptStorageKey);
+    if (!encoded) return null;
+    const value = JSON.parse(encoded) as Partial<PendingEmailOtpAttempt>;
+    const hasVerifiedIdentity = value.verifiedUserId != null || value.verifiedSessionId != null;
+    if (!value.attemptToken?.match(/^[A-Za-z0-9_-]{43}$/)
+      || typeof value.email !== 'string'
+      || (value.purpose !== 'sign_in' && value.purpose !== 'activation')
+      || typeof value.expiresAt !== 'number'
+      || (hasVerifiedIdentity && (
+        !value.verifiedUserId?.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+        || !value.verifiedSessionId?.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
+      ))) {
+      sessionStorage.removeItem(emailOtpAttemptStorageKey);
+      return null;
+    }
+    return value as PendingEmailOtpAttempt;
+  } catch {
+    sessionStorage.removeItem(emailOtpAttemptStorageKey);
+    return null;
+  }
+};
+
+export const pendingEmailOtpRequest = (): Pick<PendingEmailOtpAttempt, 'email' | 'purpose' | 'expiresAt'> | null => {
+  const pending = pendingEmailOtpAttempt();
+  if (!pending || pending.expiresAt <= Date.now()) return null;
+  return { email: pending.email, purpose: pending.purpose, expiresAt: pending.expiresAt };
+};
+
+const verifiedSessionIdentity = (session: Session): { userId: string; sessionId: string } | null => {
+  try {
+    const encodedPayload = session.access_token.split('.')[1];
+    if (!encodedPayload) return null;
+    const paddedPayload = encodedPayload.replace(/-/g, '+').replace(/_/g, '/')
+      .padEnd(Math.ceil(encodedPayload.length / 4) * 4, '=');
+    const payload = JSON.parse(atob(paddedPayload)) as { sub?: unknown; session_id?: unknown };
+    const userId = typeof payload.sub === 'string' ? payload.sub.toLowerCase() : '';
+    const sessionId = typeof payload.session_id === 'string' ? payload.session_id.toLowerCase() : '';
+    if (userId !== session.user.id.toLowerCase()
+      || !sessionId.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)) return null;
+    return { userId, sessionId };
+  } catch {
+    return null;
+  }
+};
+
+const attemptMatchesVerifiedSession = (pending: PendingEmailOtpAttempt, session: Session): boolean => {
+  const identity = verifiedSessionIdentity(session);
+  return identity != null
+    && pending.verifiedUserId === identity.userId
+    && pending.verifiedSessionId === identity.sessionId;
+};
+
+export const isEmailOtpActivationInFlight = (): boolean => emailOtpActivationInFlight;
+
+const isRetryableActivationStatus = (status: number): boolean =>
+  status >= 500 || status === 408 || status === 425 || status === 429;
+
+const activatePendingEmailOtp = async (
+  session: Session,
+  pending: PendingEmailOtpAttempt
+): Promise<Session> => {
+  if (session.user.email?.trim().toLowerCase() !== pending.email
+    || !attemptMatchesVerifiedSession(pending, session)) {
+    sessionStorage.removeItem(emailOtpAttemptStorageKey);
+    await supabase?.auth.signOut({ scope: 'local' }).catch(() => undefined);
+    throw new SessionValidationError(
+      'The verified account does not match this email-code request.',
+      400,
+      'activation_account_mismatch'
+    );
+  }
+
+  emailOtpActivationInFlight = true;
+  try {
+    const activation = await fetchApiWithTimeout('/api/v1/auth/email/activate', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${session.access_token}`
+      },
+      body: JSON.stringify({ attemptToken: pending.attemptToken })
+    });
+    const result = await activation.json().catch(() => ({})) as {
+      activated?: boolean;
+      error?: { code?: string; message?: string };
+    };
+    if (!activation.ok || result.activated !== true) {
+      if (isRetryableActivationStatus(activation.status)) {
+        throw new SessionValidationError(
+          'Account activation is temporarily unavailable. Tsurfing will retry without using another email code.',
+          503,
+          'activation_retryable'
+        );
+      }
+      sessionStorage.removeItem(emailOtpAttemptStorageKey);
+      await supabase?.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      throw new SessionValidationError(
+        result.error?.message || 'This code request is invalid or expired.',
+        activation.status,
+        result.error?.code || 'activation_rejected'
+      );
+    }
+    sessionStorage.removeItem(emailOtpAttemptStorageKey);
+    window.dispatchEvent(new Event('goalflow:email-otp-activated'));
+    return session;
+  } finally {
+    emailOtpActivationInFlight = false;
+  }
+};
+
+/** Completes a lost-acknowledgement activation without reusing the one-use OTP. */
+export const resumePendingEmailOtpActivation = async (session: Session): Promise<Session> => {
+  const pending = pendingEmailOtpAttempt();
+  if (!pending) return session;
+  if (!attemptMatchesVerifiedSession(pending, session)) {
+    throw new SessionValidationError(
+      'Enter the current email code to finish this sign-in.',
+      425,
+      'email_code_required'
+    );
+  }
+  // The server decides expiry. A previously committed activation remains an
+  // idempotent success even after the local ten-minute display timer elapsed.
+  return activatePendingEmailOtp(session, pending);
+};
+
+export const verifyEmailOtp = async (email: string, token: string): Promise<Session> => {
   if (!supabase) throw new Error('Authentication is not configured.');
-  const { error } = await supabase.auth.signInWithPassword({ email: email.trim().toLowerCase(), password });
-  if (error) throw error;
+  const normalizedEmail = email.trim().toLowerCase();
+  const cleanToken = token.trim();
+  const pending = pendingEmailOtpAttempt();
+  if (!pending
+    || pending.email !== normalizedEmail
+    || pending.expiresAt <= Date.now()
+    || !/^\d{6}$/.test(cleanToken)) {
+    sessionStorage.removeItem(emailOtpAttemptStorageKey);
+    throw new SessionValidationError('This code request is invalid or expired. Request a new code.', 400, 'activation_rejected');
+  }
+
+  const existing = await getSession();
+  if (existing && attemptMatchesVerifiedSession(pending, existing)) {
+    return activatePendingEmailOtp(existing, pending);
+  }
+
+  emailOtpActivationInFlight = true;
+  let session: Session;
+  try {
+    const { data, error } = await supabase.auth.verifyOtp({
+      email: normalizedEmail,
+      token: cleanToken,
+      type: 'email'
+    });
+    if (error || !data.session || data.session.user.email?.trim().toLowerCase() !== normalizedEmail) {
+      throw new SessionValidationError('The code is invalid or expired.', 400, 'otp_rejected');
+    }
+    session = data.session;
+    const identity = verifiedSessionIdentity(session);
+    if (!identity) {
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined);
+      throw new SessionValidationError('The verified session was invalid.', 400, 'otp_session_invalid');
+    }
+    const verifiedPending: PendingEmailOtpAttempt = {
+      ...pending,
+      verifiedUserId: identity.userId,
+      verifiedSessionId: identity.sessionId
+    };
+    sessionStorage.setItem(emailOtpAttemptStorageKey, JSON.stringify(verifiedPending));
+    return activatePendingEmailOtp(session, verifiedPending);
+  } finally {
+    emailOtpActivationInFlight = false;
+  }
 };
 
 export const requestPasswordReset = async (email: string): Promise<void> => {
@@ -212,45 +389,6 @@ export const updateRecoveredPassword = async (password: string): Promise<void> =
   if (revokeError) {
     throw new Error('The password was updated, but other sessions could not be revoked. Sign out all devices before continuing.');
   }
-};
-
-export const hasPendingEmailActivation = (session: Session): boolean => {
-  const activationId = session.user.user_metadata?.[emailActivationMetadataKey];
-  return typeof activationId === 'string'
-    && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(activationId);
-};
-
-export const clearPendingEmailActivation = (): void => {
-  const url = new URL(window.location.href);
-  url.searchParams.delete('auth');
-  window.history.replaceState({}, document.title, `${url.pathname}${url.search}${url.hash}`);
-};
-
-export const activateEmailSignup = async (session: Session): Promise<void> => {
-  if (!hasPendingEmailActivation(session)) {
-    clearPendingEmailActivation();
-    throw new SessionValidationError('This verification link has no valid beta activation. Start signup again.', 400, 'activation_rejected');
-  }
-  const response = await fetchApiWithTimeout('/api/v1/auth/email/activate', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
-    body: '{}'
-  });
-  const result = await response.json() as { error?: { code?: string; message?: string } };
-  if (!response.ok) {
-    if (response.status < 500) clearPendingEmailActivation();
-    throw new SessionValidationError(
-      result.error?.message || 'Email signup could not be activated.',
-      response.status,
-      result.error?.code || 'activation_failed'
-    );
-  }
-  clearPendingEmailActivation();
-  // The attempt ID is not a credential and is already consumed server-side.
-  // Remove it from future session payloads as a best-effort hygiene step.
-  try {
-    await supabase?.auth.updateUser({ data: { [emailActivationMetadataKey]: null } });
-  } catch {}
 };
 
 export const validateServerSession = async (session: Session): Promise<ServerAccount> => {

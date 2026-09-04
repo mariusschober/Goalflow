@@ -8,17 +8,37 @@ export const bearerToken = (request: Request): string | undefined => {
   const header = request.header("authorization");
   return header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 };
-const tokenClaims = (token: string): { aal: "aal1" | "aal2"; sessionId?: string } => {
+interface VerifiedTokenClaims {
+  aal: "aal1" | "aal2";
+  sessionId?: string;
+  emailOtpAuthenticatedAt?: number;
+}
+
+export const tokenClaims = (token: string): VerifiedTokenClaims => {
   try {
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url").toString("utf8")) as {
       aal?: string;
       session_id?: string;
+      amr?: Array<{ method?: unknown; timestamp?: unknown }>;
     };
     const sessionId = typeof payload.session_id === "string"
       && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.session_id)
       ? payload.session_id
       : undefined;
-    return { aal: payload.aal === "aal2" ? "aal2" : "aal1", sessionId };
+    const emailOtpAuthenticatedAt = Array.isArray(payload.amr)
+      ? payload.amr.reduce<number | undefined>((latest, entry) => {
+        if ((entry?.method !== "otp" && entry?.method !== "email/signup")
+          || typeof entry.timestamp !== "number"
+          || !Number.isSafeInteger(entry.timestamp)
+          || entry.timestamp <= 0) return latest;
+        return latest == null ? entry.timestamp : Math.max(latest, entry.timestamp);
+      }, undefined)
+      : undefined;
+    return {
+      aal: payload.aal === "aal2" ? "aal2" : "aal1",
+      sessionId,
+      emailOtpAuthenticatedAt
+    };
   } catch { return { aal: "aal1" }; }
 };
 

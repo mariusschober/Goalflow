@@ -12,5 +12,6 @@
   "202609030004_telegram_webhook_claims.sql": "771abee5f25bdfb50537221c73ecd38089dc98cce1274e49fab26fc9eb934665",
   "202609030005_telegram_mini_sessions.sql": "fb82ad2f2b66af0d599186823a2c77b1a0b1de7d7462121dddf26f0c2ff98e91",
   "202609030006_telegram_link_hardening.sql": "fd3cedb8d4ab51c7e4cda32be77932a85ed958c637ece23c90c0467f81c50672",
-  "202609030007_telegram_capture_confirmation.sql": "a85bb7525d60756af1211ce73c11114c7f12514643ff3193871ecf8bdd82ccf6"
+  "202609030007_telegram_capture_confirmation.sql": "a85bb7525d60756af1211ce73c11114c7f12514643ff3193871ecf8bdd82ccf6",
+  "202609040001_email_otp_activation.sql": "ecb9d140d648113ecff76ac203d1fa17491c76816aeeb7a83fbfa2b931ebbbcf"
 }

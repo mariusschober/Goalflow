@@ -28,13 +28,18 @@ const token = (sessionId: string): string => [
   'synthetic-signature'
 ].join('.');
 
-const serve = async (active: boolean) => {
+const serve = async (
+  active: boolean,
+  profile: { email: string; role: string; status: string } | null = {
+    email: 'a@example.invalid', role: 'beta', status: 'active'
+  }
+) => {
   const getUser = vi.fn().mockResolvedValue({
     data: { user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', email: 'a@example.invalid' } },
     error: null
   });
   const maybeSingle = vi.fn().mockResolvedValue({
-    data: { email: 'a@example.invalid', role: 'beta', status: 'active' },
+    data: profile,
     error: null
   });
   const admin = {
@@ -81,6 +86,15 @@ describe('authenticated API session boundary', () => {
     expect(await response.json()).toMatchObject({
       user: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', role: 'beta', status: 'active' }
     });
+  });
+
+  it('rejects a verified Auth session until one-use beta activation creates its profile', async () => {
+    const { origin } = await serve(true, null);
+    const response = await fetch(`${origin}/private`, {
+      headers: { authorization: `Bearer ${token('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb')}` }
+    });
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: { code: 'account_inactive' } });
   });
 
   it('rejects tokens without a valid session_id claim', async () => {

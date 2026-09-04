@@ -14,6 +14,7 @@ const accessBoundary = migrations.find(item => item.file === '202609030001_acces
 const accountLifecycle = migrations.find(item => item.file === '202609030002_account_lifecycle.sql');
 const backupHardening = migrations.find(item => item.file === '202609030003_backup_restore_hardening.sql');
 const telegramCaptureConfirmation = migrations.find(item => item.file === '202609030007_telegram_capture_confirmation.sql');
+const emailOtpActivation = migrations.find(item => item.file === '202609040001_email_otp_activation.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
@@ -22,6 +23,7 @@ assert(accessBoundary, 'Access-boundary hardening migration is missing.');
 assert(accountLifecycle, 'Account lifecycle migration is missing.');
 assert(backupHardening, 'Backup/restore hardening migration is missing.');
 assert(telegramCaptureConfirmation, 'Atomic Telegram capture confirmation migration is missing.');
+assert(emailOtpActivation, 'Typed email OTP activation migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -124,6 +126,25 @@ assert(
     && accountLifecycle.sql.includes('goalflow_session_is_active')
     && accountLifecycle.sql.includes('from auth.sessions'),
   'Atomic invite activation, verified owner bootstrap, or session revocation support is incomplete.'
+);
+assert(
+  emailOtpActivation.sql.includes('create table public.email_otp_attempts')
+    && emailOtpActivation.sql.includes('token_hash text not null unique')
+    && emailOtpActivation.sql.includes("interval '10 minutes'")
+    && emailOtpActivation.sql.includes('captcha_token_hash')
+    && emailOtpActivation.sql.includes('captcha_verified_at')
+    && emailOtpActivation.sql.includes('request_ip_hash')
+    && emailOtpActivation.sql.includes('goalflow_create_email_otp_attempt')
+    && emailOtpActivation.sql.includes('pg_advisory_xact_lock')
+    && emailOtpActivation.sql.includes('goalflow_mark_email_otp_delivery')
+    && emailOtpActivation.sql.includes('activate_goalflow_email_otp')
+    && emailOtpActivation.sql.includes('email_confirmed_at is not null')
+    && emailOtpActivation.sql.includes('auth_user_id = target_user_id')
+    && emailOtpActivation.sql.includes('auth_session_id = target_session_id')
+    && emailOtpActivation.sql.includes('target_authenticated_at < attempt.created_at')
+    && emailOtpActivation.sql.includes('revoke all on function public.activate_goalflow_email_beta')
+    && !emailOtpActivation.sql.includes('user_metadata'),
+  'Typed OTP binding, rate limits, one-use activation, or metadata retirement is incomplete.'
 );
 const backupWithoutBodies = backupHardening.sql.replace(/\$\$[\s\S]*?\$\$/g, '$$BODY$$').toLowerCase();
 for (const forbidden of [/\bdrop\s+table\b/, /\btruncate\b/, /\bdrop\s+column\b/, /\bdelete\s+from\b/]) {
