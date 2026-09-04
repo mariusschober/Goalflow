@@ -77,6 +77,10 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 .onFailure { error ->
+                    // A verified PKCE exchange may already be stored while a
+                    // retryable activation/link acknowledgement is pending.
+                    // Re-evaluate encrypted auth state without exposing it.
+                    authSessionRevision += 1
                     Toast.makeText(
                         this@MainActivity,
                         error.message ?: "Sign-in could not be completed.",

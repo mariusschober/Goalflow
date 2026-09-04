@@ -744,7 +744,9 @@ jobs:
           ./android-native/gradlew -p android-native assembleProductionRelease \
             -PgoalflowApiOrigin="$GOALFLOW_STAGING_APP_ORIGIN" \
             -PgoalflowSupabaseUrl="$GOALFLOW_STAGING_SUPABASE_URL" \
-            -PgoalflowSupabasePublishableKey="$GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY"
+            -PgoalflowSupabasePublishableKey="$GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY" \
+            -PgoalflowTelegramEnabled=true \
+            -PgoalflowTelegramOidcProviderId=custom:telegram
           mapfile -t apks < <(find android-native/app/build/outputs/apk/production/release \
             -type f -name '*.apk' -print | sort)
           if [ "${#apks[@]}" -ne 1 ]; then

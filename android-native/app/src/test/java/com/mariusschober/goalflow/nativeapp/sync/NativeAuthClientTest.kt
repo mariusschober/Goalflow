@@ -29,14 +29,17 @@ class NativeAuthClientTest {
             private var memSession: NativeSession? = null
             private var memState: String? = null
             private var memVerifier: String? = null
+            private var memOAuth: PendingOAuthRequest? = null
             private var memEmailOtp: PendingEmailOtpAttempt? = null
             override fun read(): NativeSession? = memSession
             override fun write(session: NativeSession) { memSession = session }
             override fun clear() { memSession = null }
             override fun setPendingState(state: String, verifier: String) { memState = state; memVerifier = verifier }
+            override fun setPendingOAuth(pending: PendingOAuthRequest) { memOAuth = pending }
+            override fun getPendingOAuth(): PendingOAuthRequest? = memOAuth
             override fun getPendingState(): String? = memState
             override fun getPendingVerifier(): String? = memVerifier
-            override fun clearPendingState() { memState = null; memVerifier = null }
+            override fun clearPendingState() { memState = null; memVerifier = null; memOAuth = null }
             override fun setPendingEmailOtp(attempt: PendingEmailOtpAttempt) { memEmailOtp = attempt }
             override fun getPendingEmailOtp(): PendingEmailOtpAttempt? = memEmailOtp
             override fun clearPendingEmailOtp() { memEmailOtp = null }
@@ -100,6 +103,226 @@ class NativeAuthClientTest {
         assertEquals(USER_ID, store.read()?.userId)
         assertNull(store.getPendingState())
         assertNull(store.getPendingVerifier())
+    }
+
+    @Test
+    fun `Telegram sign in builds the Supabase PKCE authorize URL without provider state injection`() = runBlocking {
+        val authorizeUrl = client.beginTelegramSignIn()
+        val pending = store.getPendingOAuth()
+
+        assertNotNull(pending)
+        assertEquals(NativeOAuthFlow.TELEGRAM_SIGN_IN, pending?.flow)
+        assertEquals("$SUPABASE_URL/auth/v1/authorize", authorizeUrl.buildUpon().clearQuery().build().toString())
+        assertEquals("custom:telegram", authorizeUrl.getQueryParameter("provider"))
+        assertEquals("openid profile telegram:bot_access", authorizeUrl.getQueryParameter("scopes"))
+        assertEquals("s256", authorizeUrl.getQueryParameter("code_challenge_method"))
+        assertEquals(client.codeChallenge(pending!!.verifier), authorizeUrl.getQueryParameter("code_challenge"))
+        val callback = Uri.parse(authorizeUrl.getQueryParameter("redirect_to"))
+        assertEquals(AUTH_REDIRECT, callback.buildUpon().clearQuery().build().toString())
+        assertEquals(pending.state, callback.getQueryParameter("state"))
+        assertNull(authorizeUrl.getQueryParameter("queryParams"))
+    }
+
+    @Test
+    fun `Telegram activation preflight sends no OAuth state and stores only opaque invite authority`() = runBlocking {
+        var preflightBody = JSONObject()
+        val activationClient = testClient { url, method, body, headers ->
+            assertEquals("$API_ORIGIN/api/v1/auth/telegram/preflight", url)
+            assertEquals("POST", method)
+            assertTrue(headers.isEmpty())
+            preflightBody = JSONObject(body!!)
+            NativeAuthClient.HttpResponse(200, JSONObject()
+                .put("attemptToken", ATTEMPT_TOKEN)
+                .put("provider", "custom:telegram")
+                .put("expiresInSeconds", 600)
+                .toString())
+        }
+
+        val authorizeUrl = activationClient.beginTelegramActivation("invite-secret", "captcha-proof")
+        val pending = store.getPendingOAuth()
+
+        assertEquals(setOf("code", "captchaToken"), preflightBody.keys().asSequence().toSet())
+        assertEquals("invite-secret", preflightBody.getString("code"))
+        assertEquals("captcha-proof", preflightBody.getString("captchaToken"))
+        assertEquals(NativeOAuthFlow.TELEGRAM_ACTIVATION, pending?.flow)
+        assertEquals(ATTEMPT_TOKEN, pending?.attemptToken)
+        assertEquals("custom:telegram", authorizeUrl.getQueryParameter("provider"))
+    }
+
+    @Test
+    fun `Telegram activation exchanges once then activates and validates before exposing session`() = runBlocking {
+        val pending = telegramPending(NativeOAuthFlow.TELEGRAM_ACTIVATION, attemptToken = ATTEMPT_TOKEN)
+        store.setPendingOAuth(pending)
+        val paths = mutableListOf<String>()
+        val activationClient = testClient { url, _, body, headers ->
+            paths += Uri.parse(url).path.orEmpty()
+            when {
+                url.contains("/auth/v1/token") -> NativeAuthClient.HttpResponse(200, tokenResponse())
+                url.endsWith("/api/v1/auth/telegram/activate") -> {
+                    assertEquals(ATTEMPT_TOKEN, JSONObject(body!!).getString("attemptToken"))
+                    assertEquals("Bearer ${jwt()}", headers["Authorization"])
+                    NativeAuthClient.HttpResponse(200, "{\"activated\":true}")
+                }
+                url.endsWith("/api/v1/session") -> NativeAuthClient.HttpResponse(200, activeProfileResponse())
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        assertTrue(activationClient.acceptCallback(callbackIntent("code=telegram-code&state=${pending.state}")))
+
+        assertEquals(listOf("/auth/v1/token", "/api/v1/auth/telegram/activate", "/api/v1/session"), paths)
+        assertNotNull(store.read())
+        assertNull(store.getPendingOAuth())
+        assertNotNull(activationClient.currentSession())
+    }
+
+    @Test
+    fun `lost Telegram activation acknowledgement retries without exchanging the code twice`() = runBlocking {
+        val pending = telegramPending(NativeOAuthFlow.TELEGRAM_ACTIVATION, attemptToken = ATTEMPT_TOKEN)
+        store.setPendingOAuth(pending)
+        var exchanges = 0
+        var activations = 0
+        val activationClient = testClient { url, _, _, _ ->
+            when {
+                url.contains("/auth/v1/token") -> {
+                    exchanges += 1
+                    NativeAuthClient.HttpResponse(200, tokenResponse())
+                }
+                url.endsWith("/api/v1/auth/telegram/activate") -> {
+                    activations += 1
+                    NativeAuthClient.HttpResponse(
+                        if (activations == 1) 503 else 200,
+                        if (activations == 1) "{}" else "{\"activated\":true}"
+                    )
+                }
+                url.endsWith("/api/v1/session") -> NativeAuthClient.HttpResponse(200, activeProfileResponse())
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        expectTransientAuthFailure {
+            activationClient.acceptCallback(callbackIntent("code=telegram-code&state=${pending.state}"))
+        }
+        assertNotNull(store.read())
+        assertNotNull(store.getPendingOAuth()?.verifiedAccessTokenHash)
+        assertNull(activationClient.currentSession())
+
+        val profile = activationClient.resumePendingTelegramFlow()
+        assertEquals(USER_ID, profile?.userId)
+        assertEquals(1, exchanges)
+        assertEquals(2, activations)
+        assertNull(store.getPendingOAuth())
+    }
+
+    @Test
+    fun `unapproved Telegram sign in clears the exchanged session and pending flow`() = runBlocking {
+        val pending = telegramPending(NativeOAuthFlow.TELEGRAM_SIGN_IN)
+        store.setPendingOAuth(pending)
+        val signInClient = testClient { url, _, _, _ ->
+            when {
+                url.contains("/auth/v1/token") -> NativeAuthClient.HttpResponse(200, tokenResponse())
+                url.endsWith("/api/v1/session") -> NativeAuthClient.HttpResponse(403, "{}")
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        expectAuthFailure {
+            signInClient.acceptCallback(callbackIntent("code=telegram-code&state=${pending.state}"))
+        }
+
+        assertNull(store.read())
+        assertNull(store.getPendingOAuth())
+    }
+
+    @Test
+    fun `Telegram link uses the authenticated Supabase identity endpoint and binds the current UUID`() = runBlocking {
+        val current = session()
+        store.write(current)
+        var identityAuthorizeUrl: Uri? = null
+        val linkClient = testClient { url, _, _, headers ->
+            when {
+                url.endsWith("/api/v1/session") -> NativeAuthClient.HttpResponse(200, activeProfileResponse())
+                url.endsWith("/auth/v1/user") -> NativeAuthClient.HttpResponse(
+                    200,
+                    JSONObject().put("id", USER_ID).put("identities", org.json.JSONArray()).toString()
+                )
+                url.contains("/auth/v1/user/identities/authorize") -> {
+                    assertEquals("Bearer access-token", headers["Authorization"])
+                    identityAuthorizeUrl = Uri.parse(url)
+                    NativeAuthClient.HttpResponse(200, "{\"url\":\"https://oauth.telegram.org/auth?state=provider-owned\"}")
+                }
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        val providerUrl = linkClient.beginTelegramLink()
+        val pending = store.getPendingOAuth()
+
+        assertEquals("oauth.telegram.org", providerUrl?.host)
+        assertEquals(NativeOAuthFlow.TELEGRAM_LINK, pending?.flow)
+        assertEquals(USER_ID, pending?.expectedUserId)
+        assertEquals("true", identityAuthorizeUrl?.getQueryParameter("skip_http_redirect"))
+        assertEquals("s256", identityAuthorizeUrl?.getQueryParameter("code_challenge_method"))
+        assertEquals("custom:telegram", identityAuthorizeUrl?.getQueryParameter("provider"))
+    }
+
+    @Test
+    fun `Telegram link callback never replaces the current account with a different UUID`() = runBlocking {
+        val original = session()
+        store.write(original)
+        val pending = telegramPending(NativeOAuthFlow.TELEGRAM_LINK, expectedUserId = USER_ID)
+        store.setPendingOAuth(pending)
+        val otherUser = "00000000-0000-4000-8000-000000000099"
+        val linkClient = testClient { url, _, _, _ ->
+            if (!url.contains("/auth/v1/token")) throw AssertionError("Unexpected request: $url")
+            NativeAuthClient.HttpResponse(200, tokenResponse(accessToken = jwt(sub = otherUser), userId = otherUser))
+        }
+
+        expectAuthFailure {
+            linkClient.acceptCallback(callbackIntent("code=link-code&state=${pending.state}"))
+        }
+
+        assertEquals(original, store.read())
+        assertNull(store.getPendingOAuth())
+    }
+
+    @Test
+    fun `Telegram link collision preserves the current signed in account`() = runBlocking {
+        val current = session(accessToken = jwt())
+        store.write(current)
+        val pending = telegramPending(NativeOAuthFlow.TELEGRAM_LINK, expectedUserId = USER_ID)
+        store.setPendingOAuth(pending)
+        val linkClient = testClient { url, _, _, _ ->
+            when {
+                url.contains("/auth/v1/token") -> NativeAuthClient.HttpResponse(200, tokenResponse())
+                url.endsWith("/api/v1/account/telegram/link") -> NativeAuthClient.HttpResponse(
+                    409,
+                    "{\"error\":{\"code\":\"telegram_identity_in_use\"}}"
+                )
+                else -> throw AssertionError("Unexpected request: $url")
+            }
+        }
+
+        expectAuthFailure {
+            linkClient.acceptCallback(callbackIntent("code=link-code&state=${pending.state}"))
+        }
+
+        assertEquals(USER_ID, store.read()?.userId)
+        assertNull(store.getPendingOAuth())
+    }
+
+    @Test
+    fun `owner MFA requirement does not erase a valid AAL1 session`() = runBlocking {
+        val current = session(accessToken = jwt())
+        store.write(current)
+        val statusClient = testClient { url, _, _, _ ->
+            assertTrue(url.endsWith("/api/v1/account/telegram"))
+            NativeAuthClient.HttpResponse(403, "{\"error\":{\"code\":\"mfa_required\"}}")
+        }
+
+        expectAuthFailure { statusClient.telegramStatus() }
+
+        assertEquals(current, store.read())
     }
 
     @Test
@@ -464,7 +687,9 @@ class NativeAuthClientTest {
         supabaseUrl = SUPABASE_URL,
         supabasePublicKey = PUBLIC_KEY,
         apiOrigin = API_ORIGIN,
-        authRedirectUri = AUTH_REDIRECT
+        authRedirectUri = AUTH_REDIRECT,
+        telegramEnabled = { true },
+        telegramProviderId = "custom:telegram"
     ) {
         override fun request(url: String, method: String, body: String?, headers: Map<String, String>): HttpResponse {
             return responder?.invoke(url, method, body, headers)
@@ -475,6 +700,33 @@ class NativeAuthClientTest {
     private fun callbackIntent(query: String): Intent = Intent().apply {
         data = Uri.parse("$AUTH_REDIRECT?$query")
     }
+
+    private fun telegramPending(
+        flow: NativeOAuthFlow,
+        attemptToken: String? = null,
+        expectedUserId: String? = null
+    ): PendingOAuthRequest = PendingOAuthRequest(
+        state = "telegram_state_1234567890",
+        verifier = VERIFIER,
+        flow = flow,
+        createdAtMillis = System.currentTimeMillis(),
+        expiresAtMillis = System.currentTimeMillis() + 600_000L,
+        attemptToken = attemptToken,
+        expectedUserId = expectedUserId
+    )
+
+    private fun activeProfileResponse(
+        userId: String = USER_ID,
+        role: String = "beta",
+        assuranceLevel: String = "aal1"
+    ): String = JSONObject()
+        .put("user", JSONObject()
+            .put("id", userId)
+            .put("email", "person@example.com")
+            .put("role", role)
+            .put("status", "active"))
+        .put("assuranceLevel", assuranceLevel)
+        .toString()
 
     private fun session(
         expiresAtMillis: Long = System.currentTimeMillis() + 3_600_000L,

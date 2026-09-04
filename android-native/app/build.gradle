@@ -18,6 +18,14 @@ def goalflowSupabasePublicProperty = project.findProperty("goalflowSupabasePubli
     ? "goalflowSupabasePublishableKey"
     : "goalflowSupabaseAnonKey"
 def goalflowSupabasePublicValue = (project.findProperty(goalflowSupabasePublicProperty) ?: "").toString().trim()
+def goalflowTelegramEnabled = (project.findProperty("goalflowTelegramEnabled") ?: "false").toString().trim().toLowerCase()
+def goalflowTelegramProvider = (project.findProperty("goalflowTelegramOidcProviderId") ?: "custom:telegram").toString().trim()
+if (!(goalflowTelegramEnabled in ["true", "false"])) {
+    throw new GradleException("goalflowTelegramEnabled must be true or false.")
+}
+if (!(goalflowTelegramProvider ==~ /custom:[a-z0-9:-]+/)) {
+    throw new GradleException("Telegram OIDC requires an exact custom: provider identifier.")
+}
 if (goalflowSupabasePublicValue) {
     if (goalflowSupabasePublicValue.startsWith("sb_secret_")) {
         throw new GradleException("A Supabase server secret cannot be embedded in an Android build.")
@@ -128,6 +136,8 @@ android {
         buildConfigField "String", "API_ORIGIN", "\"${goalflowBuildConfig('goalflowApiOrigin')}\""
         buildConfigField "String", "SUPABASE_URL", "\"${goalflowBuildConfig('goalflowSupabaseUrl')}\""
         buildConfigField "String", "SUPABASE_PUBLISHABLE_KEY", "\"${goalflowBuildConfig(goalflowSupabasePublicProperty)}\""
+        buildConfigField "boolean", "TELEGRAM_ENABLED", goalflowTelegramEnabled
+        buildConfigField "String", "TELEGRAM_OIDC_PROVIDER_ID", "\"${goalflowTelegramProvider.replace('\\', '\\\\').replace('"', '\\"')}\""
         buildConfigField "boolean", "SANDBOX_BUILD", "false"
         buildConfigField "String", "TEST_ACCESS_CODE", "\"\""
     }

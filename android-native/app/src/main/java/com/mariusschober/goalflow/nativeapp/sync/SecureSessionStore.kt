@@ -7,6 +7,7 @@ import android.util.Base64
 import org.json.JSONObject
 import java.nio.charset.StandardCharsets
 import java.security.KeyStore
+import java.security.MessageDigest
 import javax.crypto.AEADBadTagException
 import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
@@ -31,6 +32,44 @@ data class PendingEmailOtpAttempt(
     val verifiedUserId: String? = null,
     val verifiedAccessTokenHash: String? = null
 )
+
+enum class NativeOAuthFlow(val storageValue: String) {
+    LEGACY("legacy"),
+    TELEGRAM_SIGN_IN("telegram_sign_in"),
+    TELEGRAM_ACTIVATION("telegram_activation"),
+    TELEGRAM_LINK("telegram_link");
+
+    companion object {
+        fun fromStorage(value: String): NativeOAuthFlow? = entries.firstOrNull { it.storageValue == value }
+    }
+}
+
+data class PendingOAuthRequest(
+    val state: String,
+    val verifier: String,
+    val flow: NativeOAuthFlow,
+    val createdAtMillis: Long,
+    val expiresAtMillis: Long,
+    val attemptToken: String? = null,
+    val expectedUserId: String? = null,
+    val verifiedUserId: String? = null,
+    val verifiedAccessTokenHash: String? = null
+) {
+    fun matchesVerifiedSession(session: NativeSession): Boolean =
+        verifiedUserId != null
+            && verifiedAccessTokenHash != null
+            && verifiedUserId.equals(session.userId, ignoreCase = true)
+            && verifiedAccessTokenHash == session.accessToken.toByteArray(StandardCharsets.UTF_8)
+                .let { MessageDigest.getInstance("SHA-256").digest(it) }
+                .joinToString("") { "%02x".format(it) }
+
+    fun verifiedBy(session: NativeSession): PendingOAuthRequest = copy(
+        verifiedUserId = session.userId,
+        verifiedAccessTokenHash = session.accessToken.toByteArray(StandardCharsets.UTF_8)
+            .let { MessageDigest.getInstance("SHA-256").digest(it) }
+            .joinToString("") { "%02x".format(it) }
+    )
+}
 
 fun interface NativeSessionProvider {
     fun read(): NativeSession?
@@ -86,8 +125,19 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
         inMemoryReadProblem = null
     }
 
-    open fun setPendingState(state: String, verifier: String) {
-        val encrypted = encrypt(JSONObject().put("state", state).put("verifier", verifier).toString())
+    open fun setPendingOAuth(pending: PendingOAuthRequest) {
+        require(validPendingOAuth(pending)) { "The pending auth request was invalid." }
+        val encrypted = encrypt(JSONObject().apply {
+            put("state", pending.state)
+            put("verifier", pending.verifier)
+            put("flow", pending.flow.storageValue)
+            put("createdAtMillis", pending.createdAtMillis)
+            put("expiresAtMillis", pending.expiresAtMillis)
+            put("attemptToken", pending.attemptToken ?: JSONObject.NULL)
+            put("expectedUserId", pending.expectedUserId ?: JSONObject.NULL)
+            put("verifiedUserId", pending.verifiedUserId ?: JSONObject.NULL)
+            put("verifiedAccessTokenHash", pending.verifiedAccessTokenHash ?: JSONObject.NULL)
+        }.toString())
         check(preferences.edit()
             .putString(KEY_PENDING_AUTH, encrypted)
             .remove(KEY_PENDING_STATE)
@@ -97,9 +147,46 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
         }
     }
 
-    open fun getPendingState(): String? = readPendingAuth()?.optString("state")?.takeIf(String::isNotBlank)
+    open fun getPendingOAuth(): PendingOAuthRequest? {
+        val json = readPendingAuth() ?: return null
+        return runCatching {
+            val flow = NativeOAuthFlow.fromStorage(json.optString("flow", NativeOAuthFlow.LEGACY.storageValue))
+                ?: throw IllegalArgumentException("Unsupported OAuth flow")
+            val createdAt = json.optLong("createdAtMillis", 0L).takeIf { it > 0L }
+                ?: System.currentTimeMillis()
+            val expiresAt = json.optLong("expiresAtMillis", 0L).takeIf { it > 0L }
+                ?: createdAt + 15 * 60_000L
+            PendingOAuthRequest(
+                state = json.getString("state"),
+                verifier = json.getString("verifier"),
+                flow = flow,
+                createdAtMillis = createdAt,
+                expiresAtMillis = expiresAt,
+                attemptToken = json.optionalString("attemptToken"),
+                expectedUserId = json.optionalString("expectedUserId"),
+                verifiedUserId = json.optionalString("verifiedUserId"),
+                verifiedAccessTokenHash = json.optionalString("verifiedAccessTokenHash")
+            ).takeIf(::validPendingOAuth) ?: throw IllegalArgumentException("Invalid pending OAuth request")
+        }.getOrElse {
+            preferences.edit().remove(KEY_PENDING_AUTH).commit()
+            null
+        }
+    }
 
-    open fun getPendingVerifier(): String? = readPendingAuth()?.optString("verifier")?.takeIf(String::isNotBlank)
+    open fun setPendingState(state: String, verifier: String) {
+        val now = System.currentTimeMillis()
+        setPendingOAuth(PendingOAuthRequest(
+            state = state,
+            verifier = verifier,
+            flow = NativeOAuthFlow.LEGACY,
+            createdAtMillis = now,
+            expiresAtMillis = now + 15 * 60_000L
+        ))
+    }
+
+    open fun getPendingState(): String? = getPendingOAuth()?.state
+
+    open fun getPendingVerifier(): String? = getPendingOAuth()?.verifier
 
     open fun clearPendingState() {
         check(preferences.edit()
@@ -109,6 +196,24 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
             .commit()) {
             "The pending auth state could not be cleared."
         }
+    }
+
+    private fun validPendingOAuth(pending: PendingOAuthRequest): Boolean {
+        val hasVerifiedIdentity = pending.verifiedUserId != null || pending.verifiedAccessTokenHash != null
+        return pending.state.matches(Regex("^[A-Za-z0-9_-]{16,128}$"))
+            && pending.verifier.length in 43..128
+            && pending.verifier.matches(Regex("^[A-Za-z0-9._~-]+$"))
+            && pending.createdAtMillis > 0L
+            && pending.expiresAtMillis > pending.createdAtMillis
+            && pending.expiresAtMillis <= pending.createdAtMillis + 15 * 60_000L
+            && (pending.flow != NativeOAuthFlow.TELEGRAM_ACTIVATION
+                || pending.attemptToken?.matches(Regex("^[A-Za-z0-9_-]{43}$")) == true)
+            && (pending.flow != NativeOAuthFlow.TELEGRAM_LINK
+                || pending.expectedUserId?.matches(UUID_PATTERN) == true)
+            && (!hasVerifiedIdentity || (
+                pending.verifiedUserId?.matches(UUID_PATTERN) == true
+                    && pending.verifiedAccessTokenHash?.matches(Regex("^[0-9a-f]{64}$")) == true
+            ))
     }
 
     open fun setPendingEmailOtp(attempt: PendingEmailOtpAttempt) {
@@ -171,6 +276,9 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
             null
         }
     }
+
+    private fun JSONObject.optionalString(name: String): String? =
+        if (!has(name) || isNull(name)) null else optString(name).takeIf(String::isNotBlank)
 
     private fun recordReadProblem(error: Exception) {
         inMemoryReadProblem = SESSION_READ_PROBLEM
@@ -256,5 +364,6 @@ open class SecureSessionStore(context: Context) : NativeSessionProvider {
         const val KEY_PENDING_VERIFIER = "pending_code_verifier"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val SESSION_READ_PROBLEM = "Cloud session storage is unreadable. Local commitments and queued changes were not deleted; sign in again to replace the damaged session."
+        val UUID_PATTERN = Regex("^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$")
     }
 }

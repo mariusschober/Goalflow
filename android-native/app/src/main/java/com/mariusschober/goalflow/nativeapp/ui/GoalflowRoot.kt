@@ -1,5 +1,6 @@
 package com.mariusschober.goalflow.nativeapp.ui
 
+import android.content.Intent
 import android.net.Uri
 import android.view.HapticFeedbackConstants
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -132,7 +133,9 @@ import com.mariusschober.goalflow.nativeapp.data.BackupRestoreMode
 import com.mariusschober.goalflow.nativeapp.data.NativeBackupPreview
 import com.mariusschober.goalflow.nativeapp.sync.NativeAuthClient
 import com.mariusschober.goalflow.nativeapp.sync.NativeConfig
+import com.mariusschober.goalflow.nativeapp.sync.NativeOAuthFlow
 import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
+import com.mariusschober.goalflow.nativeapp.sync.NativeTelegramStatus
 import com.mariusschober.goalflow.nativeapp.sync.PendingEmailOtpAttempt
 import com.mariusschober.goalflow.nativeapp.time.datePickerMillisToLocalDate
 import com.mariusschober.goalflow.nativeapp.time.localDateToDatePickerMillis
@@ -229,18 +232,23 @@ fun GoalflowRoot(
     var circadianOpen by rememberSaveable { mutableStateOf(false) }
     var focusTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var focusStartedAt by remember { mutableStateOf<Long?>(null) }
-    var sessionActive by remember {
-        mutableStateOf(
-            application.sessionStore.read() != null
-                && application.sessionStore.getPendingEmailOtp() == null
-        )
+    fun readUsableStoredSession() = application.sessionStore.read()?.takeIf {
+        application.sessionStore.getPendingEmailOtp() == null
+            && application.sessionStore.getPendingOAuth()?.flow !in setOf(
+                NativeOAuthFlow.TELEGRAM_SIGN_IN,
+                NativeOAuthFlow.TELEGRAM_ACTIVATION
+            )
     }
+    var sessionActive by remember { mutableStateOf(readUsableStoredSession() != null) }
     var sessionAssuranceLevel by remember {
         mutableStateOf(application.sessionStore.read()?.assuranceLevel ?: "aal1")
     }
     var sessionStorageProblem by remember {
         mutableStateOf(application.sessionStore.readProblem())
     }
+    var telegramStatus by remember { mutableStateOf<NativeTelegramStatus?>(null) }
+    var telegramStatusMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var telegramWorking by rememberSaveable { mutableStateOf(false) }
     var breakdownTask by remember { mutableStateOf<GoalflowTask?>(null) }
     var pendingExportPassword by remember { mutableStateOf<String?>(null) }
     var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
@@ -277,22 +285,55 @@ fun GoalflowRoot(
 
     LaunchedEffect(authSessionRevision) {
         val authClient = NativeAuthClient(application.sessionStore)
-        val resumed = if (application.sessionStore.getPendingEmailOtp() != null
+        val resumedEmail = if (application.sessionStore.getPendingEmailOtp() != null
             && application.sessionStore.read() != null
         ) {
             runCatching { authClient.resumePendingEmailActivation() }
                 .onFailure { authError = it.message ?: "Account activation could not be completed." }
                 .getOrNull()
         } else null
-        val currentSession = application.sessionStore.read()
-        sessionActive = currentSession != null && application.sessionStore.getPendingEmailOtp() == null
+        val resumedTelegram = if (application.sessionStore.getPendingOAuth()?.flow in setOf(
+                NativeOAuthFlow.TELEGRAM_SIGN_IN,
+                NativeOAuthFlow.TELEGRAM_ACTIVATION,
+                NativeOAuthFlow.TELEGRAM_LINK
+            ) && application.sessionStore.read() != null
+        ) {
+            runCatching { authClient.resumePendingTelegramFlow() }
+                .onFailure { authError = it.message ?: "Telegram verification could not be completed." }
+                .getOrNull()
+        } else null
+        val currentSession = readUsableStoredSession()
+        sessionActive = currentSession != null
         sessionAssuranceLevel = if (sessionActive) currentSession?.assuranceLevel ?: "aal1" else "aal1"
         sessionStorageProblem = application.sessionStore.readProblem()
-        if (resumed != null) {
+        if (resumedEmail != null || resumedTelegram != null) {
             authError = null
             NativeSyncScheduler.schedule(context)
-            snackbarHostState.showSnackbar("Email verification completed after reconnecting.")
+            snackbarHostState.showSnackbar(
+                if (resumedTelegram != null) "Telegram verification completed after reconnecting."
+                else "Email verification completed after reconnecting."
+            )
         }
+    }
+
+    LaunchedEffect(sessionActive, sessionAssuranceLevel, authSessionRevision) {
+        if (!sessionActive || !NativeConfig.canUseTelegram) {
+            telegramStatus = null
+            telegramStatusMessage = null
+            telegramWorking = false
+            return@LaunchedEffect
+        }
+        telegramWorking = true
+        runCatching { NativeAuthClient(application.sessionStore).telegramStatus() }
+            .onSuccess {
+                telegramStatus = it
+                telegramStatusMessage = null
+            }
+            .onFailure {
+                telegramStatus = null
+                telegramStatusMessage = it.message ?: "Telegram status could not be loaded."
+            }
+        telegramWorking = false
     }
 
     LaunchedEffect(tasks) {
@@ -353,9 +394,17 @@ fun GoalflowRoot(
                         runCatching { authClient.resumePendingEmailActivation() }
                             .onFailure { authError = it.message ?: "Account activation could not be completed." }
                     }
-                    val currentSession = application.sessionStore.read()
+                    if (application.sessionStore.getPendingOAuth()?.flow in setOf(
+                            NativeOAuthFlow.TELEGRAM_SIGN_IN,
+                            NativeOAuthFlow.TELEGRAM_ACTIVATION,
+                            NativeOAuthFlow.TELEGRAM_LINK
+                        ) && application.sessionStore.read() != null
+                    ) {
+                        runCatching { authClient.resumePendingTelegramFlow() }
+                            .onFailure { authError = it.message ?: "Telegram verification could not be completed." }
+                    }
+                    val currentSession = readUsableStoredSession()
                     sessionActive = currentSession != null
-                        && application.sessionStore.getPendingEmailOtp() == null
                     sessionAssuranceLevel = if (sessionActive) currentSession?.assuranceLevel ?: "aal1" else "aal1"
                     sessionStorageProblem = application.sessionStore.readProblem()
                     if (sessionActive) NativeSyncScheduler.schedule(context)
@@ -675,6 +724,10 @@ fun GoalflowRoot(
                         cloudSessionProblem = sessionStorageProblem,
                         canUseAuthentication = NativeConfig.canUseAuthentication,
                         canUseCloud = NativeConfig.canUseCloud,
+                        canUseTelegram = NativeConfig.canUseTelegram,
+                        telegramStatus = telegramStatus,
+                        telegramStatusMessage = telegramStatusMessage,
+                        telegramWorking = telegramWorking,
                         onSignIn = { signInOpen = true },
                         onVerifyMfa = {
                             authError = null
@@ -683,6 +736,8 @@ fun GoalflowRoot(
                         onSignOut = {
                             sessionActive = false
                             sessionAssuranceLevel = "aal1"
+                            telegramStatus = null
+                            telegramStatusMessage = null
                             scope.launch(start = CoroutineStart.UNDISPATCHED) {
                                 runCatching { NativeAuthClient(application.sessionStore).signOut() }
                                     .onSuccess {
@@ -696,7 +751,55 @@ fun GoalflowRoot(
                                         snackbarHostState.showSnackbar(
                                             error.message ?: "Server sign-out could not be confirmed."
                                         )
+                                }
+                            }
+                        },
+                        onConnectTelegram = {
+                            if (!telegramWorking) {
+                                telegramWorking = true
+                                scope.launch {
+                                    try {
+                                        val providerUri = NativeAuthClient(application.sessionStore).beginTelegramLink()
+                                        if (providerUri == null) {
+                                            telegramStatus = NativeAuthClient(application.sessionStore).telegramStatus()
+                                            telegramStatusMessage = null
+                                            snackbarHostState.showSnackbar("Telegram is connected.")
+                                        } else {
+                                            try {
+                                                context.startActivity(
+                                                    Intent(Intent.ACTION_VIEW, providerUri)
+                                                        .addCategory(Intent.CATEGORY_BROWSABLE)
+                                                )
+                                                snackbarHostState.showSnackbar("Complete Telegram authorization in the browser.")
+                                            } catch (error: Exception) {
+                                                application.sessionStore.clearPendingState()
+                                                throw error
+                                            }
+                                        }
+                                    } catch (error: Exception) {
+                                        telegramStatusMessage = error.message ?: "Telegram could not be connected."
+                                        snackbarHostState.showSnackbar(telegramStatusMessage!!)
+                                    } finally {
+                                        telegramWorking = false
                                     }
+                                }
+                            }
+                        },
+                        onDisconnectTelegram = {
+                            if (!telegramWorking) {
+                                telegramWorking = true
+                                scope.launch {
+                                    try {
+                                        telegramStatus = NativeAuthClient(application.sessionStore).unlinkTelegram()
+                                        telegramStatusMessage = null
+                                        snackbarHostState.showSnackbar("Telegram access was disconnected.")
+                                    } catch (error: Exception) {
+                                        telegramStatusMessage = error.message ?: "Telegram could not be disconnected."
+                                        snackbarHostState.showSnackbar(telegramStatusMessage!!)
+                                    } finally {
+                                        telegramWorking = false
+                                    }
+                                }
                             }
                         },
                         onExport = {
@@ -967,6 +1070,7 @@ fun GoalflowRoot(
         SignInDialog(
             error = authError,
             pendingAttempt = pendingEmailOtp,
+            canUseTelegram = NativeConfig.canUseTelegram,
             onDismiss = {
                 signInOpen = false
                 authError = null
@@ -1007,6 +1111,37 @@ fun GoalflowRoot(
                         .onFailure { failure ->
                             onFailure()
                             authError = failure.message ?: "Email verification failed"
+                        }
+                }
+            },
+            onTelegram = { joiningBeta, inviteCode, captchaToken, onComplete, onFailure ->
+                scope.launch {
+                    runCatching {
+                        val authClient = NativeAuthClient(application.sessionStore)
+                        if (joiningBeta) authClient.beginTelegramActivation(inviteCode, captchaToken)
+                        else authClient.beginTelegramSignIn()
+                    }
+                        .onSuccess { providerUri ->
+                            onComplete()
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, providerUri)
+                                        .addCategory(Intent.CATEGORY_BROWSABLE)
+                                )
+                            }
+                                .onSuccess {
+                                    authError = null
+                                    signInOpen = false
+                                }
+                                .onFailure { error ->
+                                    application.sessionStore.clearPendingState()
+                                    onFailure()
+                                    authError = error.message ?: "A browser could not be opened for Telegram sign-in."
+                                }
+                        }
+                        .onFailure { error ->
+                            onFailure()
+                            authError = error.message ?: "Telegram sign-in could not be started."
                         }
                 }
             }
@@ -2024,9 +2159,15 @@ private fun SettingsScreen(
     cloudSessionProblem: String?,
     canUseAuthentication: Boolean,
     canUseCloud: Boolean,
+    canUseTelegram: Boolean,
+    telegramStatus: NativeTelegramStatus?,
+    telegramStatusMessage: String?,
+    telegramWorking: Boolean,
     onSignIn: () -> Unit,
     onVerifyMfa: () -> Unit,
     onSignOut: () -> Unit,
+    onConnectTelegram: () -> Unit,
+    onDisconnectTelegram: () -> Unit,
     onExport: () -> Unit,
     onImport: () -> Unit,
     restoreCheckpointAvailable: Boolean,
@@ -2066,6 +2207,29 @@ private fun SettingsScreen(
                 OutlinedButton(onClick = onVerifyMfa, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     Text("Verify owner session")
                 }
+            }
+        }
+        if (signedIn && canUseTelegram) {
+            item {
+                SettingsCard(
+                    title = "Telegram",
+                    body = when {
+                        telegramStatusMessage != null -> telegramStatusMessage
+                        telegramWorking -> "Checking the securely linked Telegram identity…"
+                        telegramStatus?.enabled != true -> "Telegram is not enabled by the current Tsurfing server."
+                        telegramStatus.linked -> telegramStatus.username
+                            ?.takeIf(String::isNotBlank)
+                            ?.let { "Connected as @$it. Bot access can be revoked here." }
+                            ?: "Connected. Bot access can be revoked here."
+                        else -> "Connect a Telegram identity explicitly. Tsurfing never merges accounts by email, username, phone, or profile metadata."
+                    },
+                    actionLabel = when {
+                        telegramWorking || telegramStatus?.enabled != true -> null
+                        telegramStatus.linked -> "Disconnect Telegram"
+                        else -> "Connect Telegram"
+                    },
+                    onAction = if (telegramStatus?.linked == true) onDisconnectTelegram else onConnectTelegram
+                )
             }
         }
         item {
@@ -2239,9 +2403,11 @@ private fun ReplaceRestoreDialog(
 private fun SignInDialog(
     error: String?,
     pendingAttempt: PendingEmailOtpAttempt?,
+    canUseTelegram: Boolean,
     onDismiss: () -> Unit,
     onRequest: (String, String, String, String, (PendingEmailOtpAttempt) -> Unit, () -> Unit) -> Unit,
-    onVerify: (String, String, () -> Unit, () -> Unit) -> Unit
+    onVerify: (String, String, () -> Unit, () -> Unit) -> Unit,
+    onTelegram: (Boolean, String, String, () -> Unit, () -> Unit) -> Unit
 ) {
     var email by rememberSaveable(pendingAttempt?.attemptToken) { mutableStateOf(pendingAttempt?.email ?: "") }
     var inviteCode by rememberSaveable { mutableStateOf("") }
@@ -2316,6 +2482,28 @@ private fun SignInDialog(
                     )
                     if (captchaMessage.isNotBlank()) {
                         Text(captchaMessage, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (canUseTelegram) {
+                        OutlinedButton(
+                            onClick = {
+                                if (!working) {
+                                    working = true
+                                    onTelegram(
+                                        joiningBeta,
+                                        inviteCode,
+                                        captchaToken,
+                                        { working = false },
+                                        { working = false }
+                                    )
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth().height(52.dp),
+                            enabled = !working && (!joiningBeta || (
+                                inviteCode.length >= 6 && captchaToken.isNotBlank()
+                            ))
+                        ) {
+                            Text(if (joiningBeta) "Join beta with Telegram" else "Continue with Telegram")
+                        }
                     }
                 } else {
                     Text(
