@@ -16,6 +16,7 @@ const backupHardening = migrations.find(item => item.file === '202609030003_back
 const telegramCaptureConfirmation = migrations.find(item => item.file === '202609030007_telegram_capture_confirmation.sql');
 const emailOtpActivation = migrations.find(item => item.file === '202609040001_email_otp_activation.sql');
 const realtimeSyncWakeup = migrations.find(item => item.file === '202609040003_realtime_sync_wakeup.sql');
+const databaseAdvisorHardening = migrations.find(item => item.file === '202609040004_database_advisor_hardening.sql');
 assert(latest, 'Data-integrity migration is missing.');
 assert(nativeEvents, 'Native task-event projection migration is missing.');
 assert(transportCompletion, 'Native synchronization transport completion migration is missing.');
@@ -26,6 +27,7 @@ assert(backupHardening, 'Backup/restore hardening migration is missing.');
 assert(telegramCaptureConfirmation, 'Atomic Telegram capture confirmation migration is missing.');
 assert(emailOtpActivation, 'Typed email OTP activation migration is missing.');
 assert(realtimeSyncWakeup, 'Transactional Realtime sync wake-up migration is missing.');
+assert(databaseAdvisorHardening, 'Database advisor hardening migration is missing.');
 
 for (const migration of migrations) {
   const quoteCount = migration.sql.split('$$').length - 1;
@@ -165,6 +167,20 @@ assert(
     && realtimeSyncWakeup.sql.includes("realtime.messages.extension = 'broadcast'")
     && !/create\s+policy[\s\S]{0,160}?for\s+insert[\s\S]{0,160}?to\s+authenticated/i.test(realtimeSyncWakeup.sql),
   'Transactional payload-free wake-up, exact private topic authorization, or client forgery denial is incomplete.'
+);
+const advisorHardeningWithoutBodies = databaseAdvisorHardening.sql.replace(/\$\$[\s\S]*?\$\$/g, '$$BODY$$').toLowerCase();
+for (const forbidden of [/\bdrop\s+table\b/, /\btruncate\b/, /\bdrop\s+column\b/, /\bdelete\s+from\b/]) {
+  assert(
+    !forbidden.test(advisorHardeningWithoutBodies),
+    `Database advisor hardening migration contains destructive SQL: ${forbidden}.`
+  );
+}
+assert(
+  databaseAdvisorHardening.sql.includes('alter function public.validate_goalflow_task_schedule()')
+    && databaseAdvisorHardening.sql.includes('set search_path = pg_catalog')
+    && (databaseAdvisorHardening.sql.match(/\(select auth\.uid\(\)\)/g) ?? []).length === 14
+    && (databaseAdvisorHardening.sql.match(/create index if not exists/g) ?? []).length === 15,
+  'Fixed search path, cached ownership checks, or foreign-key indexes are incomplete.'
 );
 const backupWithoutBodies = backupHardening.sql.replace(/\$\$[\s\S]*?\$\$/g, '$$BODY$$').toLowerCase();
 for (const forbidden of [/\bdrop\s+table\b/, /\btruncate\b/, /\bdrop\s+column\b/, /\bdelete\s+from\b/]) {
