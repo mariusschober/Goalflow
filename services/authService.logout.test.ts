@@ -13,6 +13,7 @@ beforeEach(() => {
   vi.resetModules();
   vi.stubEnv('VITE_SUPABASE_URL', 'https://goalflow-staging.invalid');
   vi.stubEnv('VITE_SUPABASE_PUBLISHABLE_KEY', 'synthetic-publishable-key');
+  vi.stubEnv('VITE_ENABLE_LOCAL_DEMO', 'false');
   auth.getSession.mockReset();
   auth.signOut.mockReset();
 });
