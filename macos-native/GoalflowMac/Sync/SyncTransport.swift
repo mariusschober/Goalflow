@@ -8,6 +8,8 @@ struct MacCloudConfiguration: Equatable, Sendable {
     let publishableKey: String?
     let environment: String
     let problem: String?
+    let telegramEnabled: Bool
+    let telegramProviderId: String
 
     static var current: MacCloudConfiguration {
         MacCloudConfiguration(info: Bundle.main.infoDictionary ?? [:])
@@ -22,6 +24,8 @@ struct MacCloudConfiguration: Equatable, Sendable {
                     ?? (info["SUPABASE_ANON_KEY"] as? String)
             ),
             environment: Self.clean(info["GOALFLOW_ENVIRONMENT"] as? String) ?? "production",
+            telegramEnabled: Self.clean(info["TELEGRAM_ENABLED"] as? String)?.lowercased() == "true",
+            telegramProviderId: Self.clean(info["TELEGRAM_OIDC_PROVIDER_ID"] as? String) ?? "custom:telegram",
             allowInsecureLoopback: allowInsecureLoopback
         )
     }
@@ -31,6 +35,8 @@ struct MacCloudConfiguration: Equatable, Sendable {
         supabaseURL: String?,
         publishableKey: String?,
         environment: String = "production",
+        telegramEnabled: Bool = false,
+        telegramProviderId: String = "custom:telegram",
         allowInsecureLoopback: Bool = false
     ) {
         let api = Self.safeOrigin(apiOrigin, allowInsecureLoopback: allowInsecureLoopback)
@@ -40,6 +46,8 @@ struct MacCloudConfiguration: Equatable, Sendable {
         self.supabaseURL = supabase
         self.publishableKey = key
         self.environment = environment
+        self.telegramEnabled = telegramEnabled
+        self.telegramProviderId = telegramProviderId
 
         if apiOrigin == nil && supabaseURL == nil && publishableKey == nil {
             self.problem = "Cloud sync is not configured for this build. Local changes remain on this Mac."
@@ -53,6 +61,14 @@ struct MacCloudConfiguration: Equatable, Sendable {
     }
 
     var isCloudConfigured: Bool { problem == nil }
+    var isTelegramConfigured: Bool {
+        isCloudConfigured
+            && telegramEnabled
+            && telegramProviderId.range(
+                of: #"^custom:[a-z0-9:-]+$"#,
+                options: .regularExpression
+            ) != nil
+    }
 
     private static func clean(_ value: String?) -> String? {
         guard let value else { return nil }

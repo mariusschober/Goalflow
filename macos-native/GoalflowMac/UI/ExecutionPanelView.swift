@@ -41,6 +41,7 @@ final class ExecutionViewModel: ObservableObject {
     @Published var breakdownLoading: Bool = false
     @Published var breakdownError: String?
     @Published var showSignIn: Bool = false
+    @Published var showAccount: Bool = false
     @Published var cloudState: MacCloudState = .authenticating
     @Published var cloudError: String?
     @Published var localError: String?
@@ -610,6 +611,7 @@ struct ExecutionPanelView: View {
             if !vm.trueNorth.isEmpty { trueNorthFooter }
         }.sheet(isPresented: $vm.showBreakdown) { BreakdownSheet(vm: vm) }
          .sheet(isPresented: $vm.showSignIn) { SignInView(onClose: { vm.showSignIn = false }) }
+         .sheet(isPresented: $vm.showAccount) { SignInView(accountMode: true, onClose: { vm.showAccount = false }) }
          .sheet(isPresented: $vm.showConflicts) { ConflictsSheet(vm: vm) }
         .frame(width: 380)
         .background(panelBackground)
@@ -706,6 +708,7 @@ struct ExecutionPanelView: View {
                 Button("Check for Updates…") { UpdaterService.shared.checkForUpdates() }
                 Divider()
                 if vm.canSignOut {
+                    Button("Account…") { vm.showAccount = true }
                     Button("Sign out") { vm.signOut() }
                 } else {
                     Button("Sign in…") { vm.showSignIn = true }

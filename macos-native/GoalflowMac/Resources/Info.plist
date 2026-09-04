@@ -32,5 +32,7 @@
 	<key>SUPABASE_PUBLISHABLE_KEY</key><string>$(SUPABASE_PUBLISHABLE_KEY)</string>
 	<key>API_ORIGIN</key><string>$(API_ORIGIN)</string>
 	<key>GOALFLOW_ENVIRONMENT</key><string>$(GOALFLOW_ENVIRONMENT)</string>
+	<key>TELEGRAM_ENABLED</key><string>$(TELEGRAM_ENABLED)</string>
+	<key>TELEGRAM_OIDC_PROVIDER_ID</key><string>$(TELEGRAM_OIDC_PROVIDER_ID)</string>
 </dict>
 </plist>

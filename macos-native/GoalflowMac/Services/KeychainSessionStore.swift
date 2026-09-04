@@ -11,12 +11,40 @@ struct NativeSession: Codable, Equatable, Sendable {
 }
 
 struct PendingPKCERequest: Codable, Equatable, Sendable {
-    enum Flow: String, Codable, Sendable { case magicLink, browser }
+    enum Flow: String, Codable, Sendable {
+        case magicLink
+        case browser
+        case telegramSignIn = "telegram_sign_in"
+        case telegramActivation = "telegram_activation"
+        case telegramLink = "telegram_link"
+
+        var blocksSession: Bool { self == .telegramSignIn || self == .telegramActivation }
+    }
     var state: String
     var verifier: String
     var redirectURL: String
     var createdAt: Date
     var flow: Flow
+    var expiresAt: Date? = nil
+    var attemptToken: String? = nil
+    var expectedUserId: String? = nil
+    var verifiedUserId: String? = nil
+    var verifiedSessionId: String? = nil
+
+    var effectiveExpiresAt: Date { expiresAt ?? createdAt.addingTimeInterval(15 * 60) }
+
+    func matchesVerifiedSession(_ session: NativeSession) -> Bool {
+        guard let verifiedUserId, let verifiedSessionId else { return false }
+        return verifiedUserId.lowercased() == session.userId.lowercased()
+            && verifiedSessionId.lowercased() == session.sessionId.lowercased()
+    }
+
+    func verified(by session: NativeSession) -> PendingPKCERequest {
+        var result = self
+        result.verifiedUserId = session.userId.lowercased()
+        result.verifiedSessionId = session.sessionId.lowercased()
+        return result
+    }
 }
 
 struct PendingEmailOtpAttempt: Codable, Equatable, Sendable {
@@ -166,6 +194,7 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     var isAuthenticated: Bool {
         do {
             guard try readPendingEmailOtp() == nil,
+                  try readPendingRequest()?.flow.blocksSession != true,
                   let session = try read() else { return false }
             return session.expiresAt > Date().addingTimeInterval(60)
         } catch {
@@ -209,13 +238,15 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
 
     func readPendingRequest() throws -> PendingPKCERequest? {
         guard let data = try readData(account: pendingAccount) else { return nil }
-        guard let pending = try? decoder.decode(PendingPKCERequest.self, from: data) else {
+        guard let pending = try? decoder.decode(PendingPKCERequest.self, from: data),
+              isValidPendingRequest(pending) else {
             throw KeychainError.corruptPendingRequest
         }
         return pending
     }
 
     func savePendingRequest(_ pending: PendingPKCERequest) throws {
+        guard isValidPendingRequest(pending) else { throw KeychainError.corruptPendingRequest }
         try writeData(encoder.encode(pending), account: pendingAccount)
         guard try readPendingRequest() == pending else { throw KeychainError.readBackMismatch }
     }
@@ -254,6 +285,7 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
         urlSession: URLSession = URLSession.shared
     ) async throws -> NativeSession {
         if try readPendingEmailOtp() != nil { throw KeychainError.activationPending }
+        if try readPendingRequest()?.flow.blocksSession == true { throw KeychainError.activationPending }
         guard let current = try read() else { throw KeychainError.noSession }
         if current.expiresAt > Date().addingTimeInterval(5 * 60) { return current }
         if current.expiresAt > Date().addingTimeInterval(60) {
@@ -305,6 +337,34 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
 
     private static func isRetryable(_ status: Int) -> Bool {
         status >= 500 || [408, 425, 429].contains(status)
+    }
+
+    private func isValidPendingRequest(_ pending: PendingPKCERequest) -> Bool {
+        let base64URL = pending.state.range(
+            of: #"^[A-Za-z0-9_-]{16,128}$"#,
+            options: .regularExpression
+        ) != nil
+        let verifier = (43...128).contains(pending.verifier.count)
+            && pending.verifier.range(
+                of: #"^[A-Za-z0-9._~-]+$"#,
+                options: .regularExpression
+            ) != nil
+        let expiry = pending.effectiveExpiresAt > pending.createdAt
+            && pending.effectiveExpiresAt <= pending.createdAt.addingTimeInterval(15 * 60)
+        let activationAuthority = pending.flow != .telegramActivation
+            || pending.attemptToken?.range(
+                of: #"^[A-Za-z0-9_-]{43}$"#,
+                options: .regularExpression
+            ) != nil
+        let linkedUser = pending.flow != .telegramLink
+            || pending.expectedUserId.flatMap(UUID.init(uuidString:)) != nil
+        let hasVerifiedIdentity = pending.verifiedUserId != nil || pending.verifiedSessionId != nil
+        let verifiedIdentity = !hasVerifiedIdentity || (
+            pending.verifiedUserId.flatMap(UUID.init(uuidString:)) != nil
+                && pending.verifiedSessionId.flatMap(UUID.init(uuidString:)) != nil
+        )
+        return base64URL && verifier && !pending.redirectURL.isEmpty && expiry
+            && activationAuthority && linkedUser && verifiedIdentity
     }
 
     private func baseQuery(account: String) -> [String: Any] {
@@ -386,7 +446,7 @@ enum KeychainError: Error, LocalizedError {
         case .noRefreshConfig: return "Session refresh is not safely configured."
         case .transient: return "Session refresh is temporarily unavailable. Local changes remain pending."
         case .revoked: return "This cloud session has expired or was revoked. Local changes remain on this Mac."
-        case .activationPending: return "Email verification has not finished. Local changes remain pending."
+        case .activationPending: return "Account verification has not finished. Local changes remain pending."
         }
     }
 }

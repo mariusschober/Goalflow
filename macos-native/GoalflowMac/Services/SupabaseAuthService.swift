@@ -11,6 +11,12 @@ struct GoalflowSessionProfile: Equatable, Sendable {
     var requiresMFA: Bool { role == "owner" && assuranceLevel != "aal2" }
 }
 
+struct MacTelegramStatus: Equatable, Sendable {
+    var enabled: Bool
+    var linked: Bool
+    var username: String?
+}
+
 func pkceChallenge(_ verifier: String) -> String {
     Data(SHA256.hash(data: Data(verifier.utf8))).base64URLEncodedString()
 }
@@ -54,6 +60,7 @@ final class SupabaseAuthService: @unchecked Sendable {
     }
 
     var isConfigured: Bool { configuration.isCloudConfigured }
+    var isTelegramConfigured: Bool { configuration.isTelegramConfigured }
     var configurationProblem: String? { configuration.problem }
     var nativeCaptchaURL: URL? {
         guard let origin = configuration.apiOrigin else { return nil }
@@ -114,6 +121,7 @@ final class SupabaseAuthService: @unchecked Sendable {
             expiresAt: Date().addingTimeInterval(expiresIn),
             resendAt: Date().addingTimeInterval(resendAfter)
         )
+        try abandonPendingAccountAuthentication()
         try keychain.savePendingEmailOtp(pending)
         return pending
     }
@@ -180,6 +188,199 @@ final class SupabaseAuthService: @unchecked Sendable {
         return true
     }
 
+    func beginTelegramSignIn() throws -> URL {
+        let pending = try makeTelegramRequest(flow: .telegramSignIn)
+        try abandonPendingAccountAuthentication()
+        try keychain.savePendingRequest(pending)
+        return try telegramAuthorizationURL(for: pending, linkIdentity: false)
+    }
+
+    func beginTelegramActivation(inviteCode: String, captchaToken: String) async throws -> URL {
+        let telegram = try requireTelegramConfiguration()
+        let cleanInvite = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard (6...128).contains(cleanInvite.count) else { throw AuthError.invalidInvite }
+        guard captchaToken.range(
+            of: #"^[A-Za-z0-9._~-]{20,4096}$"#,
+            options: .regularExpression
+        ) != nil else { throw AuthError.captchaRequired }
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/auth/telegram/preflight", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let body = try JSONSerialization.data(withJSONObject: [
+            "code": cleanInvite,
+            "captchaToken": captchaToken
+        ])
+        let (data, response) = try await request(
+            url: url,
+            method: "POST",
+            body: body,
+            publishableKey: telegram.key
+        )
+        guard (200..<300).contains(response.statusCode), data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["provider"] as? String == telegram.provider,
+              let attemptToken = object["attemptToken"] as? String,
+              attemptToken.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil,
+              let expiresIn = (object["expiresInSeconds"] as? NSNumber)?.doubleValue,
+              expiresIn > 0, expiresIn <= 600 else {
+            if Self.isRetryable(response.statusCode) { throw AuthError.transient }
+            throw AuthError.telegramActivationRejected
+        }
+        let pending = try makeTelegramRequest(
+            flow: .telegramActivation,
+            expiresIn: expiresIn,
+            attemptToken: attemptToken
+        )
+        try abandonPendingAccountAuthentication()
+        try keychain.savePendingRequest(pending)
+        return try telegramAuthorizationURL(for: pending, linkIdentity: false)
+    }
+
+    /// Returns nil when the provider identity already existed and server-side
+    /// bot access was linked without opening a browser.
+    func beginTelegramLink() async throws -> URL? {
+        let telegram = try requireTelegramConfiguration()
+        let profile = try await validateCurrentSession()
+        if profile.requiresMFA { throw AuthError.mfaRequired }
+        let session = try await keychain.currentSession(configuration: configuration, urlSession: urlSession)
+        let userURL = telegram.url.appendingPathComponent("auth/v1/user")
+        let (userData, userResponse) = try await request(
+            url: userURL,
+            method: "GET",
+            body: nil,
+            publishableKey: telegram.key,
+            bearerToken: session.accessToken
+        )
+        try requireAuthenticatedResponse(
+            data: userData,
+            response: userResponse,
+            session: session,
+            fallback: .telegramLinkRejected
+        )
+        guard userData.count <= 256 * 1024,
+              let user = try? JSONSerialization.jsonObject(with: userData) as? [String: Any],
+              (user["id"] as? String)?.lowercased() == session.userId else {
+            throw AuthError.invalidResponse
+        }
+        let acceptedProviders = Set([telegram.provider, telegram.provider.replacingOccurrences(of: "custom:", with: "")])
+        let identities = user["identities"] as? [[String: Any]] ?? []
+        if identities.contains(where: { identity in
+            guard let provider = identity["provider"] as? String else { return false }
+            return acceptedProviders.contains(provider)
+        }) {
+            try await activateTelegramLink(session: session)
+            return nil
+        }
+
+        let pending = try makeTelegramRequest(
+            flow: .telegramLink,
+            expectedUserId: session.userId
+        )
+        try keychain.savePendingRequest(pending)
+        let endpoint = try telegramAuthorizationURL(for: pending, linkIdentity: true)
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await request(
+                url: endpoint,
+                method: "GET",
+                body: nil,
+                publishableKey: telegram.key,
+                bearerToken: session.accessToken
+            )
+            try requireAuthenticatedResponse(
+                data: data,
+                response: response,
+                session: session,
+                fallback: .telegramLinkRejected
+            )
+        } catch AuthError.transient {
+            throw AuthError.transient
+        } catch {
+            try? keychain.clearPendingRequest()
+            throw error
+        }
+        guard data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let providerURLString = object["url"] as? String,
+              let providerURL = URL(string: providerURLString),
+              let components = URLComponents(url: providerURL, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.host?.isEmpty == false,
+              components.user == nil, components.password == nil,
+              components.fragment == nil else {
+            try? keychain.clearPendingRequest()
+            throw AuthError.invalidResponse
+        }
+        return providerURL
+    }
+
+    func telegramStatus() async throws -> MacTelegramStatus {
+        let telegram = try requireTelegramConfiguration()
+        let session = try await keychain.currentSession(configuration: configuration, urlSession: urlSession)
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/account/telegram", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let (data, response) = try await request(
+            url: url,
+            method: "GET",
+            body: nil,
+            publishableKey: telegram.key,
+            bearerToken: session.accessToken
+        )
+        try requireAuthenticatedResponse(
+            data: data,
+            response: response,
+            session: session,
+            fallback: .telegramStatusUnavailable
+        )
+        guard data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let enabled = object["enabled"] as? Bool,
+              let linked = object["linked"] as? Bool else { throw AuthError.invalidResponse }
+        return MacTelegramStatus(
+            enabled: enabled,
+            linked: linked,
+            username: (object["username"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    func unlinkTelegram() async throws -> MacTelegramStatus {
+        let telegram = try requireTelegramConfiguration()
+        let profile = try await validateCurrentSession()
+        if profile.requiresMFA { throw AuthError.mfaRequired }
+        let session = try await keychain.currentSession(configuration: configuration, urlSession: urlSession)
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/account/telegram/link", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let (data, response) = try await request(
+            url: url,
+            method: "DELETE",
+            body: nil,
+            publishableKey: telegram.key,
+            bearerToken: session.accessToken
+        )
+        try requireAuthenticatedResponse(
+            data: data,
+            response: response,
+            session: session,
+            fallback: .telegramLinkRejected
+        )
+        return MacTelegramStatus(enabled: true, linked: false, username: nil)
+    }
+
+    @discardableResult
+    func resumePendingTelegramFlow() async throws -> GoalflowSessionProfile? {
+        guard let pending = try keychain.readPendingRequest(),
+              [.telegramSignIn, .telegramActivation, .telegramLink].contains(pending.flow),
+              let session = try keychain.read(),
+              pending.matchesVerifiedSession(session) else { return nil }
+        return try await finishTelegramFlow(session: session, pending: pending)
+    }
+
     private func activateEmailOtp(session: NativeSession, pending: PendingEmailOtpAttempt) async throws {
         guard pending.matchesVerifiedSession(session) else { throw AuthError.emailCodeRequired }
         let auth = try requireAuthenticationConfiguration()
@@ -208,14 +409,164 @@ final class SupabaseAuthService: @unchecked Sendable {
         throw AuthError.activationRejected
     }
 
+    private func makeTelegramRequest(
+        flow: PendingPKCERequest.Flow,
+        expiresIn: TimeInterval = 10 * 60,
+        attemptToken: String? = nil,
+        expectedUserId: String? = nil
+    ) throws -> PendingPKCERequest {
+        guard [.telegramSignIn, .telegramActivation, .telegramLink].contains(flow),
+              flow != .telegramLink || expectedUserId.flatMap(UUID.init(uuidString:)) != nil else {
+            throw AuthError.invalidResponse
+        }
+        let state = try secureRandomValue()
+        var callback = URLComponents(string: MacCloudConfiguration.authRedirectURL)!
+        callback.queryItems = [URLQueryItem(name: "state", value: state)]
+        guard let redirectURL = callback.url?.absoluteString else { throw AuthError.notConfigured }
+        let createdAt = Date()
+        return PendingPKCERequest(
+            state: state,
+            verifier: try secureRandomValue(),
+            redirectURL: redirectURL,
+            createdAt: createdAt,
+            flow: flow,
+            expiresAt: createdAt.addingTimeInterval(min(max(expiresIn, 1), 15 * 60)),
+            attemptToken: attemptToken,
+            expectedUserId: expectedUserId?.lowercased()
+        )
+    }
+
+    private func telegramAuthorizationURL(
+        for pending: PendingPKCERequest,
+        linkIdentity: Bool
+    ) throws -> URL {
+        let telegram = try requireTelegramConfiguration()
+        let path = linkIdentity ? "/auth/v1/user/identities/authorize" : "/auth/v1/authorize"
+        guard let endpoint = URL(string: path, relativeTo: telegram.url)?.absoluteURL,
+              var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false) else {
+            throw AuthError.notConfigured
+        }
+        components.queryItems = [
+            URLQueryItem(name: "provider", value: telegram.provider),
+            URLQueryItem(name: "redirect_to", value: pending.redirectURL),
+            URLQueryItem(name: "scopes", value: "openid profile telegram:bot_access"),
+            URLQueryItem(name: "code_challenge", value: pkceChallenge(pending.verifier)),
+            URLQueryItem(name: "code_challenge_method", value: "s256")
+        ]
+        if linkIdentity {
+            components.queryItems?.append(URLQueryItem(name: "skip_http_redirect", value: "true"))
+        }
+        guard let url = components.url else { throw AuthError.notConfigured }
+        return url
+    }
+
+    private func abandonPendingAccountAuthentication() throws {
+        let session = try keychain.read()
+        let pendingEmail = try keychain.readPendingEmailOtp()
+        let pendingOAuth = try keychain.readPendingRequest()
+        if let session,
+           pendingEmail?.matchesVerifiedSession(session) == true
+            || (pendingOAuth?.flow.blocksSession == true
+                && pendingOAuth?.matchesVerifiedSession(session) == true) {
+            try keychain.clearIfAccessTokenMatches(session.accessToken)
+        }
+        try keychain.clearPendingEmailOtp()
+        try keychain.clearPendingRequest()
+    }
+
+    private func finishTelegramFlow(
+        session: NativeSession,
+        pending: PendingPKCERequest
+    ) async throws -> GoalflowSessionProfile {
+        guard pending.matchesVerifiedSession(session) else { throw AuthError.sessionChanged }
+        do {
+            switch pending.flow {
+            case .telegramActivation:
+                try await activateTelegramBeta(session: session, pending: pending)
+            case .telegramLink:
+                guard pending.expectedUserId?.lowercased() == session.userId else {
+                    throw AuthError.sessionChanged
+                }
+                try await activateTelegramLink(session: session)
+            case .telegramSignIn:
+                break
+            case .magicLink, .browser:
+                throw AuthError.callbackNotRequested
+            }
+            let profile = try await validateServerSession(session)
+            try keychain.clearPendingRequest()
+            return profile
+        } catch AuthError.transient {
+            throw AuthError.transient
+        } catch {
+            try? keychain.clearPendingRequest()
+            if pending.flow != .telegramLink {
+                try? keychain.clearIfAccessTokenMatches(session.accessToken)
+            }
+            throw error
+        }
+    }
+
+    private func activateTelegramBeta(session: NativeSession, pending: PendingPKCERequest) async throws {
+        let telegram = try requireTelegramConfiguration()
+        guard let attemptToken = pending.attemptToken,
+              attemptToken.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil,
+              let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/auth/telegram/activate", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.telegramActivationRejected
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["attemptToken": attemptToken])
+        let (data, response) = try await request(
+            url: url,
+            method: "POST",
+            body: body,
+            publishableKey: telegram.key,
+            bearerToken: session.accessToken
+        )
+        try requireAuthenticatedResponse(
+            data: data,
+            response: response,
+            session: session,
+            fallback: .telegramActivationRejected
+        )
+        guard data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["activated"] as? Bool == true else {
+            throw AuthError.telegramActivationRejected
+        }
+    }
+
+    private func activateTelegramLink(session: NativeSession) async throws {
+        let telegram = try requireTelegramConfiguration()
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/account/telegram/link", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let (data, response) = try await request(
+            url: url,
+            method: "POST",
+            body: nil,
+            publishableKey: telegram.key,
+            bearerToken: session.accessToken
+        )
+        try requireAuthenticatedResponse(
+            data: data,
+            response: response,
+            session: session,
+            fallback: .telegramLinkRejected
+        )
+        guard data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["linked"] as? Bool == true else { throw AuthError.telegramLinkRejected }
+    }
+
     func handleCallback(url: URL) async throws -> GoalflowSessionProfile {
         guard Self.isExpectedCallbackURL(url), url.fragment == nil else {
             throw AuthError.invalidCallback
         }
         let pending = try keychain.readPendingRequest()
         guard let pending,
-              pending.flow == .magicLink,
-              pending.createdAt >= Date().addingTimeInterval(-15 * 60),
+              pending.effectiveExpiresAt > Date(),
               pending.verifier.count >= 43, pending.verifier.count <= 128 else {
             throw AuthError.callbackNotRequested
         }
@@ -251,21 +602,45 @@ final class SupabaseAuthService: @unchecked Sendable {
             try keychain.clearPendingRequest()
             throw AuthError.invalidOrExpiredLink
         }
-        let session = try parseNativeSessionResponse(data, configuration: configuration)
+        let session: NativeSession
+        do {
+            session = try parseNativeSessionResponse(
+                data,
+                configuration: configuration,
+                expectedUserId: pending.flow == .telegramLink ? pending.expectedUserId : nil
+            )
+        } catch {
+            try? keychain.clearPendingRequest()
+            throw error
+        }
+        if pending.flow == .magicLink || pending.flow == .browser {
+            try keychain.save(session)
+            try keychain.clearPendingRequest()
+            NotificationCenter.default.post(name: .authDidChange, object: nil)
+            return try await validateServerSession(session)
+        }
+        _ = try requireTelegramConfiguration()
         try keychain.save(session)
-        try keychain.clearPendingRequest()
+        let verifiedPending = pending.verified(by: session)
+        try keychain.savePendingRequest(verifiedPending)
+        let profile = try await finishTelegramFlow(session: session, pending: verifiedPending)
         NotificationCenter.default.post(name: .authDidChange, object: nil)
-        return try await validateCurrentSession()
+        return profile
     }
 
     func validateCurrentSession() async throws -> GoalflowSessionProfile {
         _ = try await resumePendingEmailActivation()
+        _ = try await resumePendingTelegramFlow()
+        let session = try await keychain.currentSession(configuration: configuration, urlSession: urlSession)
+        return try await validateServerSession(session)
+    }
+
+    private func validateServerSession(_ session: NativeSession) async throws -> GoalflowSessionProfile {
         let auth = try requireAuthenticationConfiguration()
         guard let apiOrigin = configuration.apiOrigin,
               let url = URL(string: "/api/v1/session", relativeTo: apiOrigin)?.absoluteURL else {
             throw AuthError.notConfigured
         }
-        let session = try await keychain.currentSession(configuration: configuration, urlSession: urlSession)
         let (data, response) = try await request(
             url: url,
             method: "GET",
@@ -275,11 +650,12 @@ final class SupabaseAuthService: @unchecked Sendable {
         )
         let current = try keychain.read()
         guard current?.userId == session.userId else { throw AuthError.sessionChanged }
-        if response.statusCode == 401 || response.statusCode == 403 {
-            try keychain.clearIfAccessTokenMatches(session.accessToken)
-            NotificationCenter.default.post(name: .authDidChange, object: nil)
-            throw AuthError.revoked
-        }
+        try requireAuthenticatedResponse(
+            data: data,
+            response: response,
+            session: session,
+            fallback: .invalidResponse
+        )
         guard (200..<300).contains(response.statusCode), data.count <= 64 * 1024,
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let user = object["user"] as? [String: Any],
@@ -426,6 +802,34 @@ final class SupabaseAuthService: @unchecked Sendable {
         return (url, key)
     }
 
+    private func requireTelegramConfiguration() throws -> (url: URL, key: String, provider: String) {
+        let auth = try requireAuthenticationConfiguration()
+        guard configuration.isTelegramConfigured else { throw AuthError.telegramNotConfigured }
+        return (auth.url, auth.key, configuration.telegramProviderId)
+    }
+
+    private func requireAuthenticatedResponse(
+        data: Data,
+        response: HTTPURLResponse,
+        session: NativeSession,
+        fallback: AuthError
+    ) throws {
+        if (200..<300).contains(response.statusCode) { return }
+        let errorCode = ((try? JSONSerialization.jsonObject(with: data)) as? [String: Any])
+            .flatMap { $0["error"] as? [String: Any] }?["code"] as? String
+        if response.statusCode == 401
+            || (response.statusCode == 403 && errorCode == "account_inactive") {
+            try keychain.clearIfAccessTokenMatches(session.accessToken)
+            NotificationCenter.default.post(name: .authDidChange, object: nil)
+            throw AuthError.revoked
+        }
+        if response.statusCode == 403 && errorCode == "mfa_required" {
+            throw AuthError.mfaRequired
+        }
+        if Self.isRetryable(response.statusCode) { throw AuthError.transient }
+        throw fallback
+    }
+
     private func request(
         url: URL,
         method: String,
@@ -483,8 +887,14 @@ enum AuthError: Error, LocalizedError {
     case sessionChanged
     case randomnessUnavailable
     case mfaNotEnrolled
+    case mfaRequired
     case invalidMFACode
     case remoteLogoutUnconfirmed
+    case telegramNotConfigured
+    case telegramActivationRejected
+    case telegramLinkRejected
+    case telegramStatusUnavailable
+    case browserUnavailable
 
     var errorDescription: String? {
         switch self {
@@ -505,8 +915,14 @@ enum AuthError: Error, LocalizedError {
         case .sessionChanged: return "The account changed while authentication was being verified."
         case .randomnessUnavailable: return "A secure sign-in request could not be created."
         case .mfaNotEnrolled: return "The owner account has no verified authenticator factor. Enroll MFA in the web app first."
+        case .mfaRequired: return "Verify the owner session before using this action."
         case .invalidMFACode: return "The authenticator code was not accepted."
         case .remoteLogoutUnconfirmed: return "Signed out on this Mac, but server sign-out could not be confirmed."
+        case .telegramNotConfigured: return "Telegram authentication is not configured for this build."
+        case .telegramActivationRejected: return "Telegram beta activation is invalid, expired, or unavailable."
+        case .telegramLinkRejected: return "Telegram could not be linked to this Tsurfing account."
+        case .telegramStatusUnavailable: return "Telegram status could not be loaded."
+        case .browserUnavailable: return "The system browser could not be opened. Start again."
         }
     }
 }
