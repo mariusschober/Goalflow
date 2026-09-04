@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Package GoalflowMac as either an explicitly ad-hoc local beta or a
+# Package Tsurfing as either an explicitly ad-hoc local beta or a
 # Developer-ID-signed build. Every requested stage is mandatory: this script
 # never substitutes a stale artifact or reports success after a failed command.
 # Usage: ./scripts/package-dmg.sh [version] [team_id] [notary_keychain_profile]
 
-VERSION=${1:-1.0.1}
+VERSION=${1:-0.4.0}
 TEAM_ID=${2:-}
 NOTARY_PROFILE=${3:-}
 
@@ -31,8 +31,8 @@ PROJECT="macos-native/GoalflowMac.xcodeproj"
 SCHEME="GoalflowMac"
 ARCHIVE="build/GoalflowMac.xcarchive"
 EXPORT_DIR="build/Export"
-APP="$EXPORT_DIR/GoalflowMac.app"
-DMG="build/GoalflowMac-${VERSION}.dmg"
+APP="$EXPORT_DIR/Tsurfing.app"
+DMG="build/Tsurfing-${VERSION}.dmg"
 ENTITLEMENTS="macos-native/GoalflowMac/GoalflowMac.entitlements"
 EXPORT_OPTIONS=""
 
@@ -78,7 +78,7 @@ else
     CODE_SIGNING_REQUIRED=YES \
     CODE_SIGN_ENTITLEMENTS=
   mkdir -p "$EXPORT_DIR"
-  cp -R "$ARCHIVE/Products/Applications/GoalflowMac.app" "$APP"
+  cp -R "$ARCHIVE/Products/Applications/Tsurfing.app" "$APP"
   ARTIFACT_KIND="ad-hoc-local-beta"
 fi
 
@@ -96,10 +96,10 @@ if ! command -v create-dmg >/dev/null 2>&1; then
 fi
 
 create-dmg \
-  --volname "Goalflow" \
+  --volname "Tsurfing" \
   --window-pos 200 120 \
   --window-size 600 400 \
-  --icon GoalflowMac.app 200 190 \
+  --icon Tsurfing.app 200 190 \
   --app-drop-link 400 185 \
   "$DMG" \
   "$EXPORT_DIR/"

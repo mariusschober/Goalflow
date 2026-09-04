@@ -1,7 +1,7 @@
 import Foundation
 
 struct MacCloudConfiguration: Equatable, Sendable {
-    static let authRedirectURL = "goalflow://auth/callback"
+    static let authRedirectURL = "tsurfing://auth/callback"
 
     let apiOrigin: URL?
     let supabaseURL: URL?

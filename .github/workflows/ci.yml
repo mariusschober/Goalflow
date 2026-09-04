@@ -164,7 +164,7 @@ jobs:
       - name: Upload production debug APK (TEST-ONLY, not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-production-debug-apk-TEST-ONLY
+          name: tsurfing-production-debug-apk-TEST-ONLY
           path: android/app/build/outputs/apk/production/debug/app-production-debug.apk
           if-no-files-found: error
 
@@ -235,7 +235,7 @@ jobs:
           fi
           echo "Unsigned native production release compiled and verified: $apk"
       - run: ./android-native/gradlew -p android-native assembleSandboxDebug
-      - name: Build preserved v2 upgrade fixture (TEST-ONLY)
+      - name: Build preserved v2 schema upgrade fixture under Tsurfing package (TEST-ONLY)
         run: |
           set -euo pipefail
           old_source="$RUNNER_TEMP/goalflow-native-v2-source"
@@ -243,6 +243,12 @@ jobs:
           git worktree add --detach "$old_source" "$expected_old_commit"
           [ "$(git -C "$old_source" rev-parse HEAD)" = "$expected_old_commit" ] || {
             echo "Preserved v2 worktree is not at the required commit." >&2
+            exit 1
+          }
+          old_build="$old_source/android-native/app/build.gradle"
+          sed -i 's/applicationId "com.mariusschober.goalflow"/applicationId "com.mariusschober.tsurfing"/' "$old_build"
+          grep -Fq 'applicationId "com.mariusschober.tsurfing"' "$old_build" || {
+            echo "The historical v2 schema fixture was not rebound to the Tsurfing package." >&2
             exit 1
           }
           fixture_dir="$old_source/android-native/app/src/androidTest/java/com/mariusschober/goalflow/nativeapp/data"
@@ -261,7 +267,7 @@ jobs:
       - name: Upload native Room schemas
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-native-room-schemas
+          name: tsurfing-native-room-schemas
           path: android-native/app/schemas
           if-no-files-found: error
       - name: Diagnose native production debug APK bytes (TEST-ONLY)
@@ -303,13 +309,13 @@ jobs:
       - name: Upload native production debug APK (TEST-ONLY, not a release)
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-native-production-debug-apk-TEST-ONLY
+          name: tsurfing-native-production-debug-apk-TEST-ONLY
           path: android-native/app/build/outputs/apk/production/debug/*.apk
           if-no-files-found: error
       - name: Upload native sandbox debug APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-native-sandbox-debug-apk-TEST-ONLY
+          name: tsurfing-native-sandbox-debug-apk-TEST-ONLY
           path: android-native/app/build/outputs/apk/sandbox/debug/*.apk
           if-no-files-found: error
 
@@ -410,27 +416,27 @@ jobs:
             CODE_SIGN_IDENTITY=- \
             CODE_SIGNING_ALLOWED=YES \
             CODE_SIGNING_REQUIRED=YES
-          app="$RUNNER_TEMP/goalflow-macos-release/Build/Products/Release/GoalflowMac.app"
+          app="$RUNNER_TEMP/goalflow-macos-release/Build/Products/Release/Tsurfing.app"
           [ -d "$app" ] || { echo "macOS application bundle was not produced." >&2; exit 1; }
           codesign --verify --deep --strict "$app"
           macos-native/scripts/verify-built-app-key.sh "$app"
-          archive="$RUNNER_TEMP/goalflow-macos-ad-hoc-beta.zip"
+          archive="$RUNNER_TEMP/tsurfing-macos-ad-hoc-beta.zip"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$archive"
           (
             cd "$RUNNER_TEMP"
-            shasum -a 256 goalflow-macos-ad-hoc-beta.zip > goalflow-macos-ad-hoc-beta.zip.sha256
-            shasum -a 256 --check goalflow-macos-ad-hoc-beta.zip.sha256
+            shasum -a 256 tsurfing-macos-ad-hoc-beta.zip > tsurfing-macos-ad-hoc-beta.zip.sha256
+            shasum -a 256 --check tsurfing-macos-ad-hoc-beta.zip.sha256
           )
           printf 'commit=%s\nsigning=ad-hoc\nnotarization=not-requested\n' "$GITHUB_SHA" \
-            > "$RUNNER_TEMP/goalflow-macos-ad-hoc-beta.provenance.txt"
+            > "$RUNNER_TEMP/tsurfing-macos-ad-hoc-beta.provenance.txt"
       - name: Upload ad-hoc signed macOS beta candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-macos-ad-hoc-beta
+          name: tsurfing-macos-ad-hoc-beta
           path: |
-            ${{ runner.temp }}/goalflow-macos-ad-hoc-beta.zip
-            ${{ runner.temp }}/goalflow-macos-ad-hoc-beta.zip.sha256
-            ${{ runner.temp }}/goalflow-macos-ad-hoc-beta.provenance.txt
+            ${{ runner.temp }}/tsurfing-macos-ad-hoc-beta.zip
+            ${{ runner.temp }}/tsurfing-macos-ad-hoc-beta.zip.sha256
+            ${{ runner.temp }}/tsurfing-macos-ad-hoc-beta.provenance.txt
           if-no-files-found: error
       - name: Upload macOS result bundles on failure
         if: failure()
@@ -788,7 +794,7 @@ jobs:
       - name: Upload verified internal beta APK
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: goalflow-native-signed-internal-beta
+          name: tsurfing-native-signed-internal-beta
           path: |
             android-native/app/build/outputs/apk/production/release/*.apk
             android-native/app/build/outputs/apk/production/release/*.apk.sha256

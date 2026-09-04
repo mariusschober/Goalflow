@@ -8,7 +8,7 @@ object NativeConfig {
     val supabasePublicKey: String = BuildConfig.SUPABASE_PUBLISHABLE_KEY.trim()
     val isSandboxBuild: Boolean = BuildConfig.SANDBOX_BUILD
     val sandboxAccessCode: String = BuildConfig.TEST_ACCESS_CODE
-    const val authRedirectUri: String = "goalflow://auth/callback"
+    const val authRedirectUri: String = "tsurfing://auth/callback"
 
     val canUseCloud: Boolean
         get() = apiOrigin.startsWith("https://")

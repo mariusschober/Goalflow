@@ -7,7 +7,7 @@ import { defineRailway, github, project, service } from 'railway/iac';
  */
 export default defineRailway(ctx => {
   const branch = ctx.isEnvironment('production') ? 'main' : 'develop';
-  const source = github('mariusschober/Goalflow', { branch, checkSuites: true });
+  const source = github('mariusschober/Tsurfing', { branch, checkSuites: true });
   const commonServerEnvironment = {
     NODE_ENV: 'production',
     HOST: '0.0.0.0',
@@ -24,7 +24,7 @@ export default defineRailway(ctx => {
     TURNSTILE_ENABLED: 'false'
   } as const;
 
-  const web = service('goalflow-web-api', {
+  const web = service('tsurfing-web-api', {
     source,
     build: {
       builder: 'RAILPACK',
@@ -51,7 +51,7 @@ export default defineRailway(ctx => {
     }
   });
 
-  const maintenance = service('goalflow-maintenance', {
+  const maintenance = service('tsurfing-maintenance', {
     source,
     build: {
       builder: 'RAILPACK',
@@ -71,7 +71,7 @@ export default defineRailway(ctx => {
     }
   });
 
-  return project('goalflow', {
+  return project('tsurfing', {
     environments: ['staging', 'production'],
     resources: [web, maintenance]
   });

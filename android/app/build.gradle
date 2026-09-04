@@ -66,11 +66,11 @@ android {
         }
     }
     defaultConfig {
-        applicationId "com.mariusschober.goalflow"
+        applicationId "com.mariusschober.tsurfing"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 3
-        versionName "0.3.0-tranche3"
+        versionCode 4
+        versionName "0.4.0-beta.1"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -87,10 +87,10 @@ android {
             dimension "environment"
             applicationIdSuffix ".test"
             versionNameSuffix "-test"
-            resValue "string", "app_name", "Goalflow Test"
-            resValue "string", "title_activity_main", "Goalflow Test"
-            resValue "string", "package_name", "com.mariusschober.goalflow.test"
-            resValue "string", "custom_url_scheme", "com.mariusschober.goalflow.test"
+            resValue "string", "app_name", "Tsurfing Test"
+            resValue "string", "title_activity_main", "Tsurfing Test"
+            resValue "string", "package_name", "com.mariusschober.tsurfing.test"
+            resValue "string", "custom_url_scheme", "com.mariusschober.tsurfing.test"
         }
     }
     buildTypes {

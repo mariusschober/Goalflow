@@ -143,7 +143,7 @@ open class NativeAuthClient(
 
     suspend fun acceptCallback(intent: Intent?): Boolean = withContext(Dispatchers.IO) {
         val uri = intent?.data ?: return@withContext false
-        if (uri.scheme != "goalflow" || uri.host != "auth" || uri.path != "/callback") return@withContext false
+        if (!isExpectedCallback(uri)) return@withContext false
         requireSafeAuthConfiguration()
         if (!uri.fragment.isNullOrBlank()) {
             throw NativeAuthException("The sign-in callback used an unsupported token fragment. Request a new link.")
@@ -181,6 +181,15 @@ open class NativeAuthClient(
         // always replaces it.
         runCatching { sessionStore.clearPendingState() }
         true
+    }
+
+    private fun isExpectedCallback(uri: Uri): Boolean {
+        val expected = Uri.parse(authRedirectUri)
+        return uri.scheme.equals(expected.scheme, ignoreCase = true)
+            && uri.host.equals(expected.host, ignoreCase = true)
+            && uri.port == expected.port
+            && uri.path == expected.path
+            && uri.userInfo == null
     }
 
     fun clearSession() = sessionStore.clear()

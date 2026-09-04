@@ -123,7 +123,7 @@ export const createTelegramMiniRouter = (
         response.status(409).json({ error: { code: "init_data_replayed", message: "This Telegram launch was already used. Reopen the Mini App." } }); return;
       }
       if (data.state === "inactive") {
-        response.status(403).json({ error: { code: "telegram_not_linked", message: "Link this Telegram account in Goalflow first." } }); return;
+        response.status(403).json({ error: { code: "telegram_not_linked", message: "Link this Telegram account in Tsurfing first." } }); return;
       }
       if (data.state !== "created" || !uuid.safeParse(data.userId).success
         || data.telegramUserId !== validated.telegramUserId) {

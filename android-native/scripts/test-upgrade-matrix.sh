@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# This command upgrades an installed preserved APK in place. A test APK built
-# beside that preserved source seeds its real Room database; after Android
-# installs the current APK with -r, the database is copied from the stopped
-# debug application and verified byte-for-byte through SQLite queries.
+# This command upgrades a historical v2 schema fixture in place. CI rebuilds
+# that exact historical source under the new Tsurfing application ID because
+# no Goalflow package was distributed. A test APK seeds its real Room database;
+# after Android installs the current APK with -r, the database is copied from
+# the stopped debug application and verified byte-for-byte through SQLite.
 if [[ "${GOALFLOW_ALLOW_TEST_APP_DATA_ERASE:-0}" != "1" ]]; then
   echo 'UPGRADE_MATRIX=FAIL (set GOALFLOW_ALLOW_TEST_APP_DATA_ERASE=1 only on a nonproduction test device)' >&2
   exit 1
@@ -14,7 +15,7 @@ old_apk="${1:-${GOALFLOW_UPGRADE_FROM_APK:-}}"
 new_apk="${2:-android-native/app/build/outputs/apk/production/release/app-production-release.apk}"
 old_test_apk="${3:-${GOALFLOW_UPGRADE_SEED_TEST_APK:-}}"
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-[[ -n "$old_apk" && -f "$old_apk" ]] || { echo 'UPGRADE_MATRIX=FAIL (a preserved prior production APK is required)' >&2; exit 1; }
+[[ -n "$old_apk" && -f "$old_apk" ]] || { echo 'UPGRADE_MATRIX=FAIL (a historical prior-schema fixture APK is required)' >&2; exit 1; }
 [[ -f "$new_apk" ]] || { echo "UPGRADE_MATRIX=FAIL (new APK missing: $new_apk)" >&2; exit 1; }
 [[ -n "$old_test_apk" && -f "$old_test_apk" ]] || { echo 'UPGRADE_MATRIX=FAIL (the preserved-version seed test APK is required)' >&2; exit 1; }
 
@@ -53,7 +54,7 @@ old_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$old_bad
 new_version="$(sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" <<<"$new_badging")"
 
 [[ -n "$old_package" && "$old_package" == "$new_package" ]] || {
-  echo "UPGRADE_MATRIX=FAIL (package mismatch: ${old_package:-unknown} -> ${new_package:-unknown}; simulation is forbidden)" >&2
+  echo "UPGRADE_MATRIX=FAIL (fixture package mismatch: ${old_package:-unknown} -> ${new_package:-unknown})" >&2
   exit 1
 }
 [[ -n "$test_package" && "$test_package" != "$old_package" ]] || {

@@ -250,7 +250,7 @@ const run = async () => {
     'Deletion response has no error').code, 'account_deletion_disabled');
 
   const ownDataRead = await databaseA.from('sync_records').select('entity_id').limit(1);
-  assert(ownDataRead.error, 'Direct client Data API access bypassed the Goalflow protocol');
+  assert(ownDataRead.error, 'Direct client Data API access bypassed the Tsurfing protocol');
   const directRpc = await databaseB.rpc('push_sync_mutation_v2', {
     target_user_id: sessionA.user.id,
     target_mutation_id: randomUUID(),

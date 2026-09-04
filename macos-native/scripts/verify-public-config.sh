@@ -27,7 +27,7 @@ if command -v rg >/dev/null 2>&1; then
   if rg -q '/Users/' "$mac_root/GoalflowMacTests" --glob '*.swift'; then
     fail "macOS tests depend on a developer-machine absolute path"
   fi
-  rg -q 'goalflow://auth/callback' "$mac_root/GoalflowMac/Sync/SyncTransport.swift" \
+  rg -q 'tsurfing://auth/callback' "$mac_root/GoalflowMac/Sync/SyncTransport.swift" \
     || fail "the exact PKCE callback contract is missing"
   rg -q 'code_challenge_method.*s256' "$mac_root/GoalflowMac/Services/SupabaseAuthService.swift" \
     || fail "the PKCE S256 contract is missing"
@@ -60,7 +60,7 @@ else
     fi
   done < <(find "$mac_root/GoalflowMacTests" -type f -name '*.swift' -print)
   [ "$path_match" = false ] || fail "macOS tests depend on a developer-machine absolute path"
-  grep -Fq 'goalflow://auth/callback' "$mac_root/GoalflowMac/Sync/SyncTransport.swift" \
+  grep -Fq 'tsurfing://auth/callback' "$mac_root/GoalflowMac/Sync/SyncTransport.swift" \
     || fail "the exact PKCE callback contract is missing"
   grep -Eq 'code_challenge_method.*s256' "$mac_root/GoalflowMac/Services/SupabaseAuthService.swift" \
     || fail "the PKCE S256 contract is missing"

@@ -83,7 +83,7 @@ data class NativeServerConflict(
 )
 
 class NativeSyncAccountMismatch : IllegalStateException(
-    "This local database is bound to a different Goalflow account. Its data was not synchronized or overwritten."
+    "This local database is bound to a different Tsurfing account. Its data was not synchronized or overwritten."
 )
 
 data class NativeReorderResult(

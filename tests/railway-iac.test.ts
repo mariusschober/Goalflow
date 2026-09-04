@@ -25,14 +25,14 @@ describe('Railway beta infrastructure contract', () => {
     ['production', 'main']
   ] as const)('maps %s to its exact persistent branch', async (environment, branch) => {
     const definition = await render(environment);
-    expect(definition.name).toBe('goalflow');
+    expect(definition.name).toBe('tsurfing');
     expect(definition.environments).toEqual(['staging', 'production']);
 
     for (const resource of services(definition)) {
       expect(resource.kind).toBe('github');
       expect(resource.source).toMatchObject({
         type: 'github',
-        repo: 'mariusschober/Goalflow',
+        repo: 'mariusschober/Tsurfing',
         branch,
         checkSuites: true
       });
@@ -41,12 +41,12 @@ describe('Railway beta infrastructure contract', () => {
 
   it('defines one readiness-gated web service and one repository-backed cron service', async () => {
     const definition = await render('staging');
-    const web = named(definition, 'goalflow-web-api');
-    const maintenance = named(definition, 'goalflow-maintenance');
+    const web = named(definition, 'tsurfing-web-api');
+    const maintenance = named(definition, 'tsurfing-maintenance');
 
     expect(services(definition).map(resource => resource.name).sort()).toEqual([
-      'goalflow-maintenance',
-      'goalflow-web-api'
+      'tsurfing-maintenance',
+      'tsurfing-web-api'
     ]);
     expect(web.deploy).toMatchObject({
       startCommand: 'npm start',
@@ -65,8 +65,8 @@ describe('Railway beta infrastructure contract', () => {
 
   it('keeps server credentials out of every client-prefixed variable', async () => {
     const definition = await render('production');
-    const web = named(definition, 'goalflow-web-api');
-    const maintenance = named(definition, 'goalflow-maintenance');
+    const web = named(definition, 'tsurfing-web-api');
+    const maintenance = named(definition, 'tsurfing-maintenance');
     const webVariables = web.variables ?? {};
     const maintenanceVariables = maintenance.variables ?? {};
 

@@ -14,7 +14,7 @@ const query = (result: { data: Record<string, unknown> | null; error: unknown })
 };
 
 describe("Telegram account and timezone boundary", () => {
-  it("requires both an enabled link and an active Goalflow profile", async () => {
+  it("requires both an enabled link and an active Tsurfing profile", async () => {
     const identity = query({ data: { user_id: "user-a", bot_access_granted: true }, error: null });
     const suspended = query({ data: { status: "suspended" }, error: null });
     const database = { from: vi.fn().mockReturnValueOnce(identity).mockReturnValueOnce(suspended) } as unknown as SupabaseClient;

@@ -698,7 +698,7 @@ fun GoalflowRoot(
             text = {
                 Text(if (supportedLocally) {
                     "This ${conflict.entityType.removeSuffix("s")} was changed in two places. " +
-                        "Choose explicitly; Goalflow will not overwrite either version silently."
+                        "Choose explicitly; Tsurfing will not overwrite either version silently."
                 } else {
                     "A cloud ${conflict.entityType} change cannot be displayed by this app version. " +
                         "Its complete payload remains preserved until you explicitly keep the canonical cloud copy."
@@ -862,7 +862,7 @@ fun GoalflowRoot(
                 } else if (backupAction == "export") {
                     backupAction = null
                     pendingExportPassword = password
-                    exportLauncher.launch("Goalflow-backup.json")
+                    exportLauncher.launch("Tsurfing-backup.tsurfing-backup")
                 } else if (backupAction == "rollback") {
                     backupAction = null
                     scope.launch {
@@ -1038,7 +1038,7 @@ private fun GoalflowSandboxGate(onGranted: () -> Unit) {
                 modifier = Modifier.size(58.dp)
             )
             Spacer(Modifier.height(20.dp))
-            Text("Goalflow Test", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
+            Text("Tsurfing Test", style = MaterialTheme.typography.headlineLarge, textAlign = TextAlign.Center)
             Spacer(Modifier.height(8.dp))
             Text(
                 "This is the isolated native test build. Enter the test code to continue.",
@@ -2031,8 +2031,8 @@ private fun SettingsScreen(
         }
         item {
             SettingsCard(
-                title = "Goalflow native",
-                body = "A focused Android client with the existing Goalflow rules intact."
+                title = "Tsurfing native",
+                body = "A focused Android client with the existing durable sync rules intact."
             )
         }
     }
@@ -2074,7 +2074,7 @@ private fun BackupPasswordDialog(
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     when (action) {
-                        "export" -> "Use a password you can recover later. Goalflow cannot reset it."
+                        "export" -> "Use a password you can recover later. Tsurfing cannot reset it."
                         "rollback" -> "The checkpoint was encrypted before the last restore."
                         else -> "The backup is validated and previewed before it changes local data."
                     },
@@ -2191,7 +2191,7 @@ private fun SignInDialog(
         title = { Text("Sign in to sync") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("Goalflow will send a magic link. Your local commitments stay available either way.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Tsurfing will send a secure sign-in message. Your local commitments stay available either way.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 OutlinedTextField(
                     value = email,
                     onValueChange = { email = it },

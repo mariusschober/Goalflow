@@ -31,8 +31,8 @@ export const Auth: React.FC<{ activationError?: string | null }> = ({ activation
       if (mode === 'register') {
         const result = await registerWithEmail(email, password, inviteCode, captchaToken);
         setMessage(result.verificationRequired
-          ? 'Check your email and follow the verification link to finish activating Goalflow.'
-          : 'Your email is verified. Goalflow is activating your beta access.');
+          ? 'Check your email and follow the verification link to finish activating Tsurfing.'
+          : 'Your email is verified. Tsurfing is activating your beta access.');
       } else if (mode === 'reset') {
         await requestPasswordReset(email);
         setMessage('If that address has an active account, a password reset link is on its way.');
@@ -88,7 +88,7 @@ export const Auth: React.FC<{ activationError?: string | null }> = ({ activation
       <section className="w-full max-w-md bg-white border border-[#E4E7EC] rounded-xl p-8 shadow-sm">
         <div className="mb-8"><Logo /></div>
         <h1 className="text-3xl font-semibold text-[#111827]">Plan, then focus on one task.</h1>
-        <p className="mt-2 text-[#667085]">Goalflow is an invite-only beta.</p>
+        <p className="mt-2 text-[#667085]">Tsurfing is an invite-only beta.</p>
 
         <nav className="mt-6 grid grid-cols-3 gap-1 rounded-lg bg-[#F2F4F7] p-1" aria-label="Account access">
           {([['login', 'Log in'], ['register', 'Register'], ['reset', 'Reset']] as const).map(([id, label]) => (

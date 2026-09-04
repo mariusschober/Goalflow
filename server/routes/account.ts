@@ -75,7 +75,7 @@ export const createAccountRouter = (
       });
       if (linkError) throw linkError;
       if (linked !== true) {
-        return response.status(409).json({ error: { code: 'telegram_identity_in_use', message: 'This Telegram identity is already linked to another Goalflow account.' } });
+        return response.status(409).json({ error: { code: 'telegram_identity_in_use', message: 'This Telegram identity is already linked to another Tsurfing account.' } });
       }
       return response.json({ linked: true, username: identity.username || null });
     } catch {

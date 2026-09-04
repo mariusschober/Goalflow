@@ -69,7 +69,7 @@ export const App = () => {
 
   const exchange = useCallback(async (): Promise<string> => {
     const initData = window.Telegram?.WebApp?.initData ?? "";
-    if (!initData) throw new Error("Open this page from the verified Goalflow Telegram bot.");
+    if (!initData) throw new Error("Open this page from the verified Tsurfing Telegram bot.");
     const response = await fetch(`${API}/session`, { method: "POST", headers: { authorization: `tma ${initData}` } });
     if (!response.ok) throw new Error(await errorMessage(response, "Telegram session could not be created."));
     const body = await response.json() as { token?: string };
@@ -93,7 +93,7 @@ export const App = () => {
         if (currentResponse.status === 401 || todayResponse.status === 401) sessionStorage.removeItem(sessionKey);
         throw new Error(await errorMessage(
           !currentResponse.ok ? currentResponse : todayResponse,
-          "Goalflow could not be loaded."
+          "Tsurfing could not be loaded."
         ));
       }
       const currentBody = await currentResponse.json() as { current: PublicTask | null; gate: string };
@@ -102,7 +102,7 @@ export const App = () => {
       setToday(todayBody.queue ?? []);
       setGate(currentBody.gate ?? todayBody.gate ?? "unknown");
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Goalflow could not be loaded.");
+      setError(reason instanceof Error ? reason.message : "Tsurfing could not be loaded.");
     } finally { setBusy(false); }
   }, [exchange, token]);
 
@@ -166,7 +166,7 @@ export const App = () => {
       {current ? <>
         <strong>{current.isFrog ? "🐸 " : ""}{current.title}</strong>
         <p className="muted">{current.scheduledTime ? `${current.scheduledTime} · ` : ""}{current.tags.map(tag => `#${tag}`).join(" ")}</p>
-        <button className="btn" onClick={() => window.Telegram?.WebApp?.openLink(`${window.location.origin}/?taskId=${current.id}&view=current`)}>Open in Goalflow</button>
+        <button className="btn" onClick={() => window.Telegram?.WebApp?.openLink(`${window.location.origin}/?taskId=${current.id}&view=current`)}>Open in Tsurfing</button>
       </> : <p className="muted">{gate === "empty" ? "Nothing scheduled for today." : `Planning required (${gate}).`}</p>}
     </section>
     <section className="card">

@@ -17,8 +17,8 @@ const manifestPath = await requireFile('manifest.webmanifest');
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 
 const exactFields = {
-  name: 'Goalflow',
-  short_name: 'Goalflow',
+  name: 'Tsurfing',
+  short_name: 'Tsurfing',
   display: 'standalone',
   start_url: '/',
   scope: '/'

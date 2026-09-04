@@ -50,7 +50,7 @@ export const AccountSecurity: React.FC<{ userEmail: string }> = ({ userEmail }) 
     setBusy(true);
     setMessage(null);
     try {
-      const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Goalflow' });
+      const { data, error } = await supabase.auth.mfa.enroll({ factorType: 'totp', friendlyName: 'Tsurfing' });
       if (error) throw error;
       setEnrollment({ factorId: data.id, qrCode: data.totp.qr_code, secret: data.totp.secret });
     } catch (error) {
@@ -196,7 +196,7 @@ export const AccountSecurity: React.FC<{ userEmail: string }> = ({ userEmail }) 
       {message && <p role="status" className="text-sm text-indigo-700 dark:text-indigo-300">{message}</p>}
       <div className="border-t border-gray-200 pt-5 dark:border-slate-700">
         <h3 className="text-base font-bold text-gray-900 dark:text-white">Active sessions</h3>
-        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Revoke refresh tokens on every device. Goalflow also rejects their existing access tokens immediately.</p>
+        <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">Revoke refresh tokens on every device. Tsurfing also rejects their existing access tokens immediately.</p>
         <button type="button" onClick={() => void signOutEverywhere()} disabled={busy} className="mt-3 rounded-lg border border-red-200 px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-900/20">Sign out all devices</button>
       </div>
       <div className="border-t border-gray-200 pt-5 dark:border-slate-700">

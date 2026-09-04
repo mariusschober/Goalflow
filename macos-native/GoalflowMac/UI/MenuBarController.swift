@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Combine
 import os
-private let menuBarLogger = Logger(subsystem: "com.mariusschober.goalflow.mac", category: "MenuBar")
+private let menuBarLogger = Logger(subsystem: "com.mariusschober.tsurfing.mac", category: "MenuBar")
 @MainActor
 final class MenuBarController: NSObject {
     private var statusItem: NSStatusItem!
@@ -19,7 +19,7 @@ final class MenuBarController: NSObject {
         self.taskProvider = taskProvider; self.store = store; self.clock = clock; self.viewModel = ExecutionViewModel(provider: taskProvider, store: store, clock: clock, dailyPlanStore: dailyPlanStore, goalStore: goalStore, trueNorthStore: trueNorthStore, amalgamStore: amalgamStore, gateEnabled: gateEnabled)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            let img = NSImage(systemSymbolName: "scope", accessibilityDescription: "Goalflow")
+            let img = NSImage(systemSymbolName: "scope", accessibilityDescription: "Tsurfing")
             img?.isTemplate = true
             button.image = img; button.imagePosition = .imageOnly
             button.action = #selector(togglePopover); button.target = self
@@ -153,7 +153,7 @@ final class MenuBarController: NSObject {
         let icon = NSImage(systemSymbolName: iconName, accessibilityDescription: nil)
         icon?.isTemplate = true
         button.image = icon
-        button.toolTip = task?.title ?? "Goalflow — no tasks planned"
+        button.toolTip = task?.title ?? "Tsurfing — no tasks planned"
         button.contentTintColor = baseColor
     }
 }

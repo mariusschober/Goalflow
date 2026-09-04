@@ -1,4 +1,5 @@
 import XCTest
+import ImageIO
 @testable import GoalflowMac
 
 private actor SyncRetryProbe {
@@ -52,14 +53,35 @@ final class HardeningTests: XCTestCase {
         let url = repositoryFile("macos-native/GoalflowMac/Resources/Info.plist")
         let data = try Data(contentsOf: url)
         let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        XCTAssertEqual(plist?["SUFeedURL"] as? String, "https://app.goalflow.com/appcast.xml")
-        XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "1.0.1")
-        XCTAssertEqual(plist?["CFBundleVersion"] as? String, "2")
+        XCTAssertEqual(plist?["SUFeedURL"] as? String, "https://app.tsurfing.com/appcast.xml")
+        XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "$(MARKETING_VERSION)")
+        XCTAssertEqual(plist?["CFBundleVersion"] as? String, "$(CURRENT_PROJECT_VERSION)")
     }
 
-    func test_app_icon_exists() {
-        let url = repositoryFile("macos-native/GoalflowMac/Resources/Assets.xcassets/AppIcon.appiconset/Contents.json")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: url.path))
+    func test_app_icon_exists() throws {
+        let directory = repositoryFile("macos-native/GoalflowMac/Resources/Assets.xcassets/AppIcon.appiconset")
+        let data = try Data(contentsOf: directory.appendingPathComponent("Contents.json"))
+        let contents = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let images = try XCTUnwrap(contents["images"] as? [[String: Any]])
+        XCTAssertEqual(images.count, 10)
+
+        let expectedDimensions = [
+            "AppIcon-16.png": 16,
+            "AppIcon-32.png": 32,
+            "AppIcon-64.png": 64,
+            "AppIcon-128.png": 128,
+            "AppIcon-256.png": 256,
+            "AppIcon.png": 512,
+            "AppIcon@2x.png": 1024
+        ]
+        XCTAssertEqual(Set(images.compactMap { $0["filename"] as? String }), Set(expectedDimensions.keys))
+        for (filename, expectedDimension) in expectedDimensions {
+            let iconURL = directory.appendingPathComponent(filename)
+            let source = try XCTUnwrap(CGImageSourceCreateWithURL(iconURL as CFURL, nil), "Missing or unreadable \(filename)")
+            let properties = try XCTUnwrap(CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any])
+            XCTAssertEqual(properties[kCGImagePropertyPixelWidth] as? Int, expectedDimension, filename)
+            XCTAssertEqual(properties[kCGImagePropertyPixelHeight] as? Int, expectedDimension, filename)
+        }
     }
 
     func test_store_bridge_all_shared_stores() throws {
@@ -354,7 +376,7 @@ final class HardeningTests: XCTestCase {
     func test_version_bump() throws {
         let url = repositoryFile("macos-native/GoalflowMac/Resources/Info.plist")
         let plist = try PropertyListSerialization.propertyList(from: Data(contentsOf: url), format: nil) as? [String: Any]
-        XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "1.0.1")
+        XCTAssertEqual(plist?["CFBundleShortVersionString"] as? String, "$(MARKETING_VERSION)")
     }
 
     func test_cloud_configuration_fails_closed_without_values() {
@@ -367,28 +389,28 @@ final class HardeningTests: XCTestCase {
     func test_cloud_configuration_rejects_server_secret_and_insecure_origin() {
         let serverSecret = ["sb", "secret", "must-never-be-in-a-client"].joined(separator: "_")
         let secretConfiguration = MacCloudConfiguration(
-            apiOrigin: "https://app.goalflow.test",
+            apiOrigin: "https://app.tsurfing.test",
             supabaseURL: "https://project.supabase.co",
             publishableKey: serverSecret
         )
         XCTAssertFalse(secretConfiguration.isCloudConfigured)
 
         let insecureConfiguration = MacCloudConfiguration(
-            apiOrigin: "http://app.goalflow.test",
+            apiOrigin: "http://app.tsurfing.test",
             supabaseURL: "https://project.supabase.co",
-            publishableKey: "sb_publishable_goalflow_test_only_value"
+            publishableKey: "sb_publishable_tsurfing_test_only_value"
         )
         XCTAssertFalse(insecureConfiguration.isCloudConfigured)
     }
 
     func test_cloud_configuration_accepts_https_and_publishable_key() {
         let configuration = MacCloudConfiguration(
-            apiOrigin: "https://app.goalflow.test/",
+            apiOrigin: "https://app.tsurfing.test/",
             supabaseURL: "https://project.supabase.co/",
-            publishableKey: "sb_publishable_goalflow_test_only_value"
+            publishableKey: "sb_publishable_tsurfing_test_only_value"
         )
         XCTAssertTrue(configuration.isCloudConfigured)
-        XCTAssertEqual(configuration.apiOrigin?.absoluteString, "https://app.goalflow.test")
+        XCTAssertEqual(configuration.apiOrigin?.absoluteString, "https://app.tsurfing.test")
         XCTAssertEqual(configuration.supabaseURL?.absoluteString, "https://project.supabase.co")
     }
 
@@ -404,14 +426,14 @@ final class HardeningTests: XCTestCase {
         }
 
         let anonConfiguration = MacCloudConfiguration(
-            apiOrigin: "https://app.goalflow.test",
+            apiOrigin: "https://app.tsurfing.test",
             supabaseURL: "https://project.supabase.co",
             publishableKey: try legacyKey(role: "anon")
         )
         XCTAssertTrue(anonConfiguration.isCloudConfigured)
 
         let serverConfiguration = MacCloudConfiguration(
-            apiOrigin: "https://app.goalflow.test",
+            apiOrigin: "https://app.tsurfing.test",
             supabaseURL: "https://project.supabase.co",
             publishableKey: try legacyKey(role: "service_role")
         )
@@ -419,10 +441,10 @@ final class HardeningTests: XCTestCase {
     }
 
     func test_auth_callback_requires_exact_custom_url() {
-        XCTAssertTrue(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://auth/callback?code=one&state=two")!))
-        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://auth/other?code=one&state=two")!))
-        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://evil/callback?code=one&state=two")!))
-        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "goalflow://auth/callback?code=one#token")!))
+        XCTAssertTrue(SupabaseAuthService.isExpectedCallbackURL(URL(string: "tsurfing://auth/callback?code=one&state=two")!))
+        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "tsurfing://auth/other?code=one&state=two")!))
+        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "tsurfing://evil/callback?code=one&state=two")!))
+        XCTAssertFalse(SupabaseAuthService.isExpectedCallbackURL(URL(string: "tsurfing://auth/callback?code=one#token")!))
     }
 
     func test_pkce_challenge_matches_rfc7636_vector() {

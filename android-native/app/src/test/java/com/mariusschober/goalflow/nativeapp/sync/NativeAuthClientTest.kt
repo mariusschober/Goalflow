@@ -65,7 +65,7 @@ class NativeAuthClientTest {
 
         expectAuthFailure {
             client.acceptCallback(Intent().apply {
-                data = Uri.parse("goalflow://auth/callback?state=state123#access_token=unsafe&refresh_token=unsafe")
+                data = Uri.parse("tsurfing://auth/callback?state=state123#access_token=unsafe&refresh_token=unsafe")
             })
         }
 
@@ -422,7 +422,7 @@ class NativeAuthClientTest {
     private companion object {
         const val SUPABASE_URL = "https://project-ref.supabase.co"
         const val PUBLIC_KEY = "sb_publishable_goalflow_test"
-        const val AUTH_REDIRECT = "goalflow://auth/callback"
+        const val AUTH_REDIRECT = "tsurfing://auth/callback"
         const val USER_ID = "00000000-0000-4000-8000-000000000001"
         const val FACTOR_ID = "00000000-0000-4000-8000-000000000002"
         const val CHALLENGE_ID = "00000000-0000-4000-8000-000000000003"

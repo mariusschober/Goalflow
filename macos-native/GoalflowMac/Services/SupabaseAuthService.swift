@@ -300,10 +300,11 @@ final class SupabaseAuthService: @unchecked Sendable {
     }
 
     static func isExpectedCallbackURL(_ url: URL) -> Bool {
-        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return false }
-        return components.scheme?.lowercased() == "goalflow"
-            && components.host?.lowercased() == "auth"
-            && components.path == "/callback"
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let expected = URLComponents(string: MacCloudConfiguration.authRedirectURL) else { return false }
+        return components.scheme?.lowercased() == expected.scheme?.lowercased()
+            && components.host?.lowercased() == expected.host?.lowercased()
+            && components.path == expected.path
             && components.user == nil
             && components.password == nil
             && components.port == nil

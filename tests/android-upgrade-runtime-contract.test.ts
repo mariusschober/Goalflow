@@ -68,7 +68,13 @@ describe('installed Android upgrade instrumentation contract', () => {
     expect(launchCurrent).toBeGreaterThan(installUpgrade);
   });
 
-  it('requires a live resumed process and visible Goalflow semantics for every APK launch', () => {
+  it('repackages only the historical schema fixture under the undistributed Tsurfing package', () => {
+    expect(workflow).toContain('Build preserved v2 schema upgrade fixture under Tsurfing package (TEST-ONLY)');
+    expect(workflow).toContain('applicationId "com.mariusschober.tsurfing"');
+    expect(upgrade).toContain('no Goalflow package was distributed');
+  });
+
+  it('requires a live resumed process and visible Tsurfing semantics for every APK launch', () => {
     expect(launchVerifier).toContain('shell am force-stop "$package_name"');
     expect(launchVerifier).toContain('shell pidof "$package_name"');
     expect(launchVerifier).toContain('shell dumpsys activity activities');

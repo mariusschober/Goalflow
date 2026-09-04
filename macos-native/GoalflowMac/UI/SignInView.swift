@@ -19,7 +19,7 @@ struct SignInView: View {
                     Button(action: { close() }) { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain)
                 }
             }
-            Text("Enter your approved Goalflow email to receive a device-bound PKCE sign-in link.")
+            Text("Enter your approved Tsurfing email to receive a device-bound PKCE sign-in link.")
                 .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
 
             HStack(spacing: 8) {
@@ -64,7 +64,7 @@ struct SignInView: View {
         isSending = true; defer { isSending = false }
         do {
             try await auth.requestMagicLink(email: email)
-            message = "Link sent — check email, then click to return via goalflow://auth/callback"
+            message = "Link sent — check email, then click to return via tsurfing://auth/callback"
         } catch {
             message = "Failed: \(error.localizedDescription)"
         }

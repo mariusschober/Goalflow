@@ -3,7 +3,7 @@
 `railway.ts` is the source-controlled Railway infrastructure definition. The
 retired `railway.json` configuration is intentionally absent.
 
-Use Railway CLI 5.42.1 or newer. Link the `goalflow` project, select the
+Use Railway CLI 5.42.1 or newer. Link the `Tsurfing` project, select the
 persistent staging environment, inspect the plan, and apply it:
 
 ```sh

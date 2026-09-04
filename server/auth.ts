@@ -84,10 +84,10 @@ export const createAuthMiddleware = (
       profile = updatedProfile;
     }
     if (!profile || profile.status !== "active") {
-      response.status(403).json({ error: { code: "account_inactive", message: "This Goalflow account is not active." } }); return;
+      response.status(403).json({ error: { code: "account_inactive", message: "This Tsurfing account is not active." } }); return;
     }
     if (profile.role === "owner" && config.OWNER_USER_ID && data.user.id !== config.OWNER_USER_ID) {
-      response.status(403).json({ error: { code: "account_inactive", message: "This Goalflow account is not active." } }); return;
+      response.status(403).json({ error: { code: "account_inactive", message: "This Tsurfing account is not active." } }); return;
     }
     const user: AuthenticatedUser = {
       id: data.user.id,

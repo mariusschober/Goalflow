@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "web": {
     "databaseName": "GoalflowDB",
     "activeDatabaseKey": "goalflow_active_database_v2",
@@ -7,13 +7,13 @@
     "deviceIdKey": "goalflow-device-id"
   },
   "android": {
-    "capacitorApplicationId": "com.mariusschober.goalflow",
+    "capacitorApplicationId": "com.mariusschober.tsurfing",
     "legacyNamespace": "com.mariusschober.goalflow",
     "nativeNamespace": "com.mariusschober.goalflow.nativeapp",
-    "nativeApplicationId": "com.mariusschober.goalflow",
+    "nativeApplicationId": "com.mariusschober.tsurfing",
     "nativeDatabaseName": "goalflow-native.db",
-    "urlScheme": "goalflow",
-    "authRedirectUri": "goalflow://auth/callback",
+    "urlScheme": "tsurfing",
+    "authRedirectUri": "tsurfing://auth/callback",
     "securePreferences": "goalflow-secure-session",
     "keystoreAlias": "goalflow_native_session"
   },

@@ -103,7 +103,7 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     private let decoder = JSONDecoder()
 
     init(
-        service: String = "com.mariusschober.goalflow.mac",
+        service: String = "tsurfing",
         sessionAccount: String = "session",
         pendingAccount: String = "pending-pkce"
     ) {
@@ -286,7 +286,7 @@ enum KeychainError: Error, LocalizedError {
         case .readBackMismatch: return "Secure storage did not verify its write."
         case .corruptSession: return "Secure session data is damaged. Local tasks were not changed."
         case .corruptPendingRequest: return "The pending sign-in request is damaged. Request a new link."
-        case .invalidSession: return "The authentication response did not contain a valid Goalflow session."
+        case .invalidSession: return "The authentication response did not contain a valid Tsurfing session."
         case .noSession: return "Sign in to synchronize. Local changes remain on this Mac."
         case .noRefreshConfig: return "Session refresh is not safely configured."
         case .transient: return "Session refresh is temporarily unavailable. Local changes remain pending."

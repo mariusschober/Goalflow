@@ -85,7 +85,7 @@ export const createEmailAuthRouter = (
       const { data, error } = await verifier.auth.getUser(token);
       const user = data.user;
       if (error || !user?.email || !user.email_confirmed_at) {
-        response.status(401).json({ error: { code: 'email_not_verified', message: 'Verify this email address before activating Goalflow.' } });
+        response.status(401).json({ error: { code: 'email_not_verified', message: 'Verify this email address before activating Tsurfing.' } });
         return;
       }
       const parsedActivationId = activationId.safeParse(user.user_metadata?.goalflow_beta_activation_id);

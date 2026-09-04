@@ -44,7 +44,7 @@ describe('Android internal beta workflow', () => {
     expect(workflow).toContain('sha256sum --check "$apk.sha256"');
     expect(workflow).toContain('branch=integration/beta');
     expect(workflow).toContain('channel=internal-beta');
-    expect(workflow).toContain('goalflow-native-signed-internal-beta');
+    expect(workflow).toContain('tsurfing-native-signed-internal-beta');
     expect(workflow).not.toContain('softprops/action-gh-release');
     expect(workflow.match(/set -euo pipefail/g)?.length).toBeGreaterThanOrEqual(5);
   });

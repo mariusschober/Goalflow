@@ -1,7 +1,7 @@
 {
-  "name": "goalflow",
+  "name": "tsurfing",
   "private": true,
-  "version": "0.3.0-tranche3",
+  "version": "0.4.0-beta.1",
   "type": "module",
   "engines": {
     "node": "22.x"

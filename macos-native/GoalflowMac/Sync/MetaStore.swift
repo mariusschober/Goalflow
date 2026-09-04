@@ -225,7 +225,7 @@ final class SyncMetaStore: @unchecked Sendable {
               !localFileURL.lastPathComponent.isEmpty,
               !localFileURL.lastPathComponent.contains("/"),
               Self.allowedLocalWalKeys.contains(localWalKey) else {
-            throw SyncError.validation("The local persistence target is not part of the Goalflow workspace.")
+            throw SyncError.validation("The local persistence target is not part of the Tsurfing workspace.")
         }
         return DurableLocalWrite(fileName: localFileURL.lastPathComponent, walKey: localWalKey, data: data)
     }
@@ -465,8 +465,8 @@ enum SyncError: Error, LocalizedError {
         case .writeFailed(let s): return "Sync meta write failed \(s)"
         case .readBackMismatch: return "Sync meta read-back mismatch"
         case .corruptStorage(let message): return message
-        case .bindingRequired: return "Confirm which Goalflow account owns this local workspace before synchronization. Local changes remain pending."
-        case .accountMismatch: return "This local workspace belongs to a different Goalflow account. Synchronization is blocked; local changes were not modified."
+        case .bindingRequired: return "Confirm which Tsurfing account owns this local workspace before synchronization. Local changes remain pending."
+        case .accountMismatch: return "This local workspace belongs to a different Tsurfing account. Synchronization is blocked; local changes were not modified."
         }
     }
 }

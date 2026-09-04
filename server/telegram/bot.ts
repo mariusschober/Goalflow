@@ -405,7 +405,7 @@ export const createTelegramProcessor = (
   if (!message || !from) return;
   const identity = await identityFor(database, from.id);
   if (!identity?.bot_access_granted) {
-    await send(config, message.chat.id, `Link this Telegram account in Goalflow first: ${config.APP_ORIGIN}`);
+    await send(config, message.chat.id, `Link this Telegram account in Tsurfing first: ${config.APP_ORIGIN}`);
     return;
   }
   const { data: updatedIdentity, error: identityUpdateError } = await database.from("telegram_identities")
@@ -432,7 +432,7 @@ export const createTelegramProcessor = (
     if (action === "undo") {
       const expected = Number(revisionText);
       if (!UUID_PATTERN.test(id) || extra.length || !Number.isSafeInteger(expected) || expected <= 0) {
-        await answerCallback(config, callback.id, "Task changed; open Goalflow before removing it."); return;
+        await answerCallback(config, callback.id, "Task changed; open Tsurfing before removing it."); return;
       }
       const { data: task, error: taskError } = await database.from("tasks")
         .select("id,user_id,source,status,revision,deleted_at").eq("id", id).eq("user_id", userId).maybeSingle();
@@ -504,7 +504,7 @@ export const createTelegramProcessor = (
   const text = message.text?.trim(); if (!text) return;
   const [commandWithBot, ...parts] = text.split(/\s+/); const command = commandWithBot.toLowerCase().split("@")[0];
   if (command === "/start" || command === "/help") {
-    await send(config, message.chat.id, "<b>Goalflow</b>\n/current - one task\n/today - today's ordered queue\n/add Task title - capture\n/done - complete Current\n/skip - rotate Current\nSend plain text or a voice note to capture quickly."); return;
+    await send(config, message.chat.id, "<b>Tsurfing</b>\n/current - one task\n/today - today's ordered queue\n/add Task title - capture\n/done - complete Current\n/skip - rotate Current\nSend plain text or a voice note to capture quickly."); return;
   }
   if (command === "/current" || command === "/today" || command === "/done" || command === "/skip") {
     const commandMutationId = command === "/done"

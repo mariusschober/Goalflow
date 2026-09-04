@@ -20,7 +20,7 @@ import com.mariusschober.goalflow.nativeapp.sync.NativeSyncScheduler
 import com.mariusschober.goalflow.nativeapp.ui.GoalflowRoot
 import kotlinx.coroutines.launch
 
-const val GOALFLOW_CAPTURE_ACTION = "com.mariusschober.goalflow.CAPTURE"
+const val GOALFLOW_CAPTURE_ACTION = "com.mariusschober.tsurfing.CAPTURE"
 
 class MainActivity : ComponentActivity() {
     private lateinit var authClient: NativeAuthClient

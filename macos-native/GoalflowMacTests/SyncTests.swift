@@ -861,7 +861,7 @@ final class HostedCrossClientSyncTests: XCTestCase {
         XCTAssertEqual(session.userId, expectedUserId)
 
         let keychain = KeychainSessionStore(
-            service: "com.mariusschober.goalflow.mac.hosted-test.\(UUID().uuidString.lowercased())"
+            service: "tsurfing.hosted-test.\(UUID().uuidString.lowercased())"
         )
         defer { try? keychain.clear() }
         try keychain.save(session)

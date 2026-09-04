@@ -71,7 +71,7 @@ final class ExecutionViewModel: ObservableObject {
     private var holdController: CompletionHoldController?
     private var holdTimer: AnyCancellable?
     private var pendingCompletedId: String?
-    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), calendarService: any CalendarCollisionService = NoopCalendarService(), breakdownGateway: any BreakdownGateway = StubBreakdownGateway(), gateEnabled: Bool = false, appOrigin: String = "https://app.goalflow.com", syncMetaStore: SyncMetaStore? = nil, syncEngine: SyncEngine? = nil, authService: SupabaseAuthService = .shared) {
+    init(provider: DemoCurrentTaskProvider, store: any FocusSessionStore, clock: any Clock = SystemClock(), sound: any SoundGateway = NoopSoundGateway(), breakStore: BreakSessionStore = BreakSessionStore(), dailyPlanStore: DailyPlanStore = DailyPlanStore(), goalStore: GoalStore = GoalStore(), trueNorthStore: TrueNorthStore = TrueNorthStore(), amalgamStore: AmalgamStore = AmalgamStore(), calendarService: any CalendarCollisionService = NoopCalendarService(), breakdownGateway: any BreakdownGateway = StubBreakdownGateway(), gateEnabled: Bool = false, appOrigin: String = "https://app.tsurfing.com", syncMetaStore: SyncMetaStore? = nil, syncEngine: SyncEngine? = nil, authService: SupabaseAuthService = .shared) {
         self.provider = provider; self.store = store; self.clock = clock; self.sound = sound; self.breakStore = breakStore
         self.dailyPlanStore = dailyPlanStore; self.goalStore = goalStore; self.trueNorthStore = trueNorthStore; self.amalgamStore = amalgamStore
         self.calendarService = calendarService; self.breakdownGateway = breakdownGateway
@@ -671,7 +671,7 @@ struct ExecutionPanelView: View {
         .padding(.vertical, 8)
         .background(Color.orange.opacity(0.08))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Goalflow needs attention. \(message)")
+        .accessibilityLabel("Tsurfing needs attention. \(message)")
     }
     private var header: some View {
         HStack(spacing: 8) {
@@ -902,7 +902,7 @@ struct ExecutionPanelView: View {
                 }.buttonStyle(.plain)
             }
             if !(vm.isActive || vm.isPaused || vm.isOvertime) {
-                Text("Tap ACTION to start. The timer counts from \(task.durationMinutes) minutes — it will persist if Goalflow restarts. Pause is low friction; overtime counts separately.")
+                Text("Tap ACTION to start. The timer counts from \(task.durationMinutes) minutes — it will persist if Tsurfing restarts. Pause is low friction; overtime counts separately.")
                     .font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary).lineLimit(3)
             } else if vm.isPaused {
                 Text("Paused — elapsed frozen. Resume to continue, or add time. Hold to complete (Frog 5s, others 3s).").font(.system(size: 11, weight: .regular)).foregroundStyle(.secondary)
@@ -1016,7 +1016,7 @@ struct ExecutionPanelView: View {
     }
     private var footer: some View {
         HStack {
-            Text("Goalflow • Execution").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.tertiary)
+            Text("Tsurfing • Execution").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.tertiary)
             Spacer()
             if vm.queueCount > 0 {
                 Text("\(vm.completedTodayCount) / \(vm.completedTodayCount + vm.queueCount)").font(.system(size: 10, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
