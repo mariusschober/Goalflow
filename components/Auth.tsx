@@ -23,9 +23,7 @@ export const Auth: React.FC<{ activationError?: string | null }> = ({ activation
   const [pending, setPending] = useState(false);
   const [captchaToken, setCaptchaToken] = useState('');
   const [captchaRevision, setCaptchaRevision] = useState(0);
-  const [resendAt, setResendAt] = useState(restoredRequest?.expiresAt
-    ? Math.min(restoredRequest.expiresAt, Date.now() + 60_000)
-    : 0);
+  const [resendAt, setResendAt] = useState(restoredRequest?.resendAt ?? 0);
   const [, setClock] = useState(Date.now());
   const telegramEnabled = import.meta.env.VITE_TELEGRAM_ENABLED === 'true';
   const captchaRequired = Boolean(import.meta.env.VITE_TURNSTILE_SITE_KEY);

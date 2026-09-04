@@ -65,6 +65,27 @@ afterEach(() => {
 });
 
 describe('web typed email OTP binding', () => {
+  it('restores the exact server-issued resend deadline after a restart', async () => {
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({
+      accepted: true,
+      attemptToken: ATTEMPT_TOKEN,
+      expiresInSeconds: 600,
+      resendAfterSeconds: 60
+    }, { status: 202 })));
+    const { pendingEmailOtpRequest, requestEmailOtp } = await import('./authService');
+
+    await requestEmailOtp('person@example.invalid', 'sign_in', '', 'captcha-token');
+
+    expect(pendingEmailOtpRequest()).toEqual({
+      email: 'person@example.invalid',
+      purpose: 'sign_in',
+      expiresAt: 1_600_000,
+      resendAt: 1_060_000
+    });
+    now.mockRestore();
+  });
+
   it('does not let a pre-existing session bypass code verification', async () => {
     const oldSession = session(OLD_SESSION_ID);
     const otpSession = session(OTP_SESSION_ID);

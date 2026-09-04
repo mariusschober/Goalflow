@@ -22,6 +22,7 @@ interface PendingEmailOtpAttempt {
   email: string;
   purpose: EmailOtpPurpose;
   expiresAt: number;
+  resendAt: number;
   verifiedUserId?: string;
   verifiedSessionId?: string;
 }
@@ -192,7 +193,8 @@ export const requestEmailOtp = async (
     attemptToken: preflightBody.attemptToken,
     email: normalizedEmail,
     purpose,
-    expiresAt: Date.now() + expiresInSeconds * 1_000
+    expiresAt: Date.now() + expiresInSeconds * 1_000,
+    resendAt: Date.now() + resendAfterSeconds * 1_000
   };
   sessionStorage.setItem(emailOtpAttemptStorageKey, JSON.stringify(pending));
   return { expiresInSeconds, resendAfterSeconds };
@@ -208,6 +210,7 @@ const pendingEmailOtpAttempt = (): PendingEmailOtpAttempt | null => {
       || typeof value.email !== 'string'
       || (value.purpose !== 'sign_in' && value.purpose !== 'activation')
       || typeof value.expiresAt !== 'number'
+      || typeof value.resendAt !== 'number'
       || (hasVerifiedIdentity && (
         !value.verifiedUserId?.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
         || !value.verifiedSessionId?.match(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i)
@@ -222,10 +225,15 @@ const pendingEmailOtpAttempt = (): PendingEmailOtpAttempt | null => {
   }
 };
 
-export const pendingEmailOtpRequest = (): Pick<PendingEmailOtpAttempt, 'email' | 'purpose' | 'expiresAt'> | null => {
+export const pendingEmailOtpRequest = (): Pick<PendingEmailOtpAttempt, 'email' | 'purpose' | 'expiresAt' | 'resendAt'> | null => {
   const pending = pendingEmailOtpAttempt();
   if (!pending || pending.expiresAt <= Date.now()) return null;
-  return { email: pending.email, purpose: pending.purpose, expiresAt: pending.expiresAt };
+  return {
+    email: pending.email,
+    purpose: pending.purpose,
+    expiresAt: pending.expiresAt,
+    resendAt: pending.resendAt
+  };
 };
 
 const verifiedSessionIdentity = (session: Session): { userId: string; sessionId: string } | null => {
