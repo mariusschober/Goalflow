@@ -29,7 +29,9 @@ export default defineRailway(ctx => {
     build: {
       builder: 'RAILPACK',
       buildEnvironment: 'V3',
-      buildCommand: 'npm ci && npm run build'
+      // Railpack installs the locked dependencies before invoking this step.
+      // Running npm ci again races its mounted node_modules cache on Railway.
+      buildCommand: 'npm run build'
     },
     start: 'npm start',
     healthcheck: '/api/v1/health/ready',
@@ -56,7 +58,7 @@ export default defineRailway(ctx => {
     build: {
       builder: 'RAILPACK',
       buildEnvironment: 'V3',
-      buildCommand: 'npm ci && npm run build:server'
+      buildCommand: 'npm run build:server'
     },
     start: 'npm run maintenance',
     env: {

@@ -54,7 +54,11 @@ describe('Railway beta infrastructure contract', () => {
       restartPolicyType: 'ON_FAILURE',
       numReplicas: 1
     });
+    expect(web.build).toMatchObject({ buildCommand: 'npm run build' });
+    expect(web.build?.buildCommand).not.toContain('npm ci');
     expect(maintenance.kind).toBe('github');
+    expect(maintenance.build).toMatchObject({ buildCommand: 'npm run build:server' });
+    expect(maintenance.build?.buildCommand).not.toContain('npm ci');
     expect(maintenance.deploy).toMatchObject({
       startCommand: 'npm run maintenance',
       cronSchedule: '0 2 * * *',
