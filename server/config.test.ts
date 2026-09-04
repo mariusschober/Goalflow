@@ -47,6 +47,12 @@ describe("production environment contract", () => {
     expect(() => readConfig({ TELEGRAM_MINI_SESSION_TTL_SECONDS: "601" })).toThrow();
   });
 
+  it("accepts only an exact full release revision when Railway provides one", () => {
+    expect(readConfig({ RAILWAY_GIT_COMMIT_SHA: "a".repeat(40) }).RAILWAY_GIT_COMMIT_SHA)
+      .toBe("a".repeat(40));
+    expect(() => readConfig({ RAILWAY_GIT_COMMIT_SHA: "abc123" })).toThrow();
+  });
+
   it("supports legacy server key names during migration but prefers current opaque keys", () => {
     const legacy = readConfig({
       ...productionEnvironment(),

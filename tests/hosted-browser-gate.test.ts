@@ -6,6 +6,7 @@ describe('hosted browser release gate', () => {
   const hostedConfig = fs.readFileSync('playwright.hosted.config.ts', 'utf8');
   const journey = fs.readFileSync('tests/e2e/hosted-staging.spec.ts', 'utf8');
   const hostedAuth = fs.readFileSync('tests/e2e/hosted-auth.ts', 'utf8');
+  const protocolJourney = fs.readFileSync('scripts/test-hosted-staging.ts', 'utf8');
   const workflow = fs.readFileSync('.github/workflows/ci.yml', 'utf8');
 
   it('cannot run against the local synthetic Playwright server', () => {
@@ -52,5 +53,12 @@ describe('hosted browser release gate', () => {
     expect(workflow).toContain('name: hosted-browser-diagnostics');
     expect(workflow).toContain('path: test-results');
     expect(workflow).toContain('if-no-files-found: error');
+  });
+
+  it('waits for Railway to serve the exact commit under test', () => {
+    expect(workflow).toContain('GOALFLOW_EXPECTED_RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}');
+    expect(protocolJourney).toContain("response.headers.get('x-tsurfing-revision')");
+    expect(protocolJourney).toContain('await waitForExactDeployment()');
+    expect(protocolJourney).toContain('response.releaseSha === expectedReleaseSha');
   });
 });

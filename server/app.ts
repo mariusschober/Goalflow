@@ -118,7 +118,16 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
     })
   }));
 
-  app.get("/api/v1/health/live", (_request, response) => response.json({ status: "alive" }));
+  const exposeReleaseRevision = (response: express.Response): void => {
+    if (config.RAILWAY_GIT_COMMIT_SHA) {
+      response.setHeader("x-tsurfing-revision", config.RAILWAY_GIT_COMMIT_SHA.toLowerCase());
+    }
+  };
+
+  app.get("/api/v1/health/live", (_request, response) => {
+    exposeReleaseRevision(response);
+    response.json({ status: "alive" });
+  });
   const ready = async (_request: express.Request, response: express.Response) => {
     let isReady = false;
     try {
@@ -126,6 +135,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
     } catch {
       isReady = false;
     }
+    exposeReleaseRevision(response);
     response.status(isReady ? 200 : 503).json({ status: isReady ? "ready" : "not_ready" });
   };
   app.get("/api/v1/health/ready", ready);

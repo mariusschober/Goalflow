@@ -18,6 +18,7 @@ const config = () => readConfig({
   SUPABASE_PUBLISHABLE_KEY: "sb_publishable_test_value",
   SUPABASE_SECRET_KEY: "sb_secret_test_value",
   OWNER_USER_ID: "00000000-0000-4000-8000-000000000001",
+  RAILWAY_GIT_COMMIT_SHA: "a".repeat(40),
   LOG_LEVEL: "error"
 });
 
@@ -41,7 +42,9 @@ describe("public server boundary", () => {
     const legacy = await fetch(`${origin}/api/v1/health`);
     expect(await live.json()).toEqual({ status: "alive" });
     expect(live.status).toBe(200);
+    expect(live.headers.get("x-tsurfing-revision")).toBe("a".repeat(40));
     expect(ready.status).toBe(503);
+    expect(ready.headers.get("x-tsurfing-revision")).toBe("a".repeat(40));
     expect(await ready.json()).toMatchObject({ status: "not_ready" });
     expect(legacy.status).toBe(503);
   });
@@ -50,6 +53,7 @@ describe("public server boundary", () => {
     const { origin } = await serve(true);
     const response = await fetch(`${origin}/api/v1/health/ready`);
     expect(response.status).toBe(200);
+    expect(response.headers.get("x-tsurfing-revision")).toBe("a".repeat(40));
     expect(await response.json()).toEqual({ status: "ready" });
   });
 

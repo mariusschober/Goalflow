@@ -451,9 +451,10 @@ jobs:
     needs: [verify, migrations]
     if: always()
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       CANDIDATE_REF: ${{ github.event_name == 'pull_request' && github.base_ref || github.ref_name }}
+      GOALFLOW_EXPECTED_RELEASE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
       GOALFLOW_HOSTED_TEST_CONFIRM: staging
       GOALFLOW_STAGING_APP_ORIGIN: ${{ secrets.GOALFLOW_STAGING_APP_ORIGIN }}
       GOALFLOW_STAGING_SUPABASE_URL: ${{ secrets.GOALFLOW_STAGING_SUPABASE_URL }}

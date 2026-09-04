@@ -16,6 +16,7 @@ const environmentSchema = z.object({
   CORS_ORIGINS: z.string().default(""),
   OWNER_EMAIL: z.string().email().default("owner@tsurfing.local"),
   OWNER_USER_ID: optionalString(z.string().uuid()),
+  RAILWAY_GIT_COMMIT_SHA: optionalString(z.string().regex(/^[0-9a-f]{40}$/i)),
   ENABLE_LOCAL_DEMO: enabledFlag,
   SUPABASE_URL: optionalString(z.string().url()),
   // Opaque sb_publishable_/sb_secret_ keys are the current Supabase convention.

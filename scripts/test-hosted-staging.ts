@@ -13,7 +13,8 @@ const requiredEnvironment = [
   'GOALFLOW_STAGING_USER_A_ID',
   'GOALFLOW_STAGING_USER_B_EMAIL',
   'GOALFLOW_STAGING_USER_B_PASSWORD',
-  'GOALFLOW_STAGING_USER_B_ID'
+  'GOALFLOW_STAGING_USER_B_ID',
+  'GOALFLOW_EXPECTED_RELEASE_SHA'
 ] as const;
 
 const getEnvironment = (name: typeof requiredEnvironment[number]): string => {
@@ -31,6 +32,8 @@ const environment = Object.fromEntries(requiredEnvironment.map(name => [name, ge
 const appOrigin = environment.GOALFLOW_STAGING_APP_ORIGIN.replace(/\/$/, '');
 const supabaseUrl = environment.GOALFLOW_STAGING_SUPABASE_URL.replace(/\/$/, '');
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const releaseShaPattern = /^[0-9a-f]{40}$/i;
+const expectedReleaseSha = environment.GOALFLOW_EXPECTED_RELEASE_SHA.toLowerCase();
 
 for (const [label, raw] of [['application', appOrigin], ['Supabase', supabaseUrl]] as const) {
   const url = new URL(raw);
@@ -42,6 +45,7 @@ assert.match(environment.GOALFLOW_STAGING_USER_A_ID, uuidPattern, 'User A expect
 assert.match(environment.GOALFLOW_STAGING_USER_B_ID, uuidPattern, 'User B expected ID is invalid');
 assert.notEqual(environment.GOALFLOW_STAGING_USER_A_ID, environment.GOALFLOW_STAGING_USER_B_ID,
   'Hosted identities must be distinct');
+assert.match(expectedReleaseSha, releaseShaPattern, 'Expected hosted release SHA is invalid');
 
 const asRecord = (value: unknown, message: string): JsonRecord => {
   assert(value && typeof value === 'object' && !Array.isArray(value), message);
@@ -49,11 +53,18 @@ const asRecord = (value: unknown, message: string): JsonRecord => {
 };
 
 const requestDurations: number[] = [];
+interface HostedResponse {
+  status: number;
+  body: unknown;
+  requestId: string | null;
+  releaseSha: string | null;
+}
+
 const request = async (
   path: string,
   accessToken?: string,
   init: RequestInit = {}
-): Promise<{ status: number; body: unknown; requestId: string | null }> => {
+): Promise<HostedResponse> => {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
   const headers = new Headers(init.headers);
@@ -69,19 +80,45 @@ const request = async (
       try { body = JSON.parse(text); }
       catch { throw new Error(`Hosted endpoint returned non-JSON content at ${path}`); }
     }
-    return { status: response.status, body, requestId: response.headers.get('x-request-id') };
+    return {
+      status: response.status,
+      body,
+      requestId: response.headers.get('x-request-id'),
+      releaseSha: response.headers.get('x-tsurfing-revision')?.toLowerCase() ?? null
+    };
   } finally {
     clearTimeout(timeout);
   }
 };
 
 const expectStatus = <T extends number>(
-  response: { status: number; body: unknown; requestId: string | null },
+  response: HostedResponse,
   status: T,
   label: string
 ) => {
   assert.equal(response.status, status, `${label} returned HTTP ${response.status}`);
   return response;
+};
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise(resolve => setTimeout(resolve, milliseconds));
+
+const waitForExactDeployment = async (): Promise<void> => {
+  const deadline = Date.now() + 8 * 60_000;
+  let lastObservation = 'no response';
+  while (Date.now() < deadline) {
+    try {
+      const response = await request('/api/v1/health/ready');
+      lastObservation = `HTTP ${response.status}, revision ${response.releaseSha ?? 'missing'}`;
+      if (response.status === 200 && response.releaseSha === expectedReleaseSha) return;
+    } catch (error) {
+      lastObservation = error instanceof Error ? error.name : 'request failure';
+    }
+    await delay(5_000);
+  }
+  throw new Error(
+    `Staging did not serve exact release ${expectedReleaseSha} within eight minutes; last observation: ${lastObservation}`
+  );
 };
 
 const client = (): SupabaseClient => createClient(
@@ -178,7 +215,7 @@ const findRecord = (records: JsonRecord[], entityId: string): JsonRecord | undef
   records.find(record => record.entityId === entityId);
 
 const expectSafeFailure = (
-  response: { status: number; body: unknown; requestId: string | null },
+  response: HostedResponse,
   label: string
 ) => {
   assert(response.status >= 400, `${label} unexpectedly succeeded`);
@@ -191,8 +228,11 @@ const expectSafeFailure = (
 };
 
 const run = async () => {
-  expectStatus(await request('/api/v1/health/live'), 200, 'Liveness');
-  expectStatus(await request('/api/v1/health/ready'), 200, 'Readiness');
+  await waitForExactDeployment();
+  const live = expectStatus(await request('/api/v1/health/live'), 200, 'Liveness');
+  const ready = expectStatus(await request('/api/v1/health/ready'), 200, 'Readiness');
+  assert.equal(live.releaseSha, expectedReleaseSha, 'Liveness came from a different release');
+  assert.equal(ready.releaseSha, expectedReleaseSha, 'Readiness came from a different release');
 
   const databaseA = client();
   const databaseASecond = client();
