@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let supabaseAuth = SupabaseAuthService.shared
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme == "goalflow" && url.host == "auth" && url.path == "/callback" {
+        for url in urls where url.scheme == "tsurfing" && url.host == "auth" && url.path == "/callback" {
             Task {
                 do {
                     _ = try await supabaseAuth.handleCallback(url: url)

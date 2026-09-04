@@ -57,7 +57,9 @@
 		9B3298C59090695F8940594A /* StoreBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0E49AF6CC845F30FF52FE51 /* StoreBridge.swift */; };
 		9BAC7B5DA76027A6D8426517 /* CaptureParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3CC5C7FC26EAE04E420212F /* CaptureParser.swift */; };
 		A58769B3DE5C61BDF3A3910C /* GoalStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 79ED08A437E51251C7408C96 /* GoalStore.swift */; };
+		AA73FE1F1245A83E4BD39488 /* NativeCaptchaView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4960E022E1A9C030175CE40C /* NativeCaptchaView.swift */; };
 		B1A52A598B41671F499F5869 /* GoalflowMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D49A5FF1F8390D9931C0F0F9 /* GoalflowMacApp.swift */; };
+		B36000BC49EA4E882DE39EB3 /* EmailOtpAuthTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 75FD4CE9AF7B05F82DC4E829 /* EmailOtpAuthTests.swift */; };
 		B5A3AEF757859DD4321B851B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 369CF2585A823B089E8A462B /* Assets.xcassets */; };
 		B8B37BAA6ED1ECAA1C97FA43 /* TTSGateway.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFA4039F314B59CFA20F0483 /* TTSGateway.swift */; };
 		BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */; };
@@ -109,6 +111,7 @@
 		369CF2585A823B089E8A462B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		385FFB3CC3176145427EE7C1 /* PlanningGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlanningGate.swift; sourceTree = "<group>"; };
 		427EDB3B637D948C8298ADB3 /* CalendarCollisionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarCollisionService.swift; sourceTree = "<group>"; };
+		4960E022E1A9C030175CE40C /* NativeCaptchaView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeCaptchaView.swift; sourceTree = "<group>"; };
 		4ACC08026C4EA50C95AF070E /* SignInView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SignInView.swift; sourceTree = "<group>"; };
 		4CFB07AD653F43A44730290B /* KeychainSessionStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KeychainSessionStore.swift; sourceTree = "<group>"; };
 		4DB08E5F433C83D224127157 /* GoalflowMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = GoalflowMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -124,6 +127,7 @@
 		6E4A7BA7CEF503D8674C1D99 /* SyncBackedCurrentTaskProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBackedCurrentTaskProvider.swift; sourceTree = "<group>"; };
 		709EFFFA262264B84A634724 /* MenuBarController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarController.swift; sourceTree = "<group>"; };
 		722BA1A138750DE8CCE66295 /* CaptureServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CaptureServiceTests.swift; sourceTree = "<group>"; };
+		75FD4CE9AF7B05F82DC4E829 /* EmailOtpAuthTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmailOtpAuthTests.swift; sourceTree = "<group>"; };
 		7823492DD7F8333C6F175D47 /* BreakdownService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BreakdownService.swift; sourceTree = "<group>"; };
 		79ED08A437E51251C7408C96 /* GoalStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoalStore.swift; sourceTree = "<group>"; };
 		7F891D96F9CDBBBD21645216 /* SchedulingBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SchedulingBridge.swift; sourceTree = "<group>"; };
@@ -162,7 +166,7 @@
 		FDFC3DB186E5A17FEB29EB58 /* ApplyPushResults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ApplyPushResults.swift; sourceTree = "<group>"; };
 		FE52DE69BD05AC4D252BB4DA /* Clock.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Clock.swift; sourceTree = "<group>"; };
 		FFA4039F314B59CFA20F0483 /* TTSGateway.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TTSGateway.swift; sourceTree = "<group>"; };
-		"TEMP_E5E5F2DC-9F71-4975-A70E-69019C76F52F" /* SUPABASE.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SUPABASE.xcconfig; sourceTree = "<group>"; };
+		"TEMP_16CAFB6F-0D05-4F09-A8AF-7088509546F6" /* SUPABASE.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = SUPABASE.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -187,6 +191,7 @@
 				AB26F507E7D2596BA4C3AB42 /* ConflictsSheet.swift */,
 				B6214F90EBE9CC2A97FC8D5F /* ExecutionPanelView.swift */,
 				709EFFFA262264B84A634724 /* MenuBarController.swift */,
+				4960E022E1A9C030175CE40C /* NativeCaptchaView.swift */,
 				4ACC08026C4EA50C95AF070E /* SignInView.swift */,
 				DEC072C4D1BB68140659E710 /* Components */,
 			);
@@ -269,6 +274,7 @@
 				722BA1A138750DE8CCE66295 /* CaptureServiceTests.swift */,
 				EB398F1027FB785F68950CA8 /* CaptureTests.swift */,
 				4E6E296D6144E2B16A2FC290 /* CaptureViewModelTests.swift */,
+				75FD4CE9AF7B05F82DC4E829 /* EmailOtpAuthTests.swift */,
 				E75593242BB50FF5FF2B90F1 /* ExecutionStateTests.swift */,
 				1DA8B65677C3FA1A48C48DA7 /* ExecutionTimerTests.swift */,
 				07F8C01D63663071401FB667 /* FocusSessionStoreTests.swift */,
@@ -333,10 +339,10 @@
 			path = Components;
 			sourceTree = "<group>";
 		};
-		"TEMP_D6BE33FD-4886-4086-AD16-2B04BF9DFE5B" /* macos-native */ = {
+		"TEMP_C2363A15-4B3C-4731-B9E2-279C274EC308" /* macos-native */ = {
 			isa = PBXGroup;
 			children = (
-				"TEMP_E5E5F2DC-9F71-4975-A70E-69019C76F52F" /* SUPABASE.xcconfig */,
+				"TEMP_16CAFB6F-0D05-4F09-A8AF-7088509546F6" /* SUPABASE.xcconfig */,
 			);
 			path = "macos-native";
 			sourceTree = "<group>";
@@ -441,6 +447,7 @@
 				2709E179A9CC51DC2B3F6782 /* CaptureServiceTests.swift in Sources */,
 				257D9D35C45D592E5BA3B1D8 /* CaptureTests.swift in Sources */,
 				0DFF4D3EAF7F06C09A8F8493 /* CaptureViewModelTests.swift in Sources */,
+				B36000BC49EA4E882DE39EB3 /* EmailOtpAuthTests.swift in Sources */,
 				60C71721839D479A8F1456C3 /* ExecutionStateTests.swift in Sources */,
 				BC7D74C4538BAE3B052841CD /* ExecutionTimerTests.swift in Sources */,
 				C2AD477A596A09F8B25BE19C /* FocusSessionStoreTests.swift in Sources */,
@@ -495,6 +502,7 @@
 				5717A1C4A03AB4D4A66E1800 /* LoginItemService.swift in Sources */,
 				86B679D5B2466E6BD59435F8 /* MenuBarController.swift in Sources */,
 				8CB8C706BA3E0D4177D7C91C /* MetaStore.swift in Sources */,
+				AA73FE1F1245A83E4BD39488 /* NativeCaptchaView.swift in Sources */,
 				E33A2F5E018C1A3E23D586C6 /* PlanningGate.swift in Sources */,
 				3512EA68100890F4C6ECF0E1 /* SchedulingBridge.swift in Sources */,
 				68B421D0FE2F69CEC9B7617B /* ServerConflicts.swift in Sources */,
@@ -525,7 +533,7 @@
 /* Begin XCBuildConfiguration section */
 		1D11F6842825958E568D0CAD /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_E5E5F2DC-9F71-4975-A70E-69019C76F52F" /* SUPABASE.xcconfig */;
+			baseConfigurationReference = "TEMP_16CAFB6F-0D05-4F09-A8AF-7088509546F6" /* SUPABASE.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "";
@@ -623,7 +631,7 @@
 		};
 		9B2B07DBAA159CA7B4CE6AE5 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = "TEMP_E5E5F2DC-9F71-4975-A70E-69019C76F52F" /* SUPABASE.xcconfig */;
+			baseConfigurationReference = "TEMP_16CAFB6F-0D05-4F09-A8AF-7088509546F6" /* SUPABASE.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = "";

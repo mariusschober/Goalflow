@@ -19,6 +19,30 @@ struct PendingPKCERequest: Codable, Equatable, Sendable {
     var flow: Flow
 }
 
+struct PendingEmailOtpAttempt: Codable, Equatable, Sendable {
+    enum Purpose: String, Codable, Sendable { case signIn = "sign_in", activation }
+    var attemptToken: String
+    var email: String
+    var purpose: Purpose
+    var expiresAt: Date
+    var resendAt: Date
+    var verifiedUserId: String? = nil
+    var verifiedSessionId: String? = nil
+
+    func matchesVerifiedSession(_ session: NativeSession) -> Bool {
+        guard let verifiedUserId, let verifiedSessionId else { return false }
+        return verifiedUserId.lowercased() == session.userId.lowercased()
+            && verifiedSessionId.lowercased() == session.sessionId.lowercased()
+    }
+
+    func verified(by session: NativeSession) -> PendingEmailOtpAttempt {
+        var result = self
+        result.verifiedUserId = session.userId.lowercased()
+        result.verifiedSessionId = session.sessionId.lowercased()
+        return result
+    }
+}
+
 struct AccessTokenClaims: Equatable, Sendable {
     var issuer: String
     var subject: String
@@ -95,27 +119,58 @@ func parseNativeSessionResponse(
     )
 }
 
+final class KeychainMemoryBackend: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String: Data] = [:]
+
+    func read(_ account: String) -> Data? {
+        lock.lock(); defer { lock.unlock() }
+        return values[account]
+    }
+
+    func write(_ data: Data, account: String) {
+        lock.lock(); defer { lock.unlock() }
+        values[account] = data
+    }
+
+    func delete(_ account: String) {
+        lock.lock(); defer { lock.unlock() }
+        values.removeValue(forKey: account)
+    }
+}
+
 final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     private let service: String
     private let sessionAccount: String
     private let pendingAccount: String
+    private let pendingEmailOtpAccount: String
+    private let memoryBackend: KeychainMemoryBackend?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(
         service: String = "tsurfing",
         sessionAccount: String = "session",
-        pendingAccount: String = "pending-pkce"
+        pendingAccount: String = "pending-pkce",
+        pendingEmailOtpAccount: String = "pending-email-otp",
+        memoryBackend: KeychainMemoryBackend? = nil
     ) {
-        precondition(!service.isEmpty && !sessionAccount.isEmpty && !pendingAccount.isEmpty)
+        precondition(!service.isEmpty && !sessionAccount.isEmpty && !pendingAccount.isEmpty && !pendingEmailOtpAccount.isEmpty)
         self.service = service
         self.sessionAccount = sessionAccount
         self.pendingAccount = pendingAccount
+        self.pendingEmailOtpAccount = pendingEmailOtpAccount
+        self.memoryBackend = memoryBackend
     }
 
     var isAuthenticated: Bool {
-        guard let session = try? read() else { return false }
-        return session.expiresAt > Date().addingTimeInterval(60)
+        do {
+            guard try readPendingEmailOtp() == nil,
+                  let session = try read() else { return false }
+            return session.expiresAt > Date().addingTimeInterval(60)
+        } catch {
+            return false
+        }
     }
 
     func read() throws -> NativeSession? {
@@ -167,10 +222,38 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
 
     func clearPendingRequest() throws { try delete(account: pendingAccount) }
 
+    func readPendingEmailOtp() throws -> PendingEmailOtpAttempt? {
+        guard let data = try readData(account: pendingEmailOtpAccount) else { return nil }
+        guard let pending = try? decoder.decode(PendingEmailOtpAttempt.self, from: data),
+              pending.attemptToken.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil,
+              pending.email == pending.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              (pending.verifiedUserId == nil && pending.verifiedSessionId == nil)
+                || (pending.verifiedUserId.flatMap { UUID(uuidString: $0) } != nil
+                    && pending.verifiedSessionId.flatMap { UUID(uuidString: $0) } != nil) else {
+            throw KeychainError.corruptPendingEmailOtp
+        }
+        return pending
+    }
+
+    func savePendingEmailOtp(_ pending: PendingEmailOtpAttempt) throws {
+        guard pending.attemptToken.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil,
+              pending.email == pending.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              (pending.verifiedUserId == nil && pending.verifiedSessionId == nil)
+                || (pending.verifiedUserId.flatMap { UUID(uuidString: $0) } != nil
+                    && pending.verifiedSessionId.flatMap { UUID(uuidString: $0) } != nil) else {
+            throw KeychainError.corruptPendingEmailOtp
+        }
+        try writeData(encoder.encode(pending), account: pendingEmailOtpAccount)
+        guard try readPendingEmailOtp() == pending else { throw KeychainError.readBackMismatch }
+    }
+
+    func clearPendingEmailOtp() throws { try delete(account: pendingEmailOtpAccount) }
+
     func currentSession(
         configuration: MacCloudConfiguration,
         urlSession: URLSession = URLSession.shared
     ) async throws -> NativeSession {
+        if try readPendingEmailOtp() != nil { throw KeychainError.activationPending }
         guard let current = try read() else { throw KeychainError.noSession }
         if current.expiresAt > Date().addingTimeInterval(5 * 60) { return current }
         if current.expiresAt > Date().addingTimeInterval(60) {
@@ -234,6 +317,7 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     }
 
     private func readData(account: String) throws -> Data? {
+        if let memoryBackend { return memoryBackend.read(account) }
         var query = baseQuery(account: account)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -245,6 +329,10 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     }
 
     private func writeData(_ data: Data, account: String) throws {
+        if let memoryBackend {
+            memoryBackend.write(data, account: account)
+            return
+        }
         let query = baseQuery(account: account)
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -260,6 +348,10 @@ final class KeychainSessionStore: AuthGateway, @unchecked Sendable {
     }
 
     private func delete(account: String) throws {
+        if let memoryBackend {
+            memoryBackend.delete(account)
+            return
+        }
         let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw KeychainError.deleteFailed(status) }
     }
@@ -272,11 +364,13 @@ enum KeychainError: Error, LocalizedError {
     case readBackMismatch
     case corruptSession
     case corruptPendingRequest
+    case corruptPendingEmailOtp
     case invalidSession
     case noSession
     case noRefreshConfig
     case transient
     case revoked
+    case activationPending
 
     var errorDescription: String? {
         switch self {
@@ -286,11 +380,13 @@ enum KeychainError: Error, LocalizedError {
         case .readBackMismatch: return "Secure storage did not verify its write."
         case .corruptSession: return "Secure session data is damaged. Local tasks were not changed."
         case .corruptPendingRequest: return "The pending sign-in request is damaged. Request a new link."
+        case .corruptPendingEmailOtp: return "The pending email-code request is damaged. Request a new code."
         case .invalidSession: return "The authentication response did not contain a valid Tsurfing session."
         case .noSession: return "Sign in to synchronize. Local changes remain on this Mac."
         case .noRefreshConfig: return "Session refresh is not safely configured."
         case .transient: return "Session refresh is temporarily unavailable. Local changes remain pending."
         case .revoked: return "This cloud session has expired or was revoked. Local changes remain on this Mac."
+        case .activationPending: return "Email verification has not finished. Local changes remain pending."
         }
     }
 }

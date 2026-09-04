@@ -55,52 +55,157 @@ final class SupabaseAuthService: @unchecked Sendable {
 
     var isConfigured: Bool { configuration.isCloudConfigured }
     var configurationProblem: String? { configuration.problem }
+    var nativeCaptchaURL: URL? {
+        guard let origin = configuration.apiOrigin else { return nil }
+        return URL(string: "/api/v1/auth/email/captcha", relativeTo: origin)?.absoluteURL
+    }
 
-    func requestMagicLink(email: String) async throws {
+    func requestEmailCode(
+        email: String,
+        purpose: PendingEmailOtpAttempt.Purpose,
+        inviteCode: String = "",
+        captchaToken: String
+    ) async throws -> PendingEmailOtpAttempt {
         let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard cleanEmail.count <= 254,
               cleanEmail.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) != nil else {
             throw AuthError.invalidEmail
         }
+        let cleanInvite = inviteCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard purpose != .activation || (6...128).contains(cleanInvite.count) else {
+            throw AuthError.invalidInvite
+        }
+        guard captchaToken.range(of: #"^[A-Za-z0-9._~-]{20,4096}$"#, options: .regularExpression) != nil else {
+            throw AuthError.captchaRequired
+        }
         let auth = try requireAuthenticationConfiguration()
-        let state = try secureRandomValue()
-        let verifier = try secureRandomValue()
-        var redirect = URLComponents(string: MacCloudConfiguration.authRedirectURL)!
-        redirect.queryItems = [URLQueryItem(name: "state", value: state)]
-        guard let redirectURL = redirect.url?.absoluteString else { throw AuthError.notConfigured }
-        let pending = PendingPKCERequest(
-            state: state,
-            verifier: verifier,
-            redirectURL: redirectURL,
-            createdAt: Date(),
-            flow: .magicLink
-        )
-        // Persist before delivery. If the request acknowledgement is lost, an
-        // arriving link still has its verifier after an app restart.
-        try keychain.savePendingRequest(pending)
-
-        var endpoint = URLComponents(url: auth.url.appendingPathComponent("auth/v1/otp"), resolvingAgainstBaseURL: false)!
-        endpoint.queryItems = [URLQueryItem(name: "redirect_to", value: redirectURL)]
-        guard let url = endpoint.url else { throw AuthError.notConfigured }
-        let body: [String: Any] = [
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/auth/email/preflight", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let body = try JSONSerialization.data(withJSONObject: [
             "email": cleanEmail,
-            "create_user": false,
-            "gotrue_meta_security": [:],
-            "code_challenge": pkceChallenge(verifier),
-            "code_challenge_method": "s256"
-        ]
+            "purpose": purpose.rawValue,
+            "code": purpose == .activation ? cleanInvite : "",
+            "captchaToken": captchaToken
+        ])
         let (data, response) = try await request(
             url: url,
             method: "POST",
-            body: JSONSerialization.data(withJSONObject: body),
+            body: body,
             publishableKey: auth.key
         )
-        guard data.count <= 64 * 1024 else { throw AuthError.invalidResponse }
-        guard (200..<300).contains(response.statusCode) else {
-            // Preserve pending state because delivery may have succeeded while
-            // the response was lost or an intermediary returned an error.
+        guard (200..<300).contains(response.statusCode), data.count <= 64 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["accepted"] as? Bool == true,
+              let attemptToken = object["attemptToken"] as? String,
+              attemptToken.range(of: #"^[A-Za-z0-9_-]{43}$"#, options: .regularExpression) != nil,
+              let expiresIn = (object["expiresInSeconds"] as? NSNumber)?.doubleValue,
+              expiresIn > 0, expiresIn <= 600,
+              let resendAfter = (object["resendAfterSeconds"] as? NSNumber)?.doubleValue,
+              resendAfter >= 60, resendAfter <= 600 else {
+            if Self.isRetryable(response.statusCode) { throw AuthError.transient }
             throw AuthError.deliveryUnconfirmed
         }
+        let pending = PendingEmailOtpAttempt(
+            attemptToken: attemptToken,
+            email: cleanEmail,
+            purpose: purpose,
+            expiresAt: Date().addingTimeInterval(expiresIn),
+            resendAt: Date().addingTimeInterval(resendAfter)
+        )
+        try keychain.savePendingEmailOtp(pending)
+        return pending
+    }
+
+    func pendingEmailCodeRequest() throws -> PendingEmailOtpAttempt? {
+        try keychain.readPendingEmailOtp()
+    }
+
+    func verifyEmailCode(email: String, code: String) async throws -> GoalflowSessionProfile {
+        let cleanEmail = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cleanCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pending = try keychain.readPendingEmailOtp(),
+              timingSafeEqual(pending.email, cleanEmail),
+              pending.expiresAt > Date(),
+              cleanCode.range(of: #"^[0-9]{6}$"#, options: .regularExpression) != nil else {
+            throw AuthError.invalidEmailCode
+        }
+        if let existing = try keychain.read(), pending.matchesVerifiedSession(existing) {
+            try await activateEmailOtp(session: existing, pending: pending)
+            return try await validateCurrentSession()
+        }
+
+        let auth = try requireAuthenticationConfiguration()
+        let url = auth.url.appendingPathComponent("auth/v1/verify")
+        let body = try JSONSerialization.data(withJSONObject: [
+            "email": cleanEmail,
+            "token": cleanCode,
+            "type": "email"
+        ])
+        let (data, response) = try await request(
+            url: url,
+            method: "POST",
+            body: body,
+            publishableKey: auth.key
+        )
+        guard (200..<300).contains(response.statusCode) else {
+            if Self.isRetryable(response.statusCode) { throw AuthError.transient }
+            throw AuthError.invalidEmailCode
+        }
+        guard data.count <= 256 * 1024,
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let returnedEmail = (object["user"] as? [String: Any])?["email"] as? String,
+              timingSafeEqual(returnedEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), cleanEmail) else {
+            throw AuthError.invalidResponse
+        }
+        let session = try parseNativeSessionResponse(data, configuration: configuration)
+        try keychain.save(session)
+        let verifiedPending = pending.verified(by: session)
+        try keychain.savePendingEmailOtp(verifiedPending)
+        try await activateEmailOtp(session: session, pending: verifiedPending)
+        NotificationCenter.default.post(name: .authDidChange, object: nil)
+        return try await validateCurrentSession()
+    }
+
+    @discardableResult
+    func resumePendingEmailActivation() async throws -> Bool {
+        guard let pending = try keychain.readPendingEmailOtp(),
+              let session = try keychain.read(),
+              pending.matchesVerifiedSession(session) else { return false }
+        // The server decides expiry. An activation committed before a lost
+        // acknowledgement remains idempotent after the local timer elapsed.
+        try await activateEmailOtp(session: session, pending: pending)
+        NotificationCenter.default.post(name: .authDidChange, object: nil)
+        return true
+    }
+
+    private func activateEmailOtp(session: NativeSession, pending: PendingEmailOtpAttempt) async throws {
+        guard pending.matchesVerifiedSession(session) else { throw AuthError.emailCodeRequired }
+        let auth = try requireAuthenticationConfiguration()
+        guard let apiOrigin = configuration.apiOrigin,
+              let url = URL(string: "/api/v1/auth/email/activate", relativeTo: apiOrigin)?.absoluteURL else {
+            throw AuthError.notConfigured
+        }
+        let body = try JSONSerialization.data(withJSONObject: ["attemptToken": pending.attemptToken])
+        let (data, response) = try await request(
+            url: url,
+            method: "POST",
+            body: body,
+            publishableKey: auth.key,
+            bearerToken: session.accessToken
+        )
+        guard try keychain.read()?.accessToken == session.accessToken else { throw AuthError.sessionChanged }
+        if (200..<300).contains(response.statusCode), data.count <= 64 * 1024,
+           let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           object["activated"] as? Bool == true {
+            try keychain.clearPendingEmailOtp()
+            return
+        }
+        if Self.isRetryable(response.statusCode) { throw AuthError.transient }
+        try keychain.clearIfAccessTokenMatches(session.accessToken)
+        try keychain.clearPendingEmailOtp()
+        throw AuthError.activationRejected
     }
 
     func handleCallback(url: URL) async throws -> GoalflowSessionProfile {
@@ -154,6 +259,7 @@ final class SupabaseAuthService: @unchecked Sendable {
     }
 
     func validateCurrentSession() async throws -> GoalflowSessionProfile {
+        _ = try await resumePendingEmailActivation()
         let auth = try requireAuthenticationConfiguration()
         guard let apiOrigin = configuration.apiOrigin,
               let url = URL(string: "/api/v1/session", relativeTo: apiOrigin)?.absoluteURL else {
@@ -277,6 +383,8 @@ final class SupabaseAuthService: @unchecked Sendable {
         // Stop authenticated requests first. Local task files and the durable
         // outbox are deliberately untouched.
         try keychain.clear()
+        try keychain.clearPendingEmailOtp()
+        try keychain.clearPendingRequest()
         NotificationCenter.default.post(name: .authDidChange, object: nil)
         guard let current else { return }
         let auth = try requireAuthenticationConfiguration()
@@ -360,6 +468,11 @@ final class SupabaseAuthService: @unchecked Sendable {
 enum AuthError: Error, LocalizedError {
     case notConfigured
     case invalidEmail
+    case invalidInvite
+    case captchaRequired
+    case invalidEmailCode
+    case emailCodeRequired
+    case activationRejected
     case deliveryUnconfirmed
     case invalidCallback
     case callbackNotRequested
@@ -377,10 +490,15 @@ enum AuthError: Error, LocalizedError {
         switch self {
         case .notConfigured: return "Cloud authentication is not configured for this build."
         case .invalidEmail: return "Enter a valid email address."
-        case .deliveryUnconfirmed: return "Sign-in delivery could not be confirmed. Use the link if it arrives, or request a new one."
-        case .invalidCallback: return "The sign-in callback was invalid. Request a new link."
-        case .callbackNotRequested: return "This sign-in link was not requested on this Mac, or it expired."
-        case .invalidOrExpiredLink: return "The sign-in link is invalid or expired. Request a new link."
+        case .invalidInvite: return "Enter a valid beta invite."
+        case .captchaRequired: return "Complete human verification before requesting an email code."
+        case .invalidEmailCode: return "The email code is invalid or expired."
+        case .emailCodeRequired: return "Enter the current email code before activating this session."
+        case .activationRejected: return "This email-code request is invalid or expired."
+        case .deliveryUnconfirmed: return "Email-code delivery could not be confirmed. Wait before requesting another code."
+        case .invalidCallback: return "The browser sign-in callback was invalid. Start again."
+        case .callbackNotRequested: return "This browser sign-in was not requested on this Mac, or it expired."
+        case .invalidOrExpiredLink: return "The browser sign-in is invalid or expired. Start again."
         case .invalidResponse: return "The authentication service returned invalid data. Local changes were not modified."
         case .transient: return "Authentication is temporarily unavailable. Local changes remain on this Mac."
         case .revoked: return "This cloud session was revoked or the account is inactive. Local changes remain on this Mac."
