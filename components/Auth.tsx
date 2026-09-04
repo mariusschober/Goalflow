@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Logo } from './Logo';
 import {
+  beginTelegramSignIn,
   beginTelegramSignup,
   pendingEmailOtpRequest,
   requestEmailOtp,
@@ -80,7 +81,11 @@ export const Auth: React.FC<{ activationError?: string | null }> = ({ activation
     setPending(true);
     setMessage('');
     try {
-      await beginTelegramSignup(inviteCode.trim(), captchaToken);
+      if (purpose === 'activation') {
+        await beginTelegramSignup(inviteCode.trim(), captchaToken);
+      } else {
+        await beginTelegramSignIn();
+      }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Telegram signup failed.');
       resetCaptcha();
@@ -162,8 +167,8 @@ export const Auth: React.FC<{ activationError?: string | null }> = ({ activation
           </>}
         </form>
 
-        {telegramEnabled && purpose === 'activation' && stage === 'request' && <button type="button"
-          onClick={() => void telegram()} disabled={pending || !inviteCode || (captchaRequired && !captchaToken)}
+        {telegramEnabled && stage === 'request' && <button type="button"
+          onClick={() => void telegram()} disabled={pending || (purpose === 'activation' && (!inviteCode || (captchaRequired && !captchaToken)))}
           className="mt-3 w-full rounded-lg border border-[#D0D5DD] px-4 py-3 font-medium text-[#344054] disabled:opacity-50">
           Continue with Telegram
         </button>}

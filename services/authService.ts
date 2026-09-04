@@ -120,7 +120,7 @@ export const fetchApiWithTimeout = async (
 
 export const supabase = supabaseUrl && supabasePublicKey
   ? createClient(supabaseUrl, supabasePublicKey, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce' },
       global: { fetch: (input, init) => fetchApiWithTimeout(input, init) }
     })
   : undefined;
@@ -418,57 +418,42 @@ export const validateServerSession = async (session: Session): Promise<ServerAcc
   return { ...result.user, assuranceLevel: result.assuranceLevel };
 };
 
-const generateState = (): string => {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes).map(b => b.toString(16).padStart(2, '0')).join('').substring(0, 32);
+const startTelegramOAuth = async (callback: 'telegram' | 'telegram-sign-in'): Promise<void> => {
+  if (!supabase) throw new Error('Authentication is not configured.');
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: telegramProvider,
+    options: {
+      redirectTo: `${window.location.origin}/?auth=${callback}`,
+      scopes: 'openid profile telegram:bot_access'
+    }
+  });
+  if (error) throw error;
 };
 
-const generateCodeVerifier = (): string => {
-  const bytes = new Uint8Array(32);
-  crypto.getRandomValues(bytes);
-  let binary = '';
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-};
-
-const pkceChallenge = async (verifier: string): Promise<string> => {
-  const data = new TextEncoder().encode(verifier);
-  const digest = await crypto.subtle.digest('SHA-256', data);
-  const bytes = new Uint8Array(digest);
-  let binary = '';
-  bytes.forEach(b => binary += String.fromCharCode(b));
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+export const beginTelegramSignIn = async (): Promise<void> => {
+  await startTelegramOAuth('telegram-sign-in');
 };
 
 export const beginTelegramSignup = async (inviteCode: string, captchaToken = ''): Promise<void> => {
   if (!supabase) throw new Error('Authentication is not configured.');
-  const state = generateState();
-  const codeVerifier = generateCodeVerifier();
-  const codeChallenge = await pkceChallenge(codeVerifier);
   const response = await fetchApiWithTimeout('/api/v1/auth/telegram/preflight', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ code: inviteCode, captchaToken, state, codeChallenge, codeChallengeMethod: 'S256' })
+    body: JSON.stringify({ code: inviteCode, captchaToken })
   });
   const result = await response.json() as { attemptToken?: string; provider?: string; error?: { message?: string } };
-  if (!response.ok || !result.attemptToken) throw new Error(result.error?.message || 'Telegram signup could not be started.');
+  if (!response.ok
+    || !result.attemptToken?.match(/^[A-Za-z0-9_-]{43}$/)
+    || result.provider !== telegramProvider) {
+    throw new Error(result.error?.message || 'Telegram signup could not be started.');
+  }
   sessionStorage.setItem('goalflow_telegram_attempt', result.attemptToken);
-  sessionStorage.setItem('goalflow_telegram_state', state);
-  sessionStorage.setItem('goalflow_telegram_verifier', codeVerifier);
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: (result.provider || telegramProvider) as never,
-    options: {
-      redirectTo: `${window.location.origin}/?auth=telegram`,
-      scopes: 'openid profile telegram:bot_access',
-      queryParams: {
-        state,
-        code_challenge: codeChallenge,
-        code_challenge_method: 'S256'
-      }
-    }
-  });
-  if (error) throw error;
+  try {
+    await startTelegramOAuth('telegram');
+  } catch (error) {
+    sessionStorage.removeItem('goalflow_telegram_attempt');
+    throw error;
+  }
 };
 
 export const beginTelegramLink = async (): Promise<void> => {
@@ -528,12 +513,11 @@ export const activateOwnerTelegramLink = async (session: Session): Promise<void>
 
 export const activateTelegramSignup = async (session: Session): Promise<boolean> => {
   const attemptToken = sessionStorage.getItem('goalflow_telegram_attempt');
-  const oauthState = sessionStorage.getItem('goalflow_telegram_state');
   if (!attemptToken) return !session.user.email;
   const response = await fetchApiWithTimeout('/api/v1/auth/telegram/activate', {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${session.access_token}` },
-    body: JSON.stringify({ attemptToken, oauthState: oauthState ?? undefined })
+    body: JSON.stringify({ attemptToken })
   });
   const result = await response.json() as { recoveryEmailRequired?: boolean; error?: { message?: string } };
   if (!response.ok) throw new Error(result.error?.message || 'Telegram signup could not be activated.');

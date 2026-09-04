@@ -62,7 +62,7 @@ export const createAccountRouter = (
 
   router.post('/account/telegram/link', async (request, response) => {
     if (!telegramEnabled || !admin) return response.status(503).json({ error: { code: 'not_configured', message: 'Telegram linking is not configured.' } });
-    if (request.user?.aal !== 'aal2') return response.status(403).json({ error: { code: 'mfa_required', message: 'Two-factor authentication is required before linking Telegram.' } });
+    if (request.user?.role === 'owner' && request.user.aal !== 'aal2') return response.status(403).json({ error: { code: 'mfa_required', message: 'Two-factor authentication is required before the owner can link Telegram.' } });
     try {
       const { data, error } = await admin.auth.admin.getUserById(request.user.id);
       if (error || !data.user) throw error || new Error('Auth user missing.');
@@ -79,13 +79,13 @@ export const createAccountRouter = (
       }
       return response.json({ linked: true, username: identity.username || null });
     } catch {
-      return response.status(500).json({ error: { code: 'telegram_link_failed', message: 'Telegram could not be linked to the owner account.' } });
+      return response.status(500).json({ error: { code: 'telegram_link_failed', message: 'Telegram could not be linked to this account.' } });
     }
   });
 
   router.delete('/account/telegram/link', async (request, response) => {
     if (!telegramEnabled || !admin) return response.status(503).json({ error: { code: 'not_configured', message: 'Telegram linking is not configured.' } });
-    if (request.user?.aal !== 'aal2') return response.status(403).json({ error: { code: 'mfa_required', message: 'Two-factor authentication is required before unlinking Telegram.' } });
+    if (request.user?.role === 'owner' && request.user.aal !== 'aal2') return response.status(403).json({ error: { code: 'mfa_required', message: 'Two-factor authentication is required before the owner can unlink Telegram.' } });
     const { error } = await admin.rpc('goalflow_revoke_user_telegram_access', { target_user_id: request.user!.id });
     if (error) return response.status(503).json({ error: { code: 'telegram_unlink_failed', message: 'Telegram access could not be revoked.' } });
     return response.json({ linked: false });

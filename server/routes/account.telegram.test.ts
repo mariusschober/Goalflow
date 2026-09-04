@@ -14,8 +14,8 @@ afterEach(async () => {
 });
 
 const userId = "11111111-1111-4111-8111-111111111111";
-const user = (aal: "aal1" | "aal2"): AuthenticatedUser => ({
-  id: userId, email: "test@example.invalid", role: "beta", status: "active", aal
+const user = (role: "owner" | "beta", aal: "aal1" | "aal2"): AuthenticatedUser => ({
+  id: userId, email: "test@example.invalid", role, status: "active", aal
 });
 const authUser = {
   id: userId,
@@ -23,13 +23,13 @@ const authUser = {
   identities: [{ id: "42", provider: "telegram", identity_data: { id: "42", username: "linked" } }]
 } as unknown as User;
 
-const serve = async (aal: "aal1" | "aal2", rpc: ReturnType<typeof vi.fn>) => {
+const serve = async (role: "owner" | "beta", aal: "aal1" | "aal2", rpc: ReturnType<typeof vi.fn>) => {
   const admin = {
     auth: { admin: { getUserById: vi.fn().mockResolvedValue({ data: { user: authUser }, error: null }) } },
     rpc
   } as unknown as SupabaseClient;
   const app = express();
-  app.use((request, _response, next) => { request.user = user(aal); next(); });
+  app.use((request, _response, next) => { request.user = user(role, aal); next(); });
   app.use(createAccountRouter(admin, "custom:telegram", true));
   const server = app.listen(0, "127.0.0.1");
   servers.push(server);
@@ -41,17 +41,24 @@ const serve = async (aal: "aal1" | "aal2", rpc: ReturnType<typeof vi.fn>) => {
 };
 
 describe("Telegram account binding boundary", () => {
-  it("requires AAL2 for every account before linking", async () => {
+  it("retains the AAL2 gate for owner linking", async () => {
     const rpc = vi.fn();
-    const response = await fetch(`${await serve("aal1", rpc)}/account/telegram/link`, { method: "POST" });
+    const response = await fetch(`${await serve("owner", "aal1", rpc)}/account/telegram/link`, { method: "POST" });
     expect(response.status).toBe(403);
     expect(await response.json()).toMatchObject({ error: { code: "mfa_required" } });
     expect(rpc).not.toHaveBeenCalled();
   });
 
+  it("allows a beta account to link at AAL1 while the server still binds its immutable user ID", async () => {
+    const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
+    const response = await fetch(`${await serve("beta", "aal1", rpc)}/account/telegram/link`, { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(rpc).toHaveBeenCalledWith("goalflow_link_telegram_identity", expect.objectContaining({ target_user_id: userId }));
+  });
+
   it("binds only the authenticated account to the verified provider identity", async () => {
     const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
-    const response = await fetch(`${await serve("aal2", rpc)}/account/telegram/link`, { method: "POST" });
+    const response = await fetch(`${await serve("owner", "aal2", rpc)}/account/telegram/link`, { method: "POST" });
     expect(response.status).toBe(200);
     expect(rpc).toHaveBeenCalledWith("goalflow_link_telegram_identity", {
       target_user_id: userId,
@@ -62,7 +69,7 @@ describe("Telegram account binding boundary", () => {
 
   it("revokes bot and cached Mini App access for only the authenticated account", async () => {
     const rpc = vi.fn().mockResolvedValue({ data: true, error: null });
-    const response = await fetch(`${await serve("aal2", rpc)}/account/telegram/link`, { method: "DELETE" });
+    const response = await fetch(`${await serve("owner", "aal2", rpc)}/account/telegram/link`, { method: "DELETE" });
     expect(response.status).toBe(200);
     expect(rpc).toHaveBeenCalledWith("goalflow_revoke_user_telegram_access", { target_user_id: userId });
   });

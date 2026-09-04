@@ -79,6 +79,102 @@ $$;
 
 do $$
 declare
+  activation_user constant uuid := '77777777-1111-4111-8111-111111111111';
+  replay_user constant uuid := '88888888-1111-4111-8111-111111111111';
+  invite_id constant uuid := '77777777-2222-4222-8222-222222222222';
+  attempt_id constant uuid := '77777777-3333-4333-8333-333333333333';
+  legacy_attempt_id constant uuid := '77777777-4444-4444-8444-444444444444';
+  token_hash constant text := repeat('7', 64);
+  legacy_token_hash constant text := repeat('8', 64);
+  first_result boolean;
+  retry_result boolean;
+  cross_user_result boolean;
+begin
+  insert into auth.users (id, email, email_confirmed_at) values
+    (activation_user, 'telegram-activation@example.invalid', now()),
+    (replay_user, 'telegram-replay@example.invalid', now());
+  insert into public.invite_codes (
+    id, code_hash, label, max_uses, expires_at, created_by
+  ) values (
+    invite_id, repeat('9', 64), 'Telegram activation test', 2,
+    clock_timestamp() + interval '1 day',
+    '11111111-1111-4111-8111-111111111111'
+  );
+  insert into public.telegram_auth_attempts (
+    id, token_hash, invite_id, expires_at
+  ) values (
+    attempt_id, token_hash, invite_id, clock_timestamp() + interval '10 minutes'
+  );
+
+  first_result := public.activate_telegram_beta(
+    token_hash, activation_user, 7001, 'immutable_subject',
+    'attacker-controlled@example.invalid', null
+  );
+  retry_result := public.activate_telegram_beta(
+    token_hash, activation_user, 7001, 'changed_username_is_not_authority',
+    '', null
+  );
+  cross_user_result := public.activate_telegram_beta(
+    token_hash, replay_user, 7001, 'attacker', '', null
+  );
+  if first_result is not true or retry_result is not true or cross_user_result is not false then
+    raise exception 'Telegram activation idempotency or immutable-user binding failed';
+  end if;
+  if (select use_count from public.invite_codes where id = invite_id) <> 1 then
+    raise exception 'Telegram activation consumed its invite more than once';
+  end if;
+  if not exists (
+    select 1 from public.profiles
+    where user_id = activation_user
+      and email = 'telegram-activation@example.invalid'
+      and status = 'active'
+  ) or not exists (
+    select 1 from public.telegram_identities
+    where user_id = activation_user and telegram_user_id = 7001
+  ) or not exists (
+    select 1 from public.telegram_auth_attempts
+    where id = attempt_id
+      and state = 'used'
+      and auth_user_id = activation_user
+      and telegram_user_id = 7001
+  ) then
+    raise exception 'Telegram activation was not bound to authoritative identities';
+  end if;
+
+  insert into public.telegram_auth_attempts (
+    id, token_hash, invite_id, oauth_state_hash, code_challenge,
+    code_challenge_method, expires_at
+  ) values (
+    legacy_attempt_id, legacy_token_hash, invite_id, repeat('a', 64),
+    repeat('A', 43), 'S256', clock_timestamp() + interval '10 minutes'
+  );
+  if public.activate_telegram_beta(
+    legacy_token_hash, replay_user, 7002, 'legacy', '', null
+  ) then
+    raise exception 'A retired client-managed OAuth state attempt was accepted';
+  end if;
+  if (select state from public.telegram_auth_attempts where id = legacy_attempt_id) <> 'expired' then
+    raise exception 'A retired OAuth state attempt was not terminally rejected';
+  end if;
+
+  if has_table_privilege('authenticated', 'public.telegram_auth_attempts', 'SELECT,INSERT,UPDATE,DELETE')
+    or has_function_privilege(
+      'authenticated',
+      'public.activate_telegram_beta(text,uuid,bigint,text,text,text)',
+      'EXECUTE'
+    )
+    or not has_function_privilege(
+      'service_role',
+      'public.activate_telegram_beta(text,uuid,bigint,text,text,text)',
+      'EXECUTE'
+    ) then
+    raise exception 'Telegram activation privilege boundary is invalid';
+  end if;
+end;
+$$;
+
+do $$
+declare
   target_user constant uuid := '11111111-1111-4111-8111-111111111111';
   other_user constant uuid := '44444444-4444-4444-8444-444444444444';
   capture_id constant uuid := '35353535-3535-4535-8535-353535353535';
