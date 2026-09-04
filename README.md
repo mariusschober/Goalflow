@@ -1,8 +1,8 @@
-# Goalflow
+# Tsurfing
 
-Goalflow is an offline-capable productivity PWA built around one rule: plan deliberately, then execute exactly one task. Every task belongs to an exact local day or a future month. There are no projects and no unscheduled tasks.
+Tsurfing (formerly Goalflow) is an offline-capable productivity system built around one rule: plan deliberately, then execute exactly one task. Every task belongs to an exact local day or a future month. There are no projects and no unscheduled tasks.
 
-The application retains the complete Goalflow experience: Current, daily and monthly planning, habits, frogs, timer and Pomodoro flow, focus music, circadian planning, goals, True North, Reality Navigator, Transurfing, insights, subtle gamification, and provider-neutral AI workflows.
+The application retains the complete experience: Current, daily and monthly planning, habits, frogs, timer and Pomodoro flow, focus music, circadian planning, goals, True North, Reality Navigator, Transurfing, insights, subtle gamification, and provider-neutral AI workflows.
 
 ## Architecture
 
@@ -45,15 +45,15 @@ Use `VITE_ENABLE_LOCAL_DEMO=true` and `ENABLE_LOCAL_DEMO=true` only for local in
 
 ## Local-only Mac use
 
-Double-click `Start Goalflow.command`, or run:
+Double-click `Start Tsurfing.command`, or run:
 
 ```bash
 npm run local
 ```
 
-The local configuration binds Goalflow to `127.0.0.1`, bypasses cloud authentication, and stores application data in this browser profile's IndexedDB. Supabase, Railway, Telegram, SMTP, CAPTCHA, and hosting are not required. Use Settings > Sync & Backup to create password-protected `.goalflow-backup` files.
+The local configuration binds Tsurfing to `127.0.0.1`, bypasses cloud authentication, and stores application data in this browser profile's IndexedDB. Supabase, Railway, Telegram, SMTP, CAPTCHA, and hosting are not required. Use Settings > Sync & Backup to create password-protected `.tsurfing-backup` files; legacy `.goalflow-backup` files remain importable.
 
-AI is optional. To enable it, add `DEEPSEEK_API_KEY=...` to the ignored `.env.local` file and restart Goalflow. The key stays in the local server process and is never placed in the browser bundle.
+AI is optional. To enable it, add `DEEPSEEK_API_KEY=...` to the ignored `.env.local` file and restart Tsurfing. The key stays in the local server process and is never placed in the browser bundle.
 
 ## Quality checks
 
@@ -76,7 +76,7 @@ disabled.
 
 ## Android
 
-Goalflow has a native Kotlin/Compose client in `android-native/` and retains
+Tsurfing has a native Kotlin/Compose client in `android-native/` and retains
 the Capacitor target in `android/` as a compatibility delivery. The native
 client is the recommended Android experience: it uses Room, native Compose
 surfaces, Android lifecycle handling, and a durable local outbox. Install
@@ -102,7 +102,7 @@ npm run android:lint
 npm run android:assembleDebug
 ```
 
-The production debug APK is produced at `android/app/build/outputs/apk/production/debug/app-production-debug.apk`. For cloud features in a packaged build, set the public API origin at build time, for example `VITE_API_ORIGIN=https://goalflow.example npm run android:sync`; local task execution remains available without a backend. Do not put credentials in `VITE_` variables. Release signing is intentionally not committed.
+The production debug APK is produced at `android/app/build/outputs/apk/production/debug/app-production-debug.apk`. For cloud features in a packaged build, set the public API origin at build time, for example `VITE_API_ORIGIN=https://staging.tsurfing.com npm run android:sync`; local task execution remains available without a backend. Do not put credentials in `VITE_` variables. Release signing is intentionally not committed.
 
 To build the separate local test app, which accepts `123456` and uses a distinct Android application ID:
 
@@ -111,7 +111,7 @@ npm run android:sync:test
 npm run android:assembleTestDebug
 ```
 
-The test APK is produced at `android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk`. It is labeled `Goalflow Test`, uses `com.mariusschober.goalflow.test`, and never enables production authentication or cloud synchronization.
+The test APK is produced at `android/app/build/outputs/apk/sandbox/debug/app-sandbox-debug.apk`. It is labeled `Tsurfing Test`, uses `com.mariusschober.tsurfing.test`, and never enables production authentication or cloud synchronization.
 
 The separate native sandbox test app is built with:
 
@@ -119,8 +119,8 @@ The separate native sandbox test app is built with:
 ./android-native/gradlew -p android-native assembleSandboxDebug
 ```
 
-It is labeled `Goalflow Test`, uses
-`com.mariusschober.goalflow.sandbox.dev`, and accepts the isolated entry code
+It is labeled `Tsurfing Test`, uses
+`com.mariusschober.tsurfing.sandbox.dev`, and accepts the isolated entry code
 `123456`. Native and Capacitor test packages are separate installations.
 
 ## Production setup

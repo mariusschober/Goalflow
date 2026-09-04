@@ -24,7 +24,7 @@ Required owner action in the Google Cloud/Firebase console:
 
 1. Locate the API key belonging to project `upheld-flow-201513` without copying
    it into an issue, commit, chat, or CI log.
-2. If Goalflow no longer uses that Firebase project, delete/revoke the key and
+2. If Tsurfing no longer uses that Firebase project, delete/revoke the key and
    disable unused APIs. If it is still required, rotate it when exposure or
    usage is uncertain, restrict it to the exact required APIs, and add the
    narrowest valid application/referrer restrictions.
@@ -59,7 +59,7 @@ The remaining two `generic-api-key` findings originate only from hard-coded
   `server/telegram/bot.test.ts`, line 139.
 
 They are test-only invented strings, are not present in the canonical tree,
-and cannot authenticate to a Telegram bot or deployed Goalflow service. Their
+and cannot authenticate to a Telegram bot or deployed Tsurfing service. Their
 two exact Gitleaks fingerprints are listed in `.gitleaksignore`; the Telegram
 rule, file paths, commits, and other findings remain scanned. When Telegram is
 ported, fixtures must use conspicuously synthetic low-entropy construction so

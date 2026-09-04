@@ -1,6 +1,6 @@
-# Goalflow beta deployment runbook
+# Tsurfing beta deployment runbook
 
-Status: pre-beta. No hosted Goalflow environment is release evidence until its
+Status: pre-beta. No hosted Tsurfing environment is release evidence until its
 exact commit, configuration, migration state, and live verification are recorded
 in `docs/BETA_READINESS.md`.
 
@@ -10,11 +10,11 @@ Use one private Railway project with two persistent, isolated environments:
 
 | Environment | Git source | Deploy policy | Supabase project |
 | --- | --- | --- | --- |
-| staging | `develop` | automatic after `beta-gate` | Goalflow staging only |
-| production | `main` | explicit release promotion only | Goalflow production only |
+| staging | `develop` | automatic after `beta-gate` | Tsurfing Staging only |
+| production | `main` | explicit release promotion only | Tsurfing Production only |
 
-Each Railway environment contains `goalflow-web-api` and the one-shot
-`goalflow-maintenance` cron. `.railway/railway.ts` is the source-controlled
+Each Railway environment contains `tsurfing-web-api` and the one-shot
+`tsurfing-maintenance` cron. `.railway/railway.ts` is the source-controlled
 infrastructure definition; the retired `railway.json` mechanism must not be
 used. Follow `.railway/README.md` to plan and apply it.
 
@@ -24,8 +24,12 @@ do not duplicate production or copy its variables.
 
 ## Supabase
 
-Create completely separate staging and production projects. Do not repurpose
-another application’s project. Apply every file in `supabase/migrations` in
+Use the existing empty `Tsurfing` project as `Tsurfing Staging`. Production must
+be a completely separate `Tsurfing Production` project in `eu-west-1`. On the
+Supabase Free plan, prove staging, pause and confirm it is paused, and only then
+create production at a displayed cost of `$0`; stop if the console requests
+payment or current limits differ. Never inspect or modify Movetrics. Apply every
+file in `supabase/migrations` in
 filename order from an empty database. Existing migration files are immutable;
 fixes are new forward-only migrations and must be added to
 `MIGRATION_SHA256_MANIFEST.json`.
@@ -42,7 +46,9 @@ storage policies, then run two-user hosted isolation tests. A server operation
 using the secret key must still authorize the immutable authenticated user UUID
 explicitly because that key bypasses RLS.
 
-Configure each project’s Site URL and redirect allowlist to exact HTTPS origins.
+Configure staging for `https://staging.tsurfing.com` and production for
+`https://app.tsurfing.com`; each uses same-origin `/api` and `/mini`. Configure
+each project’s Site URL and redirect allowlist to exact HTTPS origins.
 Staging and production URLs must never appear in the other project’s allowlist.
 Configure reliable custom SMTP before testing registration, email verification,
 or password recovery. Public registration may be enabled only with the

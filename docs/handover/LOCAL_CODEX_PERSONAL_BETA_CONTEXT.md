@@ -1,4 +1,12 @@
-# Goalflow personal-beta implementation context
+# Tsurfing personal-beta implementation context
+
+> Active naming and infrastructure update (2026-09-04): Goalflow is now
+> Tsurfing. The GitHub repository is `mariusschober/Tsurfing`; the local folder,
+> internal Goalflow source namespaces, durable database/storage identifiers,
+> migration text, and legacy backup format remain unchanged for compatibility.
+> The existing empty Supabase `Tsurfing` project in `eu-west-1` is the staging
+> target. Any older statement below that no staging project exists means no
+> configured or proven staging environment existed at the handover checkpoint.
 
 **Status:** `NOT READY`
 
@@ -13,7 +21,7 @@ evidence.
 
 ## 1. Outcome
 
-Deliver Goalflow as a dependable personal beta on Web, native Android, native
+Deliver Tsurfing as a dependable personal beta on Web, native Android, native
 macOS, Telegram Bot, and Telegram Mini App. The same Supabase user UUID owns the
 same durable data on every surface.
 
@@ -42,7 +50,7 @@ At capture time:
 | Complete candidate branch | `origin/chore/railway-beta-gate` |
 | Candidate/docs head | `01f864720df7acfa211745e64edec8b5163ab612` |
 | Tested implementation parent | `7d491c882ccb9e02691e2fe007ee0efce91eceee` |
-| Exact-head CI | [Beta Gate run 33823362114](https://github.com/mariusschober/Goalflow/actions/runs/33823362114) |
+| Exact-head CI at handover | [Beta Gate run 33823362114](https://github.com/mariusschober/Tsurfing/actions/runs/33823362114) |
 | Integration branch | `origin/integration/beta` at `87ae3259de5419c41c3e4add290a889b831f9380`, 86 commits behind the complete candidate |
 | Production branch | `main` at obsolete `84bd036ba25d825b5fae36cb780842d9221ed097` |
 | Develop branch | Absent |
@@ -131,7 +139,7 @@ never assume this static checkpoint is still the remote tip.
   `macos-native/GoalflowMac/UI/SignInView.swift`.
 - Web Telegram OIDC and account-linking scaffolding exists behind flags but has
   not been exercised against a configured provider.
-- No Goalflow SMTP, email template, redirect allowlist, or live staging identity
+- No Tsurfing SMTP, email template, redirect allowlist, or live staging identity
   exists.
 
 ### Realtime gaps
@@ -149,13 +157,14 @@ never assume this static checkpoint is still the remote tip.
 
 ### Infrastructure and release gaps
 
-- There is no isolated Goalflow Supabase staging or production project.
+- The empty Tsurfing Supabase project had not been identified or configured at
+  handover; no isolated production project exists.
 - Railway project `58c0b3aa-f2ad-459a-bb6f-194b130c3e68` has only an empty
   `production` environment and no services. The connected tools cannot create
   the missing sibling `staging` environment.
 - The only connected Supabase project observed was unrelated `Movetrics`; it is
   explicitly off-limits.
-- No Goalflow staging users, hosted auth/RLS/sync evidence, backup object,
+- No Tsurfing staging users, hosted auth/RLS/sync evidence, backup object,
   restore drill, signed Android beta artifact, production service, protected
   branch, or release tag exists.
 - One historical Firebase/GCP client key in old history still requires owner
@@ -362,7 +371,8 @@ history or exposing the credential.
 Owner must confirm the intended organization, region, and exact quoted project
 cost before creation. Never repurpose `Movetrics`.
 
-1. Create `Goalflow staging` in the confirmed organization and region.
+1. Rename the existing empty project to `Tsurfing Staging`, confirm `eu-west-1`,
+   and apply the immutable migrations from scratch. Never touch Movetrics.
 2. Apply all immutable migrations in order and verify hashes.
 3. Configure current publishable/secret keys with correct trust boundaries.
 4. Verify explicit Data API grants, RLS, RPCs, triggers, extensions, storage,
@@ -475,7 +485,8 @@ native beta artifacts.
 
 ### Phase M — production promotion
 
-1. Create a completely separate Goalflow production Supabase project with owner
+1. After staging is proven and confirmed paused, create a completely separate
+   Tsurfing Production Supabase project with owner
    approval of organization, region, and price.
 2. Apply the identical migration set and configure production SMTP, redirects,
    RLS, Realtime, storage, and a separate production Telegram bot/provider.
@@ -507,7 +518,7 @@ Exit: production runs the tagged commit and smoke evidence is recorded.
 7. Confirm the first scheduled encrypted backup and a recent restore proof.
 8. Record APK/macOS checksums, deployed SHA, release tag, and rollback SHA.
 
-Exit: the owner can rely on Goalflow for daily personal use and the readiness
+Exit: the owner can rely on Tsurfing for daily personal use and the readiness
 ledger says `READY` only with links to every required artifact and run.
 
 ## 7. Owner-only actions

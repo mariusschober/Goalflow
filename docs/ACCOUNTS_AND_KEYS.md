@@ -1,4 +1,4 @@
-# Goalflow beta account and key inventory
+# Tsurfing beta account and key inventory
 
 This is an inventory of external prerequisites, not a place to record secret
 values. At the 2026-09-04 handover, `chore/railway-beta-gate` was the complete
@@ -11,13 +11,15 @@ fetch before relying on this checkpoint.
 
 - GitHub access and Actions are working. The required aggregate check is
   `beta-gate`.
-- A private Railway project named `Goalflow` exists with an empty production
-  environment. The isolated staging environment and both services are not yet
-  configured or deployed.
-- The connected Supabase organization contains an unrelated `Movetrics`
-  project. It must not be modified. A separate Goalflow staging project has not
-  been created because organization/region/cost confirmation is still required.
-- No Goalflow production Supabase project has been proven.
+- A private, empty Railway project currently named `Goalflow` exists with only
+  its default production environment. It is dedicated to Tsurfing and may be
+  renamed/reconfigured; the isolated staging environment and both services are
+  not yet configured or deployed.
+- The connected Supabase organization contains an empty `Tsurfing` project in
+  `eu-west-1`; it is the staging target and may be renamed `Tsurfing Staging`.
+  The unrelated `Movetrics` project must never be inspected or modified.
+- No `Tsurfing Production` Supabase project has been created or proven. On the
+  Free plan it is created only after staging is proven and confirmed paused.
 - Telegram, AI, voice, Turnstile, custom SMTP, and Android release signing have
   not passed their live beta gates.
 
@@ -34,7 +36,7 @@ For each independent project, retain outside the repository:
 - two synthetic staging identities used by the isolation matrix.
 
 The fail-closed hosted CI job reads these GitHub Actions secrets. Values must
-belong only to Goalflow staging; never reuse production credentials:
+belong only to Tsurfing staging; never reuse production credentials:
 
 - `GOALFLOW_STAGING_APP_ORIGIN`;
 - `GOALFLOW_STAGING_SUPABASE_URL`;

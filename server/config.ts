@@ -14,7 +14,7 @@ const environmentSchema = z.object({
   PORT: z.coerce.number().int().min(1).max(65_535).default(3000),
   APP_ORIGIN: z.string().url().default("http://localhost:3000"),
   CORS_ORIGINS: z.string().default(""),
-  OWNER_EMAIL: z.string().email().default("owner@goalflow.local"),
+  OWNER_EMAIL: z.string().email().default("owner@tsurfing.local"),
   OWNER_USER_ID: optionalString(z.string().uuid()),
   ENABLE_LOCAL_DEMO: enabledFlag,
   SUPABASE_URL: optionalString(z.string().url()),

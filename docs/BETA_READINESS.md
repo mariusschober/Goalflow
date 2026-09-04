@@ -1,4 +1,4 @@
-# Goalflow beta readiness evidence
+# Tsurfing beta readiness evidence
 
 **Status: NOT READY.** This document is the current release ledger. Historical
 documents may describe earlier local or simulated checkpoints; they are not
@@ -10,17 +10,72 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Candidate head | `chore/railway-beta-gate` at `01f864720df7acfa211745e64edec8b5163ab612`; implementation parent `7d491c882ccb9e02691e2fe007ee0efce91eceee` | CANDIDATE ONLY |
+| Active finalization branch | `codex/personal-beta-finalization-20260904`; Tsurfing boundary implementation checkpoint `2d95d5da828eb57fa4110f20aaf206e5a8f088ca` | CANDIDATE ONLY |
+| Reviewed source | `chore/railway-beta-gate` at `44bd85d9662b2e5a9c012b977a26cf4a5c501964`; original handover SHA `01f864720df7acfa211745e64edec8b5163ab612` remains an ancestor | VERIFIED SOURCE |
 | Active local handover | `docs/handover/LOCAL_CODEX_START_PROMPT.md` and `docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md` | DOCUMENTED |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
 | Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
 | Release tag | `v0.4.0-beta.1` does not exist | NOT RELEASED |
 
+## Tsurfing boundary checkpoint — 2026-09-04
+
+GitHub repository `mariusschober/Goalflow` was renamed to
+`mariusschober/Tsurfing` after checkpoint
+`2d95d5da828eb57fa4110f20aaf206e5a8f088ca` was pushed. The local checkout
+remains at `/Users/schober/Projects/Goalflow` for compatibility and its `origin`
+now fetches and pushes `https://github.com/mariusschober/Tsurfing.git`.
+
+The checkpoint establishes public Tsurfing identity without rewriting durable
+internals: Web/PWA copy and metadata, Android package
+`com.mariusschober.tsurfing` with version code `4`, macOS bundle
+`com.mariusschober.tsurfing.mac` with version `0.4.0` build `3`, callback
+`tsurfing://auth/callback`, Railway resource definitions, artifact names, Bot
+and Mini App copy, and `.tsurfing-backup` exports. Existing migration text,
+`goalflow_*` database objects, source namespaces, IndexedDB/storage keys,
+Android Room filename, encrypted-backup magic, and `.goalflow-backup` imports
+remain intentionally compatible. `npm run verify:identifiers` passed all 20
+declared boundaries.
+
+Local checkpoint evidence:
+
+- `npm run verify:release` passed TypeScript, 52 Vitest files / 265 tests,
+  production Web/Mini/server builds, fail-closed server and maintenance probes,
+  and both source and built-client secret scans.
+- All 14 migration hashes and all 8 Room schema hashes passed. Static migration
+  verification passed empty-order, additive-upgrade, and access-boundary checks;
+  hosted Supabase execution remains unproven.
+- Native Android `test lint assembleProductionDebug` passed 186 tasks after a
+  clean analyzer run. The unsigned release candidate is package
+  `com.mariusschober.tsurfing`, version `0.4.0-beta.1` / code `4`, SHA-256
+  `77ef80bef11db6b8db92e7535bb268ec1007b5ea6f1261900b4f62ee36ec1059`.
+  It is explicitly not the signed release artifact.
+- Production-debug SHA-256 is
+  `ab22a6d7d7c8efaa7ee11589f1dca6686bcd35dd074f6c64259fd1b0d125269f`.
+  It installed on connected Samsung SM-S918B `R3CW404GVBL`, cold-launched in
+  852 ms, exposed the exact Tsurfing package/scheme/actions, and passed all
+  seven app instrumentation tests on the physical device. The separate
+  macrobenchmark task could not auto-grant its Samsung test permission and is
+  not represented as a performance pass.
+- The macOS suite passed 176 tests with one hosted-only skip and zero failures.
+  A universal arm64/x86_64 Release app built with display name `Tsurfing`, the
+  final bundle/version/feed/icon configuration, hardened runtime, and a valid
+  ad-hoc signature. Executable SHA-256 is
+  `46d283fd26702bc01be3dcfe1c3cd8bfc20e09deea1188b7907fa2bfa64928db`;
+  full code-directory SHA-256 is
+  `5dcf04fc5925ee96e8e5cb277ce6bdef0a71d7a2a97d18d6d99f44c9c1805ae8`.
+  Developer-ID entitlements and notarization remain owner-signing work, not a
+  local pass.
+
+The finalization branch does not match the workflow's push filters. An
+exact-head pull-request run is still required after this evidence update; until
+its job URL, outcomes, artifacts, and honest skips are recorded here, CI for
+the Tsurfing checkpoint is `NOT RUN`.
+
 ## CI and build evidence
 
 The exact-implementation [Beta Gate run
-33821008399](https://github.com/mariusschober/Goalflow/actions/runs/33821008399)
+33821008399](https://github.com/mariusschober/Tsurfing/actions/runs/33821008399)
 completed at `7d491c882ccb9e02691e2fe007ee0efce91eceee`. Its independent
 `dependency-audit`, `verify`, clean PostgreSQL `migrations`, `web-release`,
 legacy `android`, `native-android`, and `macos` jobs succeeded. Chromium and
@@ -30,7 +85,7 @@ issues. A missing lockfile, scanner error, timeout, or vulnerability remains
 fatal to the aggregate gate.
 
 The documentation head was independently rerun as [Beta Gate run
-33823362114](https://github.com/mariusschober/Goalflow/actions/runs/33823362114)
+33823362114](https://github.com/mariusschober/Tsurfing/actions/runs/33823362114)
 at `01f864720df7acfa211745e64edec8b5163ab612`. Verification, migrations,
 dependency audit, Web, legacy Android, native Android, and macOS all succeeded.
 The aggregate again failed only because the complete-history secret job found
@@ -83,10 +138,12 @@ candidate's `migrations` job applied the complete ordered set to clean
 PostgreSQL 16 and passed the empty-database, upgrade, idempotency, conflict,
 cursor, restore, task-event, unknown-payload, and regression checks.
 
-This is SQL execution evidence, not hosted Supabase evidence. No dedicated
-Goalflow staging project exists, so extensions, grants, RPCs, triggers, RLS,
-storage policies, auth hooks, and backup storage have not been proven in a real
-Supabase project. No production migration state has been inspected or changed.
+This is SQL execution evidence, not hosted Supabase evidence. An empty Tsurfing
+project exists in `eu-west-1` and is reserved for staging, but no migrations or
+configuration have been applied. Extensions, grants, RPCs, triggers, RLS,
+storage policies, auth hooks, and backup storage therefore remain unproven in a
+real Supabase project. Movetrics was not touched. No production migration state
+has been inspected or changed.
 
 ## Authentication and account lifecycle
 
@@ -125,7 +182,7 @@ implementation sequence is recorded in
 | User A cannot inject/read user B | Server/RLS test harness exists | Two real staging users absent | NOT RUN |
 | Web to native Android | API-30 visible-UI, seven-test instrumentation, exact installed v2→v3 preservation, and a production-transport handoff harness compile | Hosted handoff skipped; no signed build or staging account | NOT RUN |
 | Web to native macOS | 176 Swift tests, temporary-Keychain login, production URL-session handoff harness, and ad-hoc build gate compile | Hosted handoff skipped; no staging login/sync drill | NOT RUN |
-| Telegram to linked Goalflow account | Disabled implementation and adversarial tests exist | BotFather test bot absent | DISABLED / NOT RUN |
+| Telegram to linked Tsurfing account | Disabled implementation and adversarial tests exist | BotFather test bot absent | DISABLED / NOT RUN |
 
 Synthetic tests qualify a candidate for hosted testing; they do not prove zero
 data loss or cross-user isolation in the deployed system.
@@ -173,7 +230,9 @@ explicit user UUID and pre-restore snapshot.
 - The historical Firebase/GCP client key has not received owner-side
   revoke/rotate/restrict and usage-review evidence. Complete-history scanning
   intentionally fails; see `docs/security/HISTORICAL_CREDENTIAL_ACTIONS.md`.
-- Dedicated staging and production Supabase projects are absent.
+- The empty Tsurfing staging project is not configured or migration-proven;
+  the separate production project is absent by design until staging is proven
+  and paused under the Free-plan two-project limit.
 - The Railway staging environment and both staging/production services are
   absent.
 - Two synthetic staging identities and live auth/RLS/sync evidence are absent.
@@ -195,7 +254,7 @@ explicit user UUID and pre-restore snapshot.
   release gate.
 - AI and voice are optional and remain disabled by default.
 
-The next release-critical action requiring repository-owner input is to resolve
-the historical Google key in its console and choose the organization and region
-for a new, isolated Goalflow staging Supabase project. No unrelated existing
-project may be repurposed.
+The next release-critical owner action is to provide the historical Google key's
+deletion disposition, deletion date, and one-way fingerprint after console
+verification. Do not provide the key itself. Independent source, CI, staging,
+and deployment work continues without touching Movetrics.

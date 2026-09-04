@@ -1,7 +1,7 @@
-# Goalflow beta operations
+# Tsurfing beta operations
 
 This runbook covers the small staging/production deployment and encrypted
-application-level backups. Commands are implemented, but no live Goalflow
+application-level backups. Commands are implemented, but no live Tsurfing
 Supabase or Railway environment has been proven yet. Do not label a deployment
 ready until the staging drills below have produced retained evidence.
 

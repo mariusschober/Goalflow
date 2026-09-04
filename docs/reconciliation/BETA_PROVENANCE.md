@@ -1,4 +1,10 @@
-# Goalflow beta provenance
+# Tsurfing beta provenance
+
+> Naming update (2026-09-04): the product and GitHub repository are now
+> Tsurfing / `mariusschober/Tsurfing`. Historical Goalflow identifiers, paths,
+> artifacts, and links below are retained when they describe the evidence that
+> actually ran. Compatibility-sensitive source namespaces, migration text,
+> database/storage keys, and backup internals are intentionally unchanged.
 
 Forensic inventory captured on 2026-09-03 before beta changes. This document is
 the authority for branch provenance during the beta reconciliation. It records
@@ -7,7 +13,7 @@ deploy.
 
 ## Capture method and immutable reference point
 
-- Repository: `mariusschober/Goalflow` (public; authenticated repository access
+- Repository: `mariusschober/Tsurfing` (public; authenticated repository access
   reports admin/push permission for `mariusschober`).
 - Fetch: `git fetch origin --prune --tags '+refs/heads/*:refs/remotes/origin/*'`.
 - Worktree immediately after fetch: clean at
@@ -621,7 +627,7 @@ No historical remote branch has been deleted.
 - Complete-history scanning intentionally remains red for the historical
   Firebase/GCP client key until its Google Cloud disposition and usage review
   are recorded in `docs/security/HISTORICAL_CREDENTIAL_ACTIONS.md`.
-- No isolated Goalflow Supabase staging project, Railway staging deployment, or
+- No configured Tsurfing Supabase staging project, Railway staging deployment, or
   two hosted test identities exist yet. The connected unrelated Supabase
   project must not be repurposed.
 - Android release signing material and its expected certificate fingerprint are

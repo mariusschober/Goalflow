@@ -1,4 +1,4 @@
-# Goalflow repository instructions
+# Tsurfing repository instructions
 
 ## Read this first
 
@@ -17,9 +17,12 @@ historical snapshots and must not be executed.
 
 ## Current source of truth
 
-- The complete candidate source is `origin/chore/railway-beta-gate`.
-- The handover evidence base is commit
-  `01f864720df7acfa211745e64edec8b5163ab612`.
+- The active finalization source is
+  `origin/codex/personal-beta-finalization-20260904`, based on the reviewed
+  `origin/chore/railway-beta-gate` tip
+  `44bd85d9662b2e5a9c012b977a26cf4a5c501964`.
+- The original handover evidence base remains commit
+  `01f864720df7acfa211745e64edec8b5163ab612` and must remain an ancestor.
 - A newer tip is acceptable only after reviewing its diff and CI and proving it
   is a descendant of that evidence base.
 - `integration/beta` is currently 86 commits behind the evidence base. Advance
