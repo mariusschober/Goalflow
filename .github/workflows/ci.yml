@@ -17,6 +17,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  dependency-audit:
+    name: dependency-audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - name: Scan exact npm lockfile with OSV
+        uses: google/osv-scanner-action/osv-scanner-action@baa4139e56d6312335d899e6ba045fa16d1d3d0b # v2.5.1
+        with:
+          scan-args: |-
+            --lockfile=package-lock.json
+            --allow-no-lockfiles=false
+
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -37,7 +53,6 @@ jobs:
       - run: node scripts/verify-migration-hashes.mjs
       - run: node scripts/verify-room-schema-hashes.mjs
       - run: node scripts/check-durable-identifiers.mjs
-      - run: npm run audit:dependencies
       - name: Verify production startup
         run: npm run verify:server
       - name: Verify one-shot maintenance fails closed
@@ -325,7 +340,6 @@ jobs:
         run: npm run verify:maintenance
       - run: npm run verify:client-secrets
       - run: npm run verify:client-artifacts
-      - run: npm run audit:dependencies
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium webkit
       - name: Run Playwright web-critical journeys (chromium + webkit)
@@ -652,7 +666,7 @@ jobs:
 
   android-internal-beta:
     name: android-internal-beta
-    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]
+    needs: [verify, dependency-audit, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]
     if: github.event_name == 'push' && github.ref == 'refs/heads/integration/beta'
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -784,14 +798,15 @@ jobs:
 
   beta-gate:
     name: beta-gate
-    needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client, android-internal-beta]
+    needs: [verify, dependency-audit, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client, android-internal-beta]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - name: Check all required jobs succeeded
         run: |
-          echo "verify=${{ needs.verify.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }} hosted-staging=${{ needs.hosted-staging.result }} hosted-cross-client=${{ needs.hosted-cross-client.result }} android-internal-beta=${{ needs.android-internal-beta.result }}"
+          echo "verify=${{ needs.verify.result }} dependency-audit=${{ needs.dependency-audit.result }} secrets=${{ needs.secrets.result }} migrations=${{ needs.migrations.result }} android=${{ needs.android.result }} native-android=${{ needs.native-android.result }} web-release=${{ needs.web-release.result }} macos=${{ needs.macos.result }} hosted-staging=${{ needs.hosted-staging.result }} hosted-cross-client=${{ needs.hosted-cross-client.result }} android-internal-beta=${{ needs.android-internal-beta.result }}"
           if [ "${{ needs.verify.result }}" != "success" ]; then echo "verify failed: ${{ needs.verify.result }}" >&2; exit 1; fi
+          if [ "${{ needs.dependency-audit.result }}" != "success" ]; then echo "dependency-audit failed: ${{ needs.dependency-audit.result }}" >&2; exit 1; fi
           if [ "${{ needs.secrets.result }}" != "success" ]; then echo "secrets failed: ${{ needs.secrets.result }}" >&2; exit 1; fi
           if [ "${{ needs.migrations.result }}" != "success" ]; then echo "migrations failed: ${{ needs.migrations.result }}" >&2; exit 1; fi
           if [ "${{ needs.android.result }}" != "success" ]; then echo "android failed: ${{ needs.android.result }}" >&2; exit 1; fi

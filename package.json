@@ -3,10 +3,8 @@
   "private": true,
   "version": "0.3.0-tranche3",
   "type": "module",
-  "packageManager": "npm@11.9.0",
   "engines": {
-    "node": "22.x",
-    "npm": "11.9.x"
+    "node": "22.x"
   },
   "scripts": {
     "lint": "tsc --noEmit",
@@ -29,13 +27,12 @@
     "verify:migration-hashes": "node scripts/verify-migration-hashes.mjs",
     "verify:room-hashes": "node scripts/verify-room-schema-hashes.mjs",
     "verify:identifiers": "node scripts/check-durable-identifiers.mjs",
-    "audit:dependencies": "node scripts/audit-dependencies.mjs",
     "test:migrations:postgres": "bash scripts/test-postgres-migrations.sh",
     "test:hosted:staging": "node --import tsx scripts/test-hosted-staging.ts",
     "test:hosted:browser": "playwright test --config playwright.hosted.config.ts",
     "test:hosted:cross-client-browser": "playwright test --config playwright.cross-client.config.ts",
     "restore:backup": "tsx scripts/restore-production-backup.ts",
-    "verify:release": "npm run lint && npm test && npm run build && npm run verify:server && npm run verify:maintenance && npm run verify:client-secrets && npm run verify:client-artifacts && npm run audit:dependencies",
+    "verify:release": "npm run lint && npm test && npm run build && npm run verify:server && npm run verify:maintenance && npm run verify:client-secrets && npm run verify:client-artifacts",
     "test:e2e": "playwright test",
     "verify:web-e2e": "playwright test --reporter=list",
     "android:sync": "npm run build:client && cap sync android",

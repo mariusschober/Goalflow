@@ -13,10 +13,10 @@ describe('Android internal beta workflow', () => {
       "if: github.event_name == 'push' && github.ref == 'refs/heads/integration/beta'"
     );
     expect(workflow).toContain(
-      'needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]'
+      'needs: [verify, dependency-audit, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]'
     );
     expect(workflow).toContain(
-      'needs: [verify, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client, android-internal-beta]'
+      'needs: [verify, dependency-audit, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client, android-internal-beta]'
     );
     expect(workflow).toContain(
       'if [ "${{ needs.android-internal-beta.result }}" != "success" ]'

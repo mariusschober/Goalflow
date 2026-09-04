@@ -1,36 +1,37 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-  packageManager?: string;
-  engines?: Record<string, string>;
-  scripts?: Record<string, string>;
-};
-const auditScript = readFileSync(new URL('../scripts/audit-dependencies.mjs', import.meta.url), 'utf8');
 const betaWorkflow = readFileSync(new URL('../.github/workflows/ci.yml', import.meta.url), 'utf8');
 const releaseWorkflow = readFileSync(new URL('../.github/workflows/release.yml', import.meta.url), 'utf8');
 
 describe('dependency advisory gate', () => {
-  it('uses the exact package-manager version declared by the repository', () => {
-    expect(packageJson.packageManager).toBe('npm@11.9.0');
-    expect(packageJson.engines?.npm).toBe('11.9.x');
-    expect(packageJson.scripts?.['audit:dependencies']).toBe('node scripts/audit-dependencies.mjs');
-    expect(auditScript).toContain("const expectedNpmVersion = '11.9.0'");
-    expect(auditScript).toContain("spawnSync(auditor, ['--version']");
-    expect(auditScript).toContain("spawnSync(auditor, ['audit', '--audit-level=high']");
+  it('scans the exact committed lockfile with the current pinned OSV action', () => {
+    expect(betaWorkflow).toContain('dependency-audit:');
+    expect(betaWorkflow).toContain('timeout-minutes: 10');
+    expect(betaWorkflow).toContain(
+      'google/osv-scanner-action/osv-scanner-action@baa4139e56d6312335d899e6ba045fa16d1d3d0b # v2.5.1'
+    );
+    expect(betaWorkflow).toContain('--lockfile=package-lock.json');
+    expect(betaWorkflow).toContain('--allow-no-lockfiles=false');
   });
 
-  it('fails rather than falling back when installation, version verification, or audit fails', () => {
-    expect(auditScript).toContain("'--ignore-scripts', '--no-audit', '--no-fund'");
-    expect(auditScript).toContain('timeout: 120_000');
-    expect(auditScript).toContain('timeout: 180_000');
-    expect(auditScript).not.toContain("'--force'");
-    expect(auditScript).not.toContain("'--audit-level=critical'");
+  it('propagates the scanner result without retries, skips, or permissive handling', () => {
+    const auditJob = betaWorkflow.slice(
+      betaWorkflow.indexOf('  dependency-audit:'),
+      betaWorkflow.indexOf('\n  verify:')
+    );
+    expect(auditJob).not.toContain('continue-on-error');
+    expect(auditJob).not.toContain('retry');
+    expect(auditJob).not.toContain('if:');
   });
 
-  it('is required by both beta verification paths and the authorized release', () => {
-    expect(betaWorkflow.match(/npm run audit:dependencies/g)).toHaveLength(2);
-    expect(releaseWorkflow).toContain('npm run audit:dependencies');
-    expect(betaWorkflow).not.toContain('npm audit --audit-level=high');
+  it('is required by the aggregate and signed beta while release reuses the exact green main gate', () => {
+    expect(betaWorkflow).toContain(
+      'needs: [verify, dependency-audit, secrets, migrations, android, native-android, web-release, macos, hosted-staging, hosted-cross-client]'
+    );
+    expect(betaWorkflow).toContain('dependency-audit=${{ needs.dependency-audit.result }}');
+    expect(betaWorkflow).toContain('dependency-audit failed: ${{ needs.dependency-audit.result }}');
+    expect(releaseWorkflow).toContain('does not have a successful Beta Gate push run on main');
+    expect(releaseWorkflow).toContain('.name == "beta-gate"');
   });
 });
