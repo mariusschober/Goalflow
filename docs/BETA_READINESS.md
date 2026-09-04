@@ -10,12 +10,12 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Active finalization branch | `codex/personal-beta-finalization-20260904`; Tsurfing boundary implementation checkpoint `2d95d5da828eb57fa4110f20aaf206e5a8f088ca` | CANDIDATE ONLY |
+| Active finalization branch | `codex/personal-beta-finalization-20260904`; current authentication checkpoint `ffc779996d7bca4d4faf488f1511ddf87743c8c7` | CANDIDATE ONLY |
 | Reviewed source | `chore/railway-beta-gate` at `44bd85d9662b2e5a9c012b977a26cf4a5c501964`; original handover SHA `01f864720df7acfa211745e64edec8b5163ab612` remains an ancestor | VERIFIED SOURCE |
 | Active local handover | `docs/handover/LOCAL_CODEX_START_PROMPT.md` and `docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md` | DOCUMENTED |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
-| Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
+| Staging source | Railway staging exists but has no repository source or deployment; `develop` has not been created from a proven release | CONFIGURED / NOT DEPLOYED |
 | Release tag | `v0.4.0-beta.1` does not exist | NOT RELEASED |
 
 ## Tsurfing boundary checkpoint — 2026-09-04
@@ -67,12 +67,61 @@ Local checkpoint evidence:
   Developer-ID entitlements and notarization remain owner-signing work, not a
   local pass.
 
-The finalization branch does not match the workflow's push filters. An
-exact-head pull-request run is still required after this evidence update; until
-its job URL, outcomes, artifacts, and honest skips are recorded here, CI for
-the Tsurfing checkpoint is `NOT RUN`.
+The finalization branch is exercised through draft pull request
+[`#3`](https://github.com/mariusschober/Tsurfing/pull/3). Exact-head CI evidence
+for the later authentication checkpoint is recorded below.
+
+## Authentication checkpoint — 2026-09-04
+
+The current checkpoint `ffc779996d7bca4d4faf488f1511ddf87743c8c7`
+contains typed email OTP activation and secure restart persistence on Web,
+native Android, and native macOS. It also contains Supabase-managed Telegram
+OIDC Authorization Code + PKCE and explicit immutable Telegram identity
+linking on all three clients. Password and magic-link entry points are absent
+from the production UI. Owner linking requires AAL2; account activation and
+linking do not trust mutable metadata or merge by email, username, or phone.
+
+Local verification passed 53 Vitest files / 279 tests and the complete Web,
+Mini App, and server release build. Native Android passed unit tests, lint, and
+debug assembly. The macOS suite ran 185 tests: 184 passed, the one explicitly
+hosted-only transport test skipped, and none failed. A first release-verifier
+run had one isolated five-second bundle-key test timeout; that test passed 4/4
+when repeated and the complete verifier then passed without changing a gate.
 
 ## CI and build evidence
+
+The authentication [Beta Gate run
+33918137065](https://github.com/mariusschober/Tsurfing/actions/runs/33918137065)
+completed against the exact head
+`ffc779996d7bca4d4faf488f1511ddf87743c8c7`. `verify`,
+`dependency-audit`, `migrations`, `web-release`, legacy `android`,
+`native-android`, and `macos` succeeded. `secrets` failed on the single known
+historical Firebase/GCP finding. `hosted-staging` and
+`hosted-cross-client` failed because the required protected staging
+configuration and deployed origin were absent. The aggregate `beta-gate`
+therefore failed and `android-internal-beta` correctly skipped. These failures
+were not weakened or relabeled.
+
+The run retained these test-only or ad-hoc artifacts; none is the signed
+internal-beta release:
+
+- `tsurfing-native-sandbox-debug-apk-TEST-ONLY`, artifact `9954698641`,
+  18,568,008 bytes, digest
+  `sha256:e98fe49f13fec82358a2fcf32062593ba754119db97797d2b91b901da5f11ea3`.
+- `tsurfing-native-production-debug-apk-TEST-ONLY`, artifact `9954697688`,
+  18,567,800 bytes, digest
+  `sha256:4f7d9bd429aefb23408e9995be337ff7875e45fd101b9480384210418a893b94`.
+- `tsurfing-native-room-schemas`, artifact `9954244350`, 16,348 bytes,
+  digest
+  `sha256:99922f0610af38752219bf5843a4d80ebe9024ab6e204c72b5d78aad2d8c3228`.
+- `tsurfing-production-debug-apk-TEST-ONLY`, artifact `9954058222`,
+  4,143,733 bytes, digest
+  `sha256:401fbedcaeceba1ef90b5b187cbf4128ed656e5cd4fbad60444ceef90c8c3397`.
+- `tsurfing-macos-ad-hoc-beta`, artifact `9954042283`, 2,127,431 bytes,
+  digest
+  `sha256:1fdff645a105a490e3acc7de300f6d5de379aff87a92a2e5fe67bb46d58e059d`.
+- `gitleaks-results.sarif`, artifact `9953946141`, 7,107 bytes, digest
+  `sha256:5b0b4a82a9bdaa8d4a892ed4498378b140fa16d6479a1c158cbc11ade92c8496`.
 
 The exact-implementation [Beta Gate run
 33821008399](https://github.com/mariusschober/Tsurfing/actions/runs/33821008399)
@@ -131,19 +180,38 @@ system libraries; hosted CI is the browser authority.
 
 ## Database and Supabase evidence
 
-There are 14 immutable SQL migrations, ending at
-`202609030007_telegram_capture_confirmation.sql`. Their exact SHA-256 values are
+There are 16 immutable SQL migrations, ending at
+`202609040002_telegram_oidc_activation.sql`. Their exact SHA-256 values are
 recorded in `supabase/migrations/MIGRATION_SHA256_MANIFEST.json`. The current
 candidate's `migrations` job applied the complete ordered set to clean
-PostgreSQL 16 and passed the empty-database, upgrade, idempotency, conflict,
+PostgreSQL 17 and passed the empty-database, upgrade, idempotency, conflict,
 cursor, restore, task-event, unknown-payload, and regression checks.
 
-This is SQL execution evidence, not hosted Supabase evidence. An empty Tsurfing
-project exists in `eu-west-1` and is reserved for staging, but no migrations or
-configuration have been applied. Extensions, grants, RPCs, triggers, RLS,
-storage policies, auth hooks, and backup storage therefore remain unproven in a
-real Supabase project. Movetrics was not touched. No production migration state
-has been inspected or changed.
+The free Supabase project `xyjgpwwvsyjhurkycyqr` was renamed to
+`Tsurfing Staging`. It is healthy in `eu-west-1` on PostgreSQL 17.6 and all 16
+migrations were applied in order from this branch. The resulting live catalog
+has 21 empty public application tables, all with RLS enabled, and neither
+`anon` nor `authenticated` has direct SELECT/INSERT/UPDATE/DELETE privileges
+on any public application table. The private `goalflow-backups` bucket exists
+with a 50 MiB limit.
+
+One hosted-platform difference is recorded explicitly. Supabase owns its
+managed `storage.objects` and `storage.buckets` tables, so the migration role
+cannot execute the three owner-only ALTER/REVOKE/GRANT statements in
+`202609030001_access_boundary_hardening.sql`. The hosted application applied
+the otherwise identical migration after proving that both managed tables
+already had RLS enabled, had zero client policies, and that the backup bucket
+was private. Supabase's default SQL grants remain, while the absence of a
+permissive RLS policy denies untrusted direct access. This exception must be
+encoded as a hash-pinned, fail-closed hosted deployment procedure before
+production rather than editing the immutable migration.
+
+The live security advisor reported one actionable warning:
+`public.validate_goalflow_task_schedule` lacks a fixed search path. Performance
+advisors also reported unindexed foreign keys and older RLS policies that call
+`auth.uid()` without an init-plan SELECT. These are not represented as green;
+a forward migration is required. Movetrics was not queried or changed. No
+production Supabase project exists.
 
 ## Authentication and account lifecycle
 
@@ -158,18 +226,26 @@ elevation required for an owner to synchronize. A damaged encrypted Android
 session is reported without deleting Room data or its outbox; non-key-loss
 ciphertext remains until an explicit replacement or clear.
 
-No staging URL or staging identities exist. Registration email delivery,
-verification, invite activation, login, reset, refresh, revocation, owner AAL2,
-and redirect allowlists are therefore `NOT RUN` against a live provider. Test
-identity A and B UUIDs/passwords must never be recorded in this file.
+Source authentication is complete for the current Web, native Android, and
+native macOS checkpoint, but live proof remains incomplete. Supabase staging
+uses site URL `https://staging.tsurfing.com`, allows only the staging Web path
+and `tsurfing://auth/callback`, issues six-digit email OTPs with a ten-minute
+expiry, detects compromised refresh-token reuse, keeps the recommended
+ten-second refresh-token reuse interval, enables TOTP, and limits AAL1 sessions
+to 15 minutes before MFA elevation.
 
-The requested beta authentication is not yet complete in source. Web exposes
-password login and a magic-link request; native Android and macOS expose
-magic-link PKCE. None of the three currently verifies a user-entered email OTP,
-and native Android/macOS do not implement Telegram OIDC. Web Telegram OIDC and
-linking are disabled scaffolding pending live provider configuration. The active
-implementation sequence is recorded in
-`docs/handover/LOCAL_CODEX_PERSONAL_BETA_CONTEXT.md`.
+Postmark server `20738479` was renamed to `Tsurfing Auth`; SMTP access is
+enabled. `tsurfing.com` is DKIM and Return-Path verified and sender
+`Tsurfing <login@tsurfing.com>` with reply-to `marius@tsurfing.com` is saved.
+The Postmark account remains in Test mode. Its approval form was not submitted
+and its retained credential was not opened. Supabase's custom-SMTP form is
+prepared for STARTTLS on `smtp.postmarkapp.com:587` with a 60-second per-user
+interval, but remains deliberately unsaved until the owner enters the retained
+credential directly. The email template therefore cannot yet be changed to
+`{{ .Token }}`. Turnstile is also disabled until its retained site and secret
+keys are provisioned directly. No staging identities, delivered OTP, refresh,
+revocation, or owner AAL2 journey has run; test identity secrets must never be
+recorded here.
 
 ## Synchronization matrix
 
@@ -208,14 +284,29 @@ client convergence evidence is therefore `NOT RUN`.
 
 ## Deployment and rollback
 
-The intended topology is one private Railway project with isolated persistent
-`staging` and `production` environments. Each has one web/API service and one
-one-shot maintenance service from the same commit. Staging follows `develop`
-after CI; production follows `main` only by explicit promotion. Read-only
-verification on 2026-09-04 found Railway project
-`58c0b3aa-f2ad-459a-bb6f-194b130c3e68`, only its empty `production`
-environment `e7ed6925-b96b-4a17-af4e-ae78b2a934fb`, and zero services. There
-is no staging or production URL to record.
+Railway project `58c0b3aa-f2ad-459a-bb6f-194b130c3e68` was renamed to
+`Tsurfing`. Its former empty `production` environment was renamed to persistent
+`staging` (`e7ed6925-b96b-4a17-af4e-ae78b2a934fb`) and a separate empty
+`production` environment (`02c29da8-5155-4768-8cf3-66da21d6d7e6`) was
+created. No production service, variable, source, or deployment was created.
+
+Staging has empty service `tsurfing-web-api`
+(`9e949038-a0e4-4aa2-925d-f746ae21ba25`) configured for the release build,
+readiness health check, bounded crash restart, and Railway Serverless sleeping.
+It also has empty cron service `tsurfing-maintenance`
+(`5691dbd1-eee6-4ec8-8733-1dec19680393`) configured for the one-shot backup at
+02:00 UTC with no restart. Public, non-secret staging variables point only to
+Tsurfing Staging Supabase. Neither service has a GitHub source or deployment,
+and the retained Supabase server key, backup master key, and owner UUID are
+absent.
+
+Custom domain `staging.tsurfing.com` is attached to the staging Web service and
+is waiting for CNAME `0a00btfe.up.railway.app` plus certificate issuance. The
+authoritative DNS is at OVH; no DNS record was changed because that account is
+not authenticated in the in-app browser. Railway is currently a 30-day trial
+with 26 days and the included $5 credit remaining. No service has been started,
+so this checkpoint did not intentionally consume runtime credit or authorize a
+paid plan.
 
 Before production exists, rollback means do not promote: leave `main` and the
 production environment untouched. After release, rollback is to redeploy the
@@ -230,11 +321,16 @@ explicit user UUID and pre-restore snapshot.
 - The historical Firebase/GCP client key has not received owner-side
   revoke/rotate/restrict and usage-review evidence. Complete-history scanning
   intentionally fails; see `docs/security/HISTORICAL_CREDENTIAL_ACTIONS.md`.
-- The empty Tsurfing staging project is not configured or migration-proven;
-  the separate production project is absent by design until staging is proven
-  and paused under the Free-plan two-project limit.
-- The Railway staging environment and both staging/production services are
-  absent.
+- Realtime wake-up, 30-second foreground fallbacks, and the Mini App wake relay
+  are not yet implemented.
+- Tsurfing Staging Supabase needs the forward advisor fixes, hash-pinned hosted
+  migration procedure, custom SMTP, `{{ .Token }}` template, Turnstile, and
+  live two-user proof. The separate production project is absent by design
+  until staging is proven and paused under the Free-plan two-project limit.
+- Railway staging needs retained secret variables, owner UUID, GitHub source,
+  the pending OVH CNAME, and an exact-commit deployment. Production remains
+  intentionally empty.
+- Postmark remains in Test mode; approval has not been requested.
 - Two synthetic staging identities and live auth/RLS/sync evidence are absent.
 - The staging backup/restore drill is absent.
 - Android release signing material and a signed internal APK checksum are
