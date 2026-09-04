@@ -10,7 +10,7 @@ or `IN PROGRESS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Candidate implementation | `chore/railway-beta-gate` implementation tree at `3f401ea0d28679bad24504e5403afa732064a667` | CANDIDATE ONLY |
+| Candidate implementation | `chore/railway-beta-gate` implementation tree at `7d491c882ccb9e02691e2fe007ee0efce91eceee` | CANDIDATE ONLY |
 | Canonical baseline | `reconcile/canonical-main-20260831` at `6bd503605efe0ba4a92d57a6850e98590c1117a8` | PRESERVED |
 | Production source | `main` remains at obsolete head `84bd036ba25d825b5fae36cb780842d9221ed097` | NOT PROMOTED |
 | Staging source | `develop` has not been created from a proven release | NOT CONFIGURED |
@@ -19,18 +19,19 @@ or `IN PROGRESS`.
 ## CI and build evidence
 
 The exact-implementation [Beta Gate run
-33818026484](https://github.com/mariusschober/Goalflow/actions/runs/33818026484)
-completed at `3f401ea0d28679bad24504e5403afa732064a667`. Its `verify`, clean
-PostgreSQL `migrations`, `web-release`, legacy `android`, `native-android`, and
-`macos` jobs succeeded. Chromium and WebKit completed all eight critical
-journeys. The pinned npm 11.9.0 advisory gate completed twice and reported zero
-vulnerabilities; a failed install, version mismatch, three-minute audit timeout,
-registry error, or high-severity finding remains fatal.
+33821008399](https://github.com/mariusschober/Goalflow/actions/runs/33821008399)
+completed at `7d491c882ccb9e02691e2fe007ee0efce91eceee`. Its independent
+`dependency-audit`, `verify`, clean PostgreSQL `migrations`, `web-release`,
+legacy `android`, `native-android`, and `macos` jobs succeeded. Chromium and
+WebKit completed all eight critical journeys. The OSV Scanner action, pinned to
+an immutable commit, scanned the exact lockfile's 749 packages and reported no
+issues. A missing lockfile, scanner error, timeout, or vulnerability remains
+fatal to the aggregate gate.
 
 The macOS job executed 176 tests with one explicitly skipped live-staging test
 and zero failures, built and verified the ad-hoc signed application, and
-retained artifact `9917273034` (1,148,146 bytes; artifact digest
-`sha256:0a254b390d64bf17425094bfa10b01348bf8b7dd3effeb77598aad735083d5de`).
+retained artifact `9918299195` (1,148,130 bytes; artifact digest
+`sha256:b5cfb7b6ecb3f381d80457ec1d244bbf961fdf7e488321f766aa84dcd41d4e4e`).
 The skipped test is the real hosted transport handoff and is not represented as
 live evidence.
 
@@ -44,7 +45,7 @@ device emitted `UPGRADE_DATA_PRESERVATION=PASS`, `UPGRADE_MATRIX=PASS`, and
 `EMULATOR_GATE=PASS`.
 
 The same run's event-commit scan and candidate-tree scan found no leaks. The
-complete-history scan examined 317 commits and found exactly the one unresolved
+complete-history scan examined 319 commits and found exactly the one unresolved
 historical Firebase/GCP key (`history_status=1`, `tree_status=0`). Therefore
 the aggregate `beta-gate` correctly failed. The `hosted-staging` result was
 only the allowed absent-configuration preflight for this short-lived branch.
@@ -56,10 +57,11 @@ supplied. None of those skips is release evidence.
 
 Local verification after the audit repair passed 51 Vitest files / 260 tests,
 TypeScript, production client/server/Mini App builds, client and built-artifact
-secret scans, workflow parsing, and the pinned high-severity dependency audit
-with zero reported vulnerabilities. CI independently passed production boot,
-one-shot maintenance fail-closed behavior, all 14 migration hashes, all 8 Room
-schema hashes, and durable identifier checks. Local Playwright did not execute
+secret scans, workflow parsing, and the OSV workflow contract tests. CI's
+independent lockfile scan reported zero vulnerabilities and also passed
+production boot, one-shot maintenance fail-closed behavior, all 14 migration
+hashes, all 8 Room schema hashes, and durable identifier checks. Local
+Playwright did not execute
 because this workspace could not download the Chromium binary and lacks WebKit
 system libraries; hosted CI is the browser authority.
 
@@ -129,7 +131,7 @@ The intended topology is one private Railway project with isolated persistent
 `staging` and `production` environments. Each has one web/API service and one
 one-shot maintenance service from the same commit. Staging follows `develop`
 after CI; production follows `main` only by explicit promotion. Read-only
-verification on 2026-09-03 found Railway project
+verification on 2026-09-04 found Railway project
 `58c0b3aa-f2ad-459a-bb6f-194b130c3e68`, only its empty `production`
 environment `e7ed6925-b96b-4a17-af4e-ae78b2a934fb`, and zero services. There
 is no staging or production URL to record.

@@ -279,7 +279,7 @@ heads is a production release merely because it exists.
 | `integration/beta` | `87ae3259de5419c41c3e4add290a889b831f9380` | 19 commits after canonical | Proven web/server/auth/sync/backup integration base; `main` remains untouched |
 | `feat/macos-beta` | `b0337ca0527d999cc9a74e2196373839d3049e32` | 16 commits after `integration/beta` | Selective macOS transplant plus shared protocol repairs and the corrected Android v2 migration fixture |
 | `feat/telegram-beta` | `4d36dc11a9bf4e83d6dbb882c4c94e9de7ee4eb3` | 9 commits after `feat/macos-beta` | Selective bot/Mini App transplant plus additive-migration and PostgreSQL verification hardening; feature remains disabled pending live verification |
-| `chore/railway-beta-gate` | implementation head `3f401ea0d28679bad24504e5403afa732064a667` | 58 commits after `feat/telegram-beta`; 102 after canonical; 83 after `integration/beta` | Repository-backed Railway cron, hosted browser/native handoff harnesses, fail-closed release/signing/key/audit gates, backup/restore verification, web/native auth and transport hardening, complete Android installed-upgrade fixtures, visible device launch proof, and retained macOS beta artifact |
+| `chore/railway-beta-gate` | implementation head `7d491c882ccb9e02691e2fe007ee0efce91eceee` | 60 commits after `feat/telegram-beta`; 104 after canonical; 85 after `integration/beta` | Repository-backed Railway cron, hosted browser/native handoff harnesses, fail-closed release/signing/key/audit gates, backup/restore verification, web/native auth and transport hardening, complete Android installed-upgrade fixtures, visible device launch proof, and retained macOS beta artifact |
 
 Useful `sol/web-production-24h` behavior is replaced by current WebKit and
 production work in `ca2b1eb`, `a62a1be`, and the `beta-gate` workflow in
@@ -548,6 +548,8 @@ bbf9722 test(macos): prove hosted sync transport handoff
 e047f83 ci(beta): require hosted cross-client convergence
 ef343c3 fix(ci): initialize cross-client state on runner
 3f401ea fix(ci): pin bounded dependency audit
+3d66b44 docs(beta): record cross-client gate evidence
+7d491c8 fix(ci): replace flaky npm advisory audit with OSV
 ```
 
 The new hosted cross-client job uses one private runner handoff containing only
@@ -564,28 +566,32 @@ The first workflow version was rejected by GitHub before any job because a
 runner-only context was used at job scope. Commit `ef343c3` moves that state
 path initialization into a runner step. The accepted run then exposed npm 10
 falling back to a retiring audit endpoint that rejected the valid npm 11 lock
-tree without reporting a vulnerability. Commit `3f401ea` declares npm 11.9.0,
-installs that exact auditor in an isolated temporary prefix, verifies its
-version, bounds installation and audit time, and propagates every install,
-registry, timeout, advisory, or version failure.
+tree without reporting a vulnerability. Commit `3f401ea` introduced a pinned,
+bounded npm 11 audit and run `33818026484` passed it. The next exact-head run
+`33819988586` proved that npm's advisory request could still hang until the
+entire three-minute command timeout. Commit `7d491c8` replaces that unreliable
+network dependency with a separate OSV Scanner job pinned to an immutable
+action commit. It scans the exact lockfile and is a required dependency of both
+the aggregate and signed internal-beta jobs; missing input, scanner failure,
+timeout, or a finding remains fatal.
 
 GitHub Actions run
-[`33818026484`](https://github.com/mariusschober/Goalflow/actions/runs/33818026484)
+[`33821008399`](https://github.com/mariusschober/Goalflow/actions/runs/33821008399)
 at exact implementation commit
-`3f401ea0d28679bad24504e5403afa732064a667` is the current internal proof.
-`verify`, clean PostgreSQL `migrations`, `web-release`, legacy `android`,
-`native-android`, and `macos` succeeded. The npm 11.9.0 high-severity audit ran
-twice and found zero vulnerabilities. Chromium and WebKit passed all eight
-critical journeys. macOS executed 176 tests with the one live hosted test
-explicitly skipped, verified its ad-hoc signature/checksum, and retained
-artifact `9917273034` with digest
-`sha256:0a254b390d64bf17425094bfa10b01348bf8b7dd3effeb77598aad735083d5de`.
+`7d491c882ccb9e02691e2fe007ee0efce91eceee` is the current internal proof.
+`dependency-audit`, `verify`, clean PostgreSQL `migrations`, `web-release`,
+legacy `android`, `native-android`, and `macos` succeeded. OSV scanned all 749
+packages represented by `package-lock.json` and found no issues. Chromium and
+WebKit passed all eight critical journeys. macOS executed 176 tests with the one
+live hosted test explicitly skipped, verified its ad-hoc signature/checksum,
+and retained artifact `9918299195` with digest
+`sha256:b5cfb7b6ecb3f381d80457ec1d244bbf961fdf7e488321f766aa84dcd41d4e4e`.
 Native Android again emitted `UPGRADE_DATA_PRESERVATION=PASS`,
 `UPGRADE_MATRIX=PASS`, and `EMULATOR_GATE=PASS` after the exact seven-test
 installed-upgrade matrix.
 
 The event and candidate-tree scans were clean. The complete-history scan
-examined 317 commits and found only the unresolved historical Firebase/GCP key
+examined 319 commits and found only the unresolved historical Firebase/GCP key
 (`history_status=1`, `tree_status=0`), so the aggregate gate correctly stayed
 red. Both hosted jobs completed only their allowed absent-configuration
 preflights, and the signed internal APK job was skipped. This run proves the
