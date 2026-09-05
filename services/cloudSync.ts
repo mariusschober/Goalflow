@@ -349,20 +349,43 @@ export const fetchSyncHealth = async (
   };
 };
 
+/** Coalesces overlapping wake-ups without losing a request made during an active cycle. */
+export const createCoalescedSyncRunner = (
+  canRun: () => boolean,
+  runOnce: () => Promise<void>
+): (() => Promise<void>) => {
+  let active: Promise<void> | null = null;
+  let rerunRequested = false;
+
+  const request = async (): Promise<void> => {
+    if (!canRun()) return;
+    if (active) {
+      rerunRequested = true;
+      return active;
+    }
+    active = (async () => {
+      do {
+        rerunRequested = false;
+        await runOnce();
+      } while (rerunRequested && canRun());
+    })().finally(() => { active = null; });
+    return active;
+  };
+  return request;
+};
+
 export const startCloudSync = (userKey: string): (() => void) => {
   if (!supabase) return () => undefined;
   let stopped = false;
   let blockedByPermanentError = false;
   let timer: number | undefined;
-  let activeSync: Promise<void> | null = null;
   const lifecycleController = new AbortController();
   const lifecycleDependencies = dependenciesForUser(userKey, lifecycleController.signal);
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(`goalflow-sync:${userKey}`);
 
-  const synchronize = async (): Promise<void> => {
-    if (stopped || blockedByPermanentError) return;
-    if (activeSync) return activeSync;
-    activeSync = (async () => {
+  const synchronize = createCoalescedSyncRunner(
+    () => !stopped && !blockedByPermanentError,
+    async () => {
       try {
         const before = normalizeSyncMeta(await storageService.get(STORES.SYNC, userKey));
         if (!navigator.onLine) {
@@ -409,12 +432,9 @@ export const startCloudSync = (userKey: string): (() => void) => {
           meta = emptySyncMeta();
         }
         emit(navigator.onLine ? 'error' : 'offline', meta, error instanceof Error ? error.message : 'Synchronization failed.');
-      } finally {
-        activeSync = null;
       }
-    })();
-    return activeSync;
-  };
+    }
+  );
 
   const onLocalChange = (event: Event) => {
     const detail = (event as CustomEvent<{ storeName: string; key: string }>).detail;

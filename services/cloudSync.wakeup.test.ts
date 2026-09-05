@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  createCoalescedSyncRunner,
   FOREGROUND_SYNC_INTERVAL_MS,
   subscribeToSyncWakeups,
   syncWakeupTopicForUser
@@ -28,6 +29,25 @@ class FakeRealtimeChannel {
 }
 
 describe('Web Realtime sync wake-ups', () => {
+  it('runs one follow-up cycle when changes arrive during an active sync', async () => {
+    let releaseFirst: () => void = () => undefined;
+    const firstCycle = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const runOnce = vi.fn()
+      .mockImplementationOnce(() => firstCycle)
+      .mockResolvedValue(undefined);
+    const requestSync = createCoalescedSyncRunner(() => true, runOnce);
+
+    const first = requestSync();
+    await vi.waitFor(() => expect(runOnce).toHaveBeenCalledTimes(1));
+    const second = requestSync();
+    const third = requestSync();
+    expect(runOnce).toHaveBeenCalledTimes(1);
+
+    releaseFirst();
+    await Promise.all([first, second, third]);
+    expect(runOnce).toHaveBeenCalledTimes(2);
+  });
+
   it('derives only the exact immutable UUID topic', () => {
     expect(syncWakeupTopicForUser('AAAAAAAA-1111-4111-8111-111111111111'))
       .toBe('tsurfing:user:aaaaaaaa-1111-4111-8111-111111111111');
