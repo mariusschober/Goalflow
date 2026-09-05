@@ -133,9 +133,17 @@ const captureTodayTask = async (page: Page, title: string) => {
   await expect(dialog).toBeHidden();
 };
 
+const dismissDecisionFatigueWarning = async (page: Page) => {
+  const warning = page.getByRole('dialog', { name: 'Decision Fatigue Warning', exact: true });
+  if (!(await warning.isVisible())) return;
+  await warning.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(warning).toBeHidden();
+};
+
 const openPlan = async (page: Page) => {
   await page.getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByRole('heading', { name: "Today's Flow", exact: true })).toBeVisible();
+  await dismissDecisionFatigueWarning(page);
 };
 
 const cardByTitle = (page: Page, title: string) =>
@@ -143,6 +151,7 @@ const cardByTitle = (page: Page, title: string) =>
 const cardById = (page: Page, taskId: string) => page.locator(`[data-rfd-draggable-id="${taskId}"]`);
 
 const signOutLocally = async (page: Page) => {
+  await dismissDecisionFatigueWarning(page);
   await page.getByRole('button', { name: 'Open account menu', exact: true }).click();
   await page.getByRole('button', { name: 'Logout', exact: true }).click();
   await expect(page.getByLabel('Email')).toBeVisible();

@@ -59,6 +59,8 @@ describe('hosted cross-client release gate', () => {
     expect(browserJourney).not.toContain("getByLabel('Password')");
     expect(hostedAuth).toContain('persistSession: false');
     expect(hostedAuth).toContain('window.localStorage.setItem(key, value)');
+    expect(browserJourney).toContain("getByRole('dialog', { name: 'Decision Fatigue Warning', exact: true })");
+    expect(browserJourney).toContain("getByRole('button', { name: 'Close dialog', exact: true })");
     expect(browserJourney).toContain('writeState(seeded)');
     expect(browserJourney).toContain('cardById(userB.page, seeded.taskId)');
     expect(workflow).toContain("if: always() && steps.preflight.outputs.run == 'true' && steps.seed.outcome != 'skipped'");
