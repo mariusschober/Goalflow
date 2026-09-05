@@ -45,6 +45,10 @@ describe('hosted browser release gate', () => {
     expect(journey).toContain('waitForAutomaticTaskCount');
     expect(journey).toContain('observeSyncPullDeliveringTitle');
     expect(journey).toContain('page.routeWebSocket');
+    expect(journey).toContain('resolveTestTrackingConflictsWithCloud');
+    expect(journey).toContain("labels.every(label => label === 'Conflicting tracking')");
+    expect(journey).toContain('recoverTestTrackingConflicts: true');
+    expect(journey).toContain('Serialize those intentional');
     expect(journey).toContain('realtimeWakeupLatenciesMs');
     expect(journey).toContain('foregroundFallbackPullStartMs');
     expect(journey).toContain("getByRole('dialog', { name: 'Decision Fatigue Warning', exact: true })");

@@ -99,8 +99,8 @@ const createAccountPage = async (
   return { context, page, blockedRealtimeAttempts: () => blockedRealtimeAttempts };
 };
 
-const waitForFreshDurableSync = async (page: Page) => {
-  const state = await page.evaluate(() => new Promise<string>((resolve, reject) => {
+const runFreshDurableSync = async (page: Page): Promise<string> =>
+  page.evaluate(() => new Promise<string>((resolve, reject) => {
     let sawSyncing = false;
     const timeout = window.setTimeout(() => finish(new Error('A fresh sync cycle did not finish.')), 30_000);
     const retry = window.setInterval(() => window.dispatchEvent(new Event('goalflow:sync-retry')), 1_000);
@@ -122,8 +122,42 @@ const waitForFreshDurableSync = async (page: Page) => {
     window.addEventListener('goalflow:sync-state', onState);
     window.dispatchEvent(new Event('goalflow:sync-retry'));
   }));
+
+const resolveTestTrackingConflictsWithCloud = async (page: Page): Promise<number> => {
+  await page.getByRole('button', { name: 'Review sync conflict', exact: true }).click();
+  const conflictLabels = page.locator('p').filter({ hasText: /^Conflicting / });
+  await expect(conflictLabels.first()).toBeVisible();
+  const labels = (await conflictLabels.allTextContents()).map(label => label.trim());
+  expect(labels.length, 'The staging test account exposed no reviewable conflict').toBeGreaterThan(0);
+  expect(
+    labels.every(label => label === 'Conflicting tracking'),
+    `Refusing to auto-resolve a non-test tracking conflict: ${labels.join(', ')}`
+  ).toBe(true);
+
+  const useCloud = page.getByRole('button', { name: 'Use cloud', exact: true });
+  let remaining = await useCloud.count();
+  expect(remaining).toBe(labels.length);
+  while (remaining > 0) {
+    await useCloud.first().click();
+    await expect.poll(() => useCloud.count()).toBeLessThan(remaining);
+    remaining = await useCloud.count();
+  }
+  return labels.length;
+};
+
+const waitForFreshDurableSync = async (
+  page: Page,
+  options: { recoverTestTrackingConflicts?: boolean } = {}
+): Promise<number> => {
+  let state = await runFreshDurableSync(page);
+  let recoveredTrackingConflicts = 0;
+  if (state === 'conflict' && options.recoverTestTrackingConflicts) {
+    recoveredTrackingConflicts = await resolveTestTrackingConflictsWithCloud(page);
+    state = await runFreshDurableSync(page);
+  }
   expect(state, 'A fresh synchronization cycle must end in durable success').toBe('synced');
   await expect(page.getByRole('button', { name: 'Synced', exact: true })).toBeVisible();
+  return recoveredTrackingConflicts;
 };
 
 const captureTodayTask = async (page: Page, title: string): Promise<number> => {
@@ -236,6 +270,7 @@ test('real browsers converge within one account and isolate a second account', a
   const editedTitle = `${originalTitle} edited`;
   const fallbackTitle = `Hosted fallback ${Date.now()} ${randomUUID().slice(0, 8)}`;
   const realtimeLatenciesMs: number[] = [];
+  let recoveredTrackingConflicts = 0;
   let fallbackPullObservation: ReturnType<typeof observeSyncPullDeliveringTitle> | undefined;
 
   try {
@@ -245,6 +280,9 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(firstA.context);
+    recoveredTrackingConflicts = await waitForFreshDurableSync(firstA.page, {
+      recoverTestTrackingConflicts: true
+    });
 
     const secondA = await createAccountPage(
       browser, testInfo, 'user-a-browser-2',
@@ -252,6 +290,7 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(secondA.context);
+    await waitForFreshDurableSync(secondA.page);
 
     const userB = await createAccountPage(
       browser, testInfo, 'user-b-browser',
@@ -259,6 +298,7 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_B_ID!
     );
     contexts.push(userB.context);
+    await waitForFreshDurableSync(userB.page);
 
     const fallbackA = await createAccountPage(
       browser, testInfo, 'user-a-browser-fallback',
@@ -267,14 +307,19 @@ test('real browsers converge within one account and isolate a second account', a
       { blockRealtime: true }
     );
     contexts.push(fallbackA.context);
+    await waitForFreshDurableSync(fallbackA.page);
 
-    await Promise.all([
-      waitForFreshDurableSync(firstA.page),
-      waitForFreshDurableSync(secondA.page),
-      waitForFreshDurableSync(userB.page),
-      waitForFreshDurableSync(fallbackA.page)
-    ]);
-    await Promise.all([openPlan(secondA.page), openPlan(userB.page), openPlan(fallbackA.page)]);
+    // Plan visits update one durable singleton. Serialize those intentional
+    // writes and let every same-user browser pull between them so the latency
+    // measurement itself never manufactures a conflict.
+    await openPlan(secondA.page);
+    await waitForFreshDurableSync(secondA.page);
+    await Promise.all([waitForFreshDurableSync(firstA.page), waitForFreshDurableSync(fallbackA.page)]);
+    await openPlan(fallbackA.page);
+    await waitForFreshDurableSync(fallbackA.page);
+    await Promise.all([waitForFreshDurableSync(firstA.page), waitForFreshDurableSync(secondA.page)]);
+    await openPlan(userB.page);
+    await waitForFreshDurableSync(userB.page);
     await expect.poll(fallbackA.blockedRealtimeAttempts).toBeGreaterThan(0);
 
     const createStartedAt = await captureTodayTask(firstA.page, originalTitle);
@@ -331,6 +376,7 @@ test('real browsers converge within one account and isolate a second account', a
       realtimeWakeupLatenciesMs: realtimeLatenciesMs,
       realtimeP95Ms,
       foregroundFallbackPullStartMs: fallbackPullStartMs,
+      recoveredTrackingConflicts,
       crossUserVisibility: 'DENIED'
     }));
 
