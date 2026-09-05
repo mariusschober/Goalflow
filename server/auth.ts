@@ -8,6 +8,7 @@ export const bearerToken = (request: Request): string | undefined => {
   const header = request.header("authorization");
   return header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 };
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 interface VerifiedTokenClaims {
   aal: "aal1" | "aal2";
   sessionId?: string;
@@ -22,7 +23,7 @@ export const tokenClaims = (token: string): VerifiedTokenClaims => {
       amr?: Array<{ method?: unknown; timestamp?: unknown }>;
     };
     const sessionId = typeof payload.session_id === "string"
-      && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(payload.session_id)
+      && UUID_PATTERN.test(payload.session_id)
       ? payload.session_id
       : undefined;
     const emailOtpAuthenticatedAt = Array.isArray(payload.amr)
@@ -56,8 +57,14 @@ export const createAuthMiddleware = (
     if (!token || !supabase || !admin) {
       response.status(401).json({ error: { code: "unauthorized", message: "A valid session is required." } }); return;
     }
-    const { data, error } = await supabase.auth.getUser(token);
-    if (error || !data.user) {
+    const { data, error } = await supabase.auth.getClaims(token);
+    const verified = data?.claims;
+    const expectedIssuer = `${config.SUPABASE_URL?.replace(/\/$/, "")}/auth/v1`;
+    const audience = verified?.aud;
+    const hasAuthenticatedAudience = audience === "authenticated"
+      || (Array.isArray(audience) && audience.includes("authenticated"));
+    if (error || !verified || typeof verified.sub !== "string" || !UUID_PATTERN.test(verified.sub)
+      || verified.iss !== expectedIssuer || !hasAuthenticatedAudience) {
       response.status(401).json({ error: { code: "unauthorized", message: "The session is invalid or expired." } }); return;
     }
     const claims = tokenClaims(token);
@@ -66,11 +73,11 @@ export const createAuthMiddleware = (
     }
     const [sessionResult, initialProfileResult] = await Promise.all([
       admin.rpc("goalflow_session_is_active", {
-        target_user_id: data.user.id,
+        target_user_id: verified.sub,
         target_session_id: claims.sessionId
       }),
       admin.from("profiles").select("email,role,status")
-        .eq("user_id", data.user.id).maybeSingle()
+        .eq("user_id", verified.sub).maybeSingle()
     ]);
     const { data: activeSession, error: sessionError } = sessionResult;
     if (sessionError) {
@@ -79,17 +86,17 @@ export const createAuthMiddleware = (
     if (activeSession !== true) {
       response.status(401).json({ error: { code: "session_revoked", message: "This session has been signed out." } }); return;
     }
-    const authEmail = data.user.email?.toLowerCase() ?? "";
+    const authEmail = typeof verified.email === "string" ? verified.email.toLowerCase() : "";
     let { data: profile, error: profileError } = initialProfileResult;
-    if (!profile && !profileError && data.user.id === config.OWNER_USER_ID) {
+    if (!profile && !profileError && verified.sub === config.OWNER_USER_ID) {
       const bootstrap = await admin.rpc("bootstrap_goalflow_owner", {
-        target_user_id: data.user.id,
+        target_user_id: verified.sub,
         target_email: authEmail
       });
       if (bootstrap.error) profileError = bootstrap.error;
       else if (bootstrap.data === true) {
         const result = await admin.from("profiles").select("email,role,status")
-          .eq("user_id", data.user.id).maybeSingle();
+          .eq("user_id", verified.sub).maybeSingle();
         profile = result.data; profileError = result.error;
       }
     }
@@ -99,7 +106,7 @@ export const createAuthMiddleware = (
     if (profile && authEmail && profile.email !== authEmail) {
       const { data: updatedProfile, error: updateError } = await admin.from("profiles")
         .update({ email: authEmail, updated_at: new Date().toISOString() })
-        .eq("user_id", data.user.id)
+        .eq("user_id", verified.sub)
         .select("email,role,status")
         .single();
       if (updateError) {
@@ -110,11 +117,11 @@ export const createAuthMiddleware = (
     if (!profile || profile.status !== "active") {
       response.status(403).json({ error: { code: "account_inactive", message: "This Tsurfing account is not active." } }); return;
     }
-    if (profile.role === "owner" && config.OWNER_USER_ID && data.user.id !== config.OWNER_USER_ID) {
+    if (profile.role === "owner" && config.OWNER_USER_ID && verified.sub !== config.OWNER_USER_ID) {
       response.status(403).json({ error: { code: "account_inactive", message: "This Tsurfing account is not active." } }); return;
     }
     const user: AuthenticatedUser = {
-      id: data.user.id,
+      id: verified.sub,
       email: String(profile.email || authEmail),
       role: profile.role === "owner" ? "owner" : "beta",
       status: "active",
