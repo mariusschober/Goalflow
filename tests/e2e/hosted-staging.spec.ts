@@ -327,6 +327,10 @@ test('real browsers converge within one account and isolate a second account', a
     realtimeLatenciesMs.push(Date.now() - createStartedAt);
     await expect(userB.page.getByRole('heading', { name: originalTitle, exact: true })).toHaveCount(0);
     await openPlan(firstA.page);
+    // Opening Plan updates the durable tracking singleton. Finish and
+    // propagate that unrelated write before measuring task-edit convergence.
+    await waitForFreshDurableSync(firstA.page);
+    await waitForFreshDurableSync(secondA.page);
 
     const card = taskCard(secondA.page, originalTitle);
     await card.hover();
