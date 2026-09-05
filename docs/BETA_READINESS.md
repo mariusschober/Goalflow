@@ -13,17 +13,19 @@ is not `PASS`.
 | Item | Current evidence | State |
 | --- | --- | --- |
 | Runtime implementation checkpoint | `b349ece62f17c7e70c1870f17371b72949e9e949` on `codex/personal-beta-finalization-20260904` | PROVEN IN STAGING |
+| Exact evidence checkpoint | `942c7f730e38cf09642d7a76bcb6d1768752b590`; PostgreSQL 17 CI and Railway staging both exact | PROVEN IN STAGING |
 | Reviewed source | `44bd85d9662b2e5a9c012b977a26cf4a5c501964` on `chore/railway-beta-gate`; handover SHA `01f864720df7acfa211745e64edec8b5163ab612` remains an ancestor | VERIFIED |
-| Branch distance at runtime checkpoint | 133 commits ahead of `origin/integration/beta`; 46 ahead of the reviewed source; behind neither | VERIFIED |
+| Branch distance at evidence checkpoint | 134 commits ahead of `origin/integration/beta`; 47 ahead of the reviewed source; behind neither | VERIFIED |
 | Pull request | Draft [PR #3](https://github.com/mariusschober/Tsurfing/pull/3), mergeable, targeting `integration/beta` | OPEN / NOT MERGED |
 | Repository | `mariusschober/Tsurfing`; local directory intentionally remains `/Users/schober/Projects/Goalflow` | VERIFIED |
 | Production source | `main` remains obsolete and unpromoted | BLOCKED |
 | Release tag | `v0.4.0-beta.1` does not exist | BLOCKED |
 
-The evidence commit following `b349ece` changes only the CI migration runtime,
-its regression test, and this ledger. It pins the migration job to the official
-PostgreSQL 17 image digest. Its hosted run must pass before it can supersede the
-runtime checkpoint above.
+Evidence checkpoint `942c7f7` changes only the CI migration runtime, its
+regression test, and this ledger. It pins the migration job to the official
+PostgreSQL 17 image digest. Exact-head CI and the exact Railway deployment both
+passed; it therefore supersedes `b349ece` as the reviewed evidence head without
+changing that implementation checkpoint.
 
 ## Tsurfing identity and compatibility boundary
 
@@ -67,7 +69,7 @@ authoritative.
 
 ## Local verification
 
-At `b349ece`:
+At evidence head `942c7f7` (whose runtime implementation remains `b349ece`):
 
 - `npm run verify:release` passed production Web, Mini App and server builds,
   fail-closed server/maintenance probes, and source/built-artifact secret scans.
@@ -90,70 +92,75 @@ digest-pinned PostgreSQL 17 service plus a live server-version check.
 
 ## Exact-head CI and hosted proof
 
-[GitHub Actions run 33948021282](https://github.com/mariusschober/Tsurfing/actions/runs/33948021282)
+[GitHub Actions run 33951359413](https://github.com/mariusschober/Tsurfing/actions/runs/33951359413)
 completed `success` against exact head
-`b349ece62f17c7e70c1870f17371b72949e9e949`.
+`942c7f730e38cf09642d7a76bcb6d1768752b590`.
 
 | Job | Job ID | Result |
 | --- | ---: | --- |
-| `verify` | `101257517373` | PASS |
-| `dependency-audit` | `101257517384` | PASS |
-| `secrets` | `101257517408` | PASS |
-| `migrations` | `101257517466` | PASS, but still PostgreSQL 16 in this run; corrected in the following evidence commit |
-| `macos` | `101257517284` | PASS |
-| `android` | `101257607296` | PASS |
-| `native-android` | `101257607216` | PASS |
-| `web-release` | `101257635226` | PASS |
-| `hosted-staging` | `101257635183` | PASS |
-| `hosted-cross-client` | `101260486154` | PASS |
-| `beta-gate` | `101261446247` | PASS |
-| `android-internal-beta` | `101261446847` | Expected skip outside an `integration/beta` push; not signing evidence |
+| `verify` | `101266680949` | PASS |
+| `dependency-audit` | `101266680974` | PASS |
+| `secrets` | `101266680904` | PASS |
+| `migrations` | `101266681024` | PASS on PostgreSQL 17.11 from the digest-pinned official image |
+| `macos` | `101266680985` | PASS |
+| `android` | `101266780961` | PASS |
+| `native-android` | `101266781075` | PASS |
+| `web-release` | `101266783400` | PASS |
+| `hosted-staging` | `101266783501` | PASS |
+| `hosted-cross-client` | `101269656183` | PASS |
+| `beta-gate` | `101270302217` | PASS |
+| `android-internal-beta` | `101270302851` | Expected skip outside an `integration/beta` push; not signing evidence |
 
 Hosted protocol proof returned `PASS` for two-user isolation, direct-client
 bypass denial, refresh, a second authenticated session, export isolation, safe
 account-deletion refusal, remote logout, duplicate idempotency, conflict
 preservation/resolution and tombstone propagation. Maximum observed request
-time was 1,119 ms.
+time was 1,349 ms.
 
 The hosted browser performed 20 realtime writes with latencies
-`889, 1137, 1040, 1180, 1192, 1144, 1178, 1181, 1178, 1172, 1279, 1180,
-1194, 1094, 1155, 1145, 1144, 1174, 1283, 1060` ms. p95 was 1,279 ms.
-With wake-up absent, the foreground fallback began after 18,839 ms. It reported
+`775, 1075, 1098, 1175, 1061, 1057, 1166, 1060, 1030, 1055, 1024, 860,
+1144, 1031, 1098, 1069, 1064, 1063, 1171, 1151` ms. p95 was 1,171 ms.
+With wake-up absent, the foreground fallback began after 20,912 ms. It reported
 zero recovered tracking conflicts and cross-user visibility `DENIED`.
 
 The cross-client gate created one durable record through the hosted browser,
 pulled/edited/pushed it through the production Android sync engine, verified it
 in a fresh browser, then did the same through the production macOS transport.
-The macOS mutation advanced server version 436 to 439. Browser seed, Android
-verification, macOS verification and deletion/cleanup all passed.
+The macOS mutation advanced server version 508 to 511. Browser seed completed
+in 14.9 seconds, the Android build in 2 minutes 37 seconds, browser Android
+verification in 12.2 seconds, the selected macOS transport test in 2.567
+seconds, browser macOS verification in 11.5 seconds, and deletion/cleanup in
+16.8 seconds.
 
-### Retained CI artifacts at `b349ece`
+### Retained CI artifacts at `942c7f7`
 
 These are test-only or ad-hoc artifacts, not authorized beta releases:
 
-- Native production-debug APK artifact `9964235258`, 18,586,552-byte artifact
+- Native production-debug APK artifact `9965256346`, 18,586,557-byte artifact
   archive, digest
-  `sha256:69bab6538100c1a462c8221c0756dbec931a515625b039857b33b04bd538ea09`.
+  `sha256:c9d4403c6d1a620d79b66578fa33cadacf36195da8758d40725be1fc5da2cae7`.
   The contained 19,126,936-byte APK is
-  `sha256:20a21b8c87c018cffb030c391744d1b6b8c7d00ac662a6c2c35b8a32ff7e8497`,
+  `sha256:db08c45a3ada1ee781b7448e7ef599695e8c8f99cd0104ba02211abd5cc613bc`,
   package `com.mariusschober.tsurfing.dev`, version code `4`, version
   `0.4.0-beta.1-dev`, v2 signature valid, ephemeral CI signer fingerprint
-  `488b11b6219231937210a8c70d77ab1e54910acc60528599fd21208e7fc24026`.
-- Native sandbox-debug artifact `9964235768`, digest
-  `sha256:81b3f7daf3d5e53d7d9321520bf6498ce35ca4ac662a48509a038d3848c72e97`.
-- Room schemas artifact `9964037583`, digest
-  `sha256:c0c26a87db9b5d1ae7e02e7a85b0a01ea938fd2eaa148dd0f7a66b302475f0b2`.
-- Legacy production-debug artifact `9963975890`, digest
-  `sha256:4e38ce7bde9e59d4b189714626cc66b2f6264f6863504f01cf1b3b3e9dff6d64`.
-- macOS ad-hoc artifact `9963957430`, artifact digest
-  `sha256:5767fd47460ab45cbc17f30409bd4721308b37b178c3909ed9fd3b4f7473574b`.
+  `7a9180bb4b50997b545613ba682f83bcc0db2ed5bc54e91750181fd83d4200f2`.
+- Native sandbox-debug artifact `9965256739`, digest
+  `sha256:972278eeae237efe08737ce559897ee183cdaa696d9fdf185fd9a62e6ddcb07c`.
+- Room schemas artifact `9965053677`, digest
+  `sha256:b1dac9923912700039c732bae91a4c48940ec4e7d3aec0f3dbfd99a3fb904048`.
+- Legacy production-debug artifact `9964966381`, digest
+  `sha256:8337972ef76b488a4555500bc25fd90e9281451019508fa5d314df19837aa029`.
+- macOS ad-hoc artifact `9964966548`, artifact digest
+  `sha256:8c58cd32e9a903cbea4b1e53c16692d51e124fbda688ea728a96d65f671cc184`.
   Its inner zip is
-  `sha256:223fd7cfc7a5176243a81400acbad348213d62793aaeadf1911462aafa2aee21`;
-  provenance binds it to `b349ece`, signing `ad-hoc`, notarization
+  `sha256:86081e14acbb921ff4ba5dbb24fafab3101ae82dcbdc0e1e6c4edaf07851d5de`;
+  provenance binds it to `942c7f7`, signing `ad-hoc`, notarization
   `not-requested`. The universal `x86_64 arm64` executable is
   `sha256:73e82e7ed908700640b617a2bc0f439226552dc9b50a7d4430a2996121d139b3`.
-- Gitleaks SARIF artifact `9963932042`, digest
-  `sha256:643d27451c08e7ceeae3590d1a42e0f5e9e2ca4e27dfe9eae127abf20d61167a`.
+  The signature is ad-hoc with CDHash
+  `e41e21a1551042a55ee65e58452e6545e8c75ffe`, no TeamIdentifier.
+- Gitleaks SARIF artifact `9964925241`, digest
+  `sha256:d8ff3d72b4511a22c7949dff32ca659df4ebc05336c7e1dd3c266dfc1fc8ff0f`.
 
 The complete-history secret scan is green. The deleted Firebase project
 finding is retired with an exact commit/path/rule acknowledgement and one-way
@@ -332,13 +339,13 @@ has been requested or exposed and no live Telegram claim is made.
 
 | Journey | Exact hosted evidence | State |
 | --- | --- | --- |
-| Browser A/B create/edit/delete | 20 private wake-up samples, p95 1,279 ms; fallback pull 18,839 ms | PASS |
+| Browser A/B create/edit/delete | 20 private wake-up samples, p95 1,171 ms; fallback pull 20,912 ms | PASS |
 | Duplicate and lost acknowledgment | Hosted protocol reported `IDEMPOTENT`; property/adversarial tests retain exact-receipt checks | PASS |
 | Offline restart/reconnect | Durable IndexedDB/Room/Keychain tests plus reconnect/focus/network pull triggers | SOURCE PASS / OWNER DEVICE RESTART PENDING |
 | Conflict and tombstone convergence | Hosted conflict `PRESERVED_AND_RESOLVED`; tombstone `PROPAGATED`; PostgreSQL rollback/rebase tests | PASS |
 | User A cannot inject/read user B | Hosted direct bypass and visibility both `DENIED`; account export isolated | PASS |
 | Web to native Android | Hosted production transport edited the browser-created record and a fresh browser verified it | PASS |
-| Web to native macOS | Hosted production transport advanced server version 436 to 439 and a fresh browser verified it | PASS |
+| Web to native macOS | Hosted production transport advanced server version 508 to 511 and a fresh browser verified it | PASS |
 | Telegram Bot and Mini App | Adversarial implementation tests only; live credentials intentionally absent | DISABLED / NOT RUN |
 
 Realtime wake-ups contain no task payload and only start the authoritative
@@ -380,12 +387,14 @@ and `2ca57110-20a3-41e3-b305-4826a1e101e8` (22,242 bytes,
 `100809933ce92695755d080dea0c439e3e072ee9ae7aba2bc95a703d4e2460cc`).
 Both metadata rows match their private objects.
 
-Final staging state matches the chosen daily target: one projected task, zero
+Immediately after the round trip, staging matched the chosen daily target: one projected task, zero
 live sync records, ten total sync records, two tombstones, twelve mutations,
 four conflicts and wake version 76. The temporary sentinel task is absent;
-its append-only mutation and tombstone correctly remain. Readiness was HTTP
-200 after the round trip. A fresh owner login and active-client convergence
-after restore remain an owner-assisted check.
+its append-only mutation and tombstone correctly remain. Later exact-head
+hosted tests created and cleaned their own fixtures while preserving append-only
+audit rows. Readiness was HTTP 200 after the round trip and after the exact-head
+deployment. A fresh owner login and active-client convergence after restore
+remain an owner-assisted check.
 
 ## Deployment and rollback
 
@@ -395,17 +404,18 @@ production environment `02c29da8-5155-4768-8cf3-66da21d6d7e6` remains empty.
 No production service, variable, source or deployment has been created.
 
 Staging Web/API service `9e949038-a0e4-4aa2-925d-f746ae21ba25` deployed exact
-runtime checkpoint `b349ece` as deployment
-`66a5cc10-0176-42e9-8875-75caa688ead8`. `https://staging.tsurfing.com`,
+evidence checkpoint `942c7f7` as deployment
+`3531ad2a-6e00-49df-8e9d-ec438c686ab9`. `https://staging.tsurfing.com`,
 `/mini/` and `/api/v1/health/live` return 200 over valid TLS; readiness exposes
-exact revision `b349ece62f17c7e70c1870f17371b72949e9e949`.
+exact revision `942c7f730e38cf09642d7a76bcb6d1768752b590`.
 
 Maintenance service `5691dbd1-eee6-4ec8-8733-1dec19680393` was used only for
 the bounded backup/restore drill. It was then returned to safe steady state:
 `npm run maintenance`, cron `0 2 * * *`, restart policy `NEVER`, operation
 marker `complete`. Deployment `ec6ea027-584d-4ee3-b972-367e1ee0d32a`
-succeeded and its build log proves the normal start command. No paid resource
-was created or authorized.
+succeeded and its build log proves the normal start command. The newer evidence
+revision is safely waiting for its next scheduled cron rather than being forced
+to run again. No paid resource was created or authorized.
 
 Before production exists, rollback means do not promote: leave `main` and the
 production environment untouched. After release, rollback is to redeploy the
@@ -426,7 +436,7 @@ explicit user UUID and pre-restore snapshot.
 | Realtime p95 below two seconds and fallback below 30 seconds | PASS | None |
 | Web/Android/macOS durable handoff | PASS | None |
 | Encrypted backup and destructive restore | PASS | Owner-assisted post-restore client login remains a separate journey |
-| PostgreSQL 17 hosted migration gate | IN PROGRESS | Exact-head CI for the following evidence commit must pass |
+| PostgreSQL 17 hosted migration gate | PASS | PostgreSQL 17.11, empty and supported-upgrade paths, exact digest-pinned image |
 | Turnstile | BLOCKED | Owner must enter retained site and secret values directly |
 | Telegram OIDC, Bot and Mini App five-surface matrix | BLOCKED | Retained staging credentials and live owner test, deliberately last |
 | Android internal-beta signing | BLOCKED | Protected environment and externally retained signer authorization |
