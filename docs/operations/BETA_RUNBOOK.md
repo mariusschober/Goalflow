@@ -81,10 +81,13 @@ Use only a completed metadata row and its exact object path:
 npm run restore:backup -- \
   --user "$GOALFLOW_STAGING_USER_ID" \
   --object "$GOALFLOW_STAGING_BACKUP_OBJECT" \
+  --expect-revision "$GOALFLOW_EXPECTED_RELEASE_SHA" \
   --dry-run
 ```
 
-Success is a single JSON record with `mode: "dry-run"` and `valid: true`.
+`GOALFLOW_EXPECTED_RELEASE_SHA` is the exact 40-character candidate commit.
+Success is a single JSON record with `mode: "dry-run"`, `valid: true`, and the
+same `releaseSha`.
 The command checks metadata/object byte size and envelope version, authenticates
 and decrypts the object, verifies its checksum and owner, and calls the
 non-mutating database validator. A dry run never creates a pre-restore backup
@@ -100,10 +103,12 @@ npm run restore:backup -- \
   --user "$GOALFLOW_STAGING_USER_ID" \
   --object "$GOALFLOW_STAGING_BACKUP_OBJECT" \
   --execute \
-  --confirm-user "$GOALFLOW_STAGING_USER_ID"
+  --confirm-user "$GOALFLOW_STAGING_USER_ID" \
+  --expect-revision "$GOALFLOW_EXPECTED_RELEASE_SHA"
 ```
 
-The command first creates and finalizes an encrypted `pre-restore` object. The
+The command refuses to execute unless Railway exposes that exact deployed
+revision. It then creates and finalizes an encrypted `pre-restore` object. The
 database replacement and AI-usage recovery then run in one PostgreSQL
 transaction. The post-commit verifier compares row content as well as durable
 IDs and counts, allowing only documented sequence/rebase fields. AI quota

@@ -8,7 +8,8 @@ for (const name of [
   'SUPABASE_ANON_KEY',
   'SUPABASE_SERVICE_ROLE_KEY',
   'OWNER_USER_ID',
-  'BACKUP_MASTER_KEY'
+  'BACKUP_MASTER_KEY',
+  'RAILWAY_GIT_COMMIT_SHA'
 ]) delete childEnvironment[name];
 
 const result = spawnSync(process.execPath, ['dist/server/maintenance.mjs'], {
@@ -39,6 +40,9 @@ try {
 }
 if (event?.event !== 'maintenance.failed' || event?.category !== 'MaintenanceConfigurationError') {
   throw new Error('Maintenance did not expose the expected fail-closed category.');
+}
+if (event.releaseSha !== null) {
+  throw new Error('Maintenance reported an unverified deployment revision.');
 }
 if (JSON.stringify(event).includes('undefined') || JSON.stringify(event).includes('BACKUP_MASTER_KEY=')) {
   throw new Error('Maintenance disclosed sensitive configuration material.');
