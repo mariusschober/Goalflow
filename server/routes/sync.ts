@@ -50,6 +50,19 @@ const sameInstant = (left: unknown, right: string | null): boolean => {
   return Number.isFinite(leftTime) && leftTime === Date.parse(right);
 };
 
+/**
+ * PostgREST serializes UTC timestamptz values with a `+00:00` suffix. Sync
+ * clients submit canonical UTC (`Z`) values, so normalize only that suffix at
+ * the API boundary. This preserves all fractional-second precision instead of
+ * round-tripping through JavaScript's millisecond-limited Date serializer.
+ */
+export const canonicalSyncTimestamp = (value: unknown): string => {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
+    throw new Error('Synchronization record contains an invalid timestamp.');
+  }
+  return value.endsWith('+00:00') ? `${value.slice(0, -6)}Z` : value;
+};
+
 export const assertDurableReceipt = (mutation: z.infer<typeof syncMutationSchema>, value: unknown): Record<string, unknown> => {
   if (!isRecord(value) || typeof value.accepted !== 'boolean'
     || !Number.isSafeInteger(Number(value.serverVersion)) || Number(value.serverVersion) < 0) {
@@ -187,8 +200,8 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
           serverVersion: row.server_version,
           deviceId: row.device_id,
           payload: row.payload,
-          updatedAt: row.updated_at,
-          deletedAt: row.deleted_at
+          updatedAt: canonicalSyncTimestamp(row.updated_at),
+          deletedAt: row.deleted_at == null ? null : canonicalSyncTimestamp(row.deleted_at)
         })),
         nextCursor: page.length ? Number(page[page.length - 1].server_version) : query.cursor,
         hasMore: rows.length > query.limit

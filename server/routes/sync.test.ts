@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   applySyncMutationsSequentially,
   assertDurableReceipt,
+  canonicalSyncTimestamp,
   resolveCloudConflictRecord,
   syncMutationSchema
 } from './sync';
@@ -35,6 +36,14 @@ const receipt = () => ({
 });
 
 describe('sync API durable acceptance boundary', () => {
+  it('canonicalizes PostgREST UTC timestamps without losing fractional precision', () => {
+    expect(canonicalSyncTimestamp('2026-09-05T00:25:06.813+00:00'))
+      .toBe('2026-09-05T00:25:06.813Z');
+    expect(canonicalSyncTimestamp('2026-09-05T00:25:06.813456+00:00'))
+      .toBe('2026-09-05T00:25:06.813456Z');
+    expect(() => canonicalSyncTimestamp('not-a-timestamp')).toThrow(/invalid timestamp/i);
+  });
+
   it('admits native task-event records to the protocol-v3 transport', () => {
     expect(syncMutationSchema.parse({
       ...mutation,
