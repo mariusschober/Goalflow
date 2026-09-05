@@ -487,10 +487,20 @@ open class NativeAuthClient(
             .appendQueryParameter("provider", telegramProviderId)
             .appendQueryParameter("redirect_to", callback)
             .appendQueryParameter("scopes", TELEGRAM_SCOPES)
+            .appendQueryParameter("origin", telegramAuthorizationOrigin())
             .appendQueryParameter("code_challenge", codeChallenge(pending.verifier))
             .appendQueryParameter("code_challenge_method", "s256")
             .apply { if (linkIdentity) appendQueryParameter("skip_http_redirect", "true") }
             .build()
+    }
+
+    private fun telegramAuthorizationOrigin(): String {
+        val parsed = Uri.parse(supabaseUrl)
+        return Uri.Builder()
+            .scheme(parsed.scheme)
+            .encodedAuthority(parsed.encodedAuthority)
+            .build()
+            .toString()
     }
 
     private fun pendingOAuthRequest(): PendingOAuthRequest? {

@@ -450,6 +450,7 @@ final class SupabaseAuthService: @unchecked Sendable {
             URLQueryItem(name: "provider", value: telegram.provider),
             URLQueryItem(name: "redirect_to", value: pending.redirectURL),
             URLQueryItem(name: "scopes", value: "openid profile telegram:bot_access"),
+            URLQueryItem(name: "origin", value: try telegramAuthorizationOrigin(telegram.url)),
             URLQueryItem(name: "code_challenge", value: pkceChallenge(pending.verifier)),
             URLQueryItem(name: "code_challenge_method", value: "s256")
         ]
@@ -458,6 +459,19 @@ final class SupabaseAuthService: @unchecked Sendable {
         }
         guard let url = components.url else { throw AuthError.notConfigured }
         return url
+    }
+
+    private func telegramAuthorizationOrigin(_ url: URL) throws -> String {
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              components.scheme != nil,
+              components.host != nil else { throw AuthError.notConfigured }
+        components.user = nil
+        components.password = nil
+        components.path = ""
+        components.query = nil
+        components.fragment = nil
+        guard let origin = components.url?.absoluteString else { throw AuthError.notConfigured }
+        return origin.hasSuffix("/") ? String(origin.dropLast()) : origin
     }
 
     private func abandonPendingAccountAuthentication() throws {

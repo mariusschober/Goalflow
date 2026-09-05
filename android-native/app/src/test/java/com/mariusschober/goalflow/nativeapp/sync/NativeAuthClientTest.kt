@@ -106,7 +106,7 @@ class NativeAuthClientTest {
     }
 
     @Test
-    fun `Telegram sign in builds the Supabase PKCE authorize URL without provider state injection`() = runBlocking {
+    fun `Telegram sign in builds the Supabase PKCE URL with only the registered provider origin`() = runBlocking {
         val authorizeUrl = client.beginTelegramSignIn()
         val pending = store.getPendingOAuth()
 
@@ -115,12 +115,15 @@ class NativeAuthClientTest {
         assertEquals("$SUPABASE_URL/auth/v1/authorize", authorizeUrl.buildUpon().clearQuery().build().toString())
         assertEquals("custom:telegram", authorizeUrl.getQueryParameter("provider"))
         assertEquals("openid profile telegram:bot_access", authorizeUrl.getQueryParameter("scopes"))
+        assertEquals(SUPABASE_URL, authorizeUrl.getQueryParameter("origin"))
         assertEquals("s256", authorizeUrl.getQueryParameter("code_challenge_method"))
         assertEquals(client.codeChallenge(pending!!.verifier), authorizeUrl.getQueryParameter("code_challenge"))
         val callback = Uri.parse(authorizeUrl.getQueryParameter("redirect_to"))
         assertEquals(AUTH_REDIRECT, callback.buildUpon().clearQuery().build().toString())
         assertEquals(pending.state, callback.getQueryParameter("state"))
         assertNull(authorizeUrl.getQueryParameter("queryParams"))
+        assertNull(authorizeUrl.getQueryParameter("state"))
+        assertNull(authorizeUrl.getQueryParameter("bot_id"))
     }
 
     @Test
@@ -264,6 +267,7 @@ class NativeAuthClientTest {
         assertEquals("true", identityAuthorizeUrl?.getQueryParameter("skip_http_redirect"))
         assertEquals("s256", identityAuthorizeUrl?.getQueryParameter("code_challenge_method"))
         assertEquals("custom:telegram", identityAuthorizeUrl?.getQueryParameter("provider"))
+        assertEquals(SUPABASE_URL, identityAuthorizeUrl?.getQueryParameter("origin"))
     }
 
     @Test
