@@ -12,6 +12,13 @@
 
 **Captured:** 2026-09-04
 
+> Current-state pointer (2026-09-05): use
+> `docs/handover/TSURFING_PERSONAL_BETA_HANDOVER_2026-09-05.md` and
+> `docs/BETA_READINESS.md` for the exact GitHub, staging, Telegram, and blocker
+> state. The implementation-status sections below remain the original handover
+> baseline and requirements contract; they are historical where the current
+> handover records later proven work.
+
 **Purpose:** Living handover and execution contract for a local Codex session
 finishing the deployed personal beta.
 

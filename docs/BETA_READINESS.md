@@ -2,9 +2,12 @@
 
 **Status: NOT READY.** This is the active release ledger as of 2026-09-05.
 The implementation and isolated staging environment are substantially proven,
-including a destructive restore round-trip, but owner-retained signing,
-Turnstile, Telegram, production isolation, promotion, and final smoke tests are
-still open. Do not move `integration/beta` or `main`, create
+including a destructive restore round-trip. The Telegram staging bot, webhook,
+Mini App menu, and Supabase custom provider are configured and the real
+Telegram authorization page is reachable, but no owner authorization/linking
+round-trip or live five-surface Telegram matrix has completed. Turnstile,
+owner-retained signing, production isolation, promotion, and final smoke tests
+also remain open. Do not move `integration/beta` or `main`, create
 `v0.4.0-beta.1`, or describe the product as ready while any required row below
 is not `PASS`.
 
@@ -12,20 +15,22 @@ is not `PASS`.
 
 | Item | Current evidence | State |
 | --- | --- | --- |
-| Runtime implementation checkpoint | `b349ece62f17c7e70c1870f17371b72949e9e949` on `codex/personal-beta-finalization-20260904` | PROVEN IN STAGING |
-| Exact evidence checkpoint | `942c7f730e38cf09642d7a76bcb6d1768752b590`; PostgreSQL 17 CI and Railway staging both exact | PROVEN IN STAGING |
+| Runtime implementation checkpoint | `5b7485fd29d6e7c6a894cea272dcd0b435fc5f19` on `codex/personal-beta-finalization-20260904`; Telegram OIDC origin fix included | PROVEN LOCALLY / IN STAGING |
+| Exact evidence checkpoint | `5b7485fd29d6e7c6a894cea272dcd0b435fc5f19`; exact-head CI run `33957017550` fully green and exact Railway staging deployment healthy | PROVEN IN STAGING |
 | Reviewed source | `44bd85d9662b2e5a9c012b977a26cf4a5c501964` on `chore/railway-beta-gate`; handover SHA `01f864720df7acfa211745e64edec8b5163ab612` remains an ancestor | VERIFIED |
-| Branch distance at evidence checkpoint | 134 commits ahead of `origin/integration/beta`; 47 ahead of the reviewed source; behind neither | VERIFIED |
+| Branch distance at runtime checkpoint | 138 commits ahead of `origin/integration/beta`; 51 ahead of the reviewed source; behind neither | VERIFIED |
 | Pull request | Draft [PR #3](https://github.com/mariusschober/Tsurfing/pull/3), mergeable, targeting `integration/beta` | OPEN / NOT MERGED |
 | Repository | `mariusschober/Tsurfing`; local directory intentionally remains `/Users/schober/Projects/Goalflow` | VERIFIED |
 | Production source | `main` remains obsolete and unpromoted | BLOCKED |
 | Release tag | `v0.4.0-beta.1` does not exist | BLOCKED |
 
-Evidence checkpoint `942c7f7` changes only the CI migration runtime, its
-regression test, and this ledger. It pins the migration job to the official
-PostgreSQL 17 image digest. Exact-head CI and the exact Railway deployment both
-passed; it therefore supersedes `b349ece` as the reviewed evidence head without
-changing that implementation checkpoint.
+Checkpoint `942c7f7` pinned the migration job to the official PostgreSQL 17
+image digest and remains the first exact PostgreSQL-17 staging proof. Commits
+`7071126` and `4a9f63f` add fail-closed Telegram deployment configuration and
+explicit acknowledgments. Candidate `5b7485f` supplies Telegram's required
+OAuth `origin`, derived only from the configured Supabase URL, on Web, Android,
+and macOS while leaving OAuth state and PKCE under Supabase/client-library
+control.
 
 ## Tsurfing identity and compatibility boundary
 
@@ -56,7 +61,7 @@ envelope magic, and protocol names remain intentionally unchanged.
 | Web session | Supabase browser persistence with profile validation and fail-closed bootstrap | IMPLEMENTED / HOSTED |
 | Android session | Encrypted Keystore persistence; damaged-session handling preserves Room and durable outbox data | IMPLEMENTED / LOCAL DEVICE |
 | macOS session | Keychain persistence and one-use native callback state | IMPLEMENTED / SIGNED-PERSISTENCE PROOF PENDING |
-| Telegram OIDC | Supabase `custom:telegram`, Authorization Code + PKCE, system browser on native, explicit immutable-subject linking, owner AAL2 guard | IMPLEMENTED / LIVE PROVIDER DISABLED |
+| Telegram OIDC | Supabase `custom:telegram`, Authorization Code + PKCE, system browser on native, required callback-host origin, explicit immutable-subject linking, owner AAL2 guard | IMPLEMENTED / PROVIDER CONFIGURED / OWNER COMPLETION PENDING |
 | Realtime wake-up | Migration-backed per-user version plus private exact topic `tsurfing:user:<auth UUID>`; payload-free broadcast; no client write/broadcast grant | IMPLEMENTED / HOSTED |
 | Foreground fallback | Immediate pull after wake, reconnect, focus/foreground and network recovery; 30-second foreground fallback on Web, Android and macOS | IMPLEMENTED / HOSTED WEB |
 | Native realtime | Tested Phoenix WebSocket adapters with heartbeat, JWT refresh, reconnect backoff and shutdown | IMPLEMENTED / HOSTED TRANSPORT |
@@ -69,7 +74,18 @@ authoritative.
 
 ## Local verification
 
-At evidence head `942c7f7` (whose runtime implementation remains `b349ece`):
+At runtime candidate `5b7485f`:
+
+- `npm run check` passed 58 Vitest files / 315 tests, TypeScript, production
+  builds, migration and Room ledgers, source/built-artifact secret scans, and
+  release contracts.
+- Focused macOS email/Telegram authentication tests passed 9 tests.
+- A local Android rerun was blocked because this Mac currently exposes Java 18
+  while the project requires Java 21. The stale configured local signing path
+  was bypassed only for the attempted unsigned check. GitHub's Java-21 jobs are
+  authoritative; no source or gate was weakened.
+
+At evidence head `942c7f7` (whose runtime implementation was `b349ece`):
 
 - `npm run verify:release` passed production Web, Mini App and server builds,
   fail-closed server/maintenance probes, and source/built-artifact secret scans.
@@ -91,6 +107,94 @@ The migration workflow correction is guarded by
 digest-pinned PostgreSQL 17 service plus a live server-version check.
 
 ## Exact-head CI and hosted proof
+
+### Current Telegram-origin checkpoint
+
+[GitHub Actions run 33957017550](https://github.com/mariusschober/Tsurfing/actions/runs/33957017550)
+completed `success` against exact runtime candidate
+`5b7485fd29d6e7c6a894cea272dcd0b435fc5f19`.
+
+| Job | Job ID | Result |
+| --- | ---: | --- |
+| `dependency-audit` | `101282070279` | PASS |
+| `macos` | `101282070349` | PASS |
+| `secrets` | `101282070367` | PASS |
+| `migrations` | `101282070417` | PASS |
+| `verify` | `101282070421` | PASS |
+| `hosted-staging` | `101282155604` | PASS |
+| `native-android` | `101282155607` | PASS |
+| `android` | `101282155642` | PASS |
+| `web-release` | `101282155672` | PASS |
+| `hosted-cross-client` | `101284437309` | PASS |
+| `beta-gate` | `101285336638` | PASS |
+| `android-internal-beta` | `101285337223` | Expected skip; not signing evidence |
+
+Hosted protocol proof returned `PASS` with two-user isolation, direct-client
+bypass `DENIED`, refresh and second-session success, export isolation, safe
+deletion refusal, remote logout, duplicate delivery `IDEMPOTENT`, conflict
+`PRESERVED_AND_RESOLVED`, tombstone `PROPAGATED`, and maximum request time
+1,351 ms. Twenty Realtime samples produced p95 1,365 ms; the wake-absent
+foreground fallback began after 17,175 ms, with zero recovered tracking
+conflicts and cross-user visibility `DENIED`.
+
+The exact cross-client job again passed the hosted browser to production
+Android to production macOS transport handoff and cleanup. The macOS mutation
+advanced server version 675 to 678; the selected native test passed in 2.972
+seconds.
+
+Retained artifacts are test-only or ad-hoc, not authorized beta releases:
+
+- Native sandbox debug APK `9966957609`, 18,586,969 bytes,
+  `sha256:a940cf31a2d20e1648a42e909cf26453f281d6ce7f766f0f7188282c06737147`.
+- Native production debug APK `9966957335`, 18,586,638 bytes,
+  `sha256:c07724d7fd1e4d1f2ef88c79ca45c6c133bb8853103d2b9ac210e88a799f2388`.
+- Room schemas `9966794129`, 16,348 bytes,
+  `sha256:d5e5cecd12c1fcfd633deb358f853d7014a0a9b3b5dc45ef2e1afb880719ea9a`.
+- Legacy production debug APK `9966725608`, 4,143,735 bytes,
+  `sha256:d6f5154ec9c527cf3e3561f56be19e3241fae264475b97e1aeaad90ba549accd`.
+- macOS ad-hoc candidate `9966716975`, 2,200,563 bytes,
+  `sha256:121ab26a2a099fd1deefc7b5e0a982d14647903847744263e3215ad749c4c4ef`.
+- Gitleaks SARIF `9966685616`, 7,107 bytes,
+  `sha256:f16ca7313a6aa1973039c09f036d3d305170c77189eafa82dd3ddc9c9a426bff`.
+
+The immediately preceding exact-head [run
+33954876765](https://github.com/mariusschober/Tsurfing/actions/runs/33954876765)
+completed `success` against
+`4a9f63f2070b9ac58c07cafd9ca8fb51d242227c`. Its required non-signing jobs all
+passed, including hosted staging, hosted cross-client, and `beta-gate`.
+`android-internal-beta` correctly skipped because the protected signing gate is
+deferred and this was not an `integration/beta` push.
+
+| Job | Job ID | Result |
+| --- | ---: | --- |
+| `secrets` | `101276320841` | PASS |
+| `verify` | `101276320864` | PASS |
+| `macos` | `101276320866` | PASS |
+| `migrations` | `101276320903` | PASS |
+| `dependency-audit` | `101276320996` | PASS |
+| `android` | `101276413011` | PASS |
+| `web-release` | `101276413041` | PASS |
+| `hosted-staging` | `101276413099` | PASS |
+| `native-android` | `101276413114` | PASS |
+| `hosted-cross-client` | `101278814125` | PASS |
+| `beta-gate` | `101279440491` | PASS |
+| `android-internal-beta` | `101279440714` | Expected skip; not signing evidence |
+
+Retained artifacts from `33954876765` are all test-only or ad-hoc, not release
+artifacts: native sandbox debug APK `9966313867`
+(`sha256:800fb623d12c6fe4e68a47ab09c5b86bd947256fe7e3b3da181622cdab972e35`),
+native production debug APK `9966313437`
+(`sha256:e479b29a0ebbe4b3594af3acddfa50369ec08eabc181c7e5367cda67f06dfecc`),
+Room schemas `9966127255`
+(`sha256:acb92496eb2a9e9db9f3456175df9f8e3b275fce6feaca50472ee4c5028e57c1`),
+legacy production debug APK `9966073068`
+(`sha256:64319329fcbda81c1a28b1a97b403e1afe4a847e783f0f0c8517ef9de811712d`),
+macOS ad-hoc candidate `9966054511`
+(`sha256:7429621088a4e7febe88ffbacf3b578b51dd5a58e8476d1d1b4019655bf9973d`),
+and Gitleaks SARIF `9966021456`
+(`sha256:3448801f7609bc4618fad75871c12b32e55856be2c0d7f4ca92f8922480d8c96`).
+
+### PostgreSQL 17 and restore evidence checkpoint
 
 [GitHub Actions run 33951359413](https://github.com/mariusschober/Tsurfing/actions/runs/33951359413)
 completed `success` against exact head
@@ -331,9 +435,27 @@ the preceding day; no OTP body or code was read or recorded. A live typed code
 had already been consumed successfully. Turnstile remains disabled pending
 retained site/secret entry.
 
-Telegram remains disabled in Railway and Supabase. Staging bot `@tstagebot`
-and production bot `@tsurfbot` exist, but no retained bot/OIDC/webhook secret
-has been requested or exposed and no live Telegram claim is made.
+Telegram staging is enabled. Supabase has the `custom:telegram` provider with
+issuer `https://oauth.telegram.org`, public client ID `8300507048`, scopes
+`openid profile telegram:bot_access`, and callback
+`https://xyjgpwwvsyjhurkycyqr.supabase.co/auth/v1/callback`. Railway holds the
+retained replacement token and webhook secret directly; neither is in source
+or this ledger. Deployment validates the token belongs to `@tstagebot`, then
+registers and re-reads the exact staging webhook, Mini App menu URL, and bounded
+commands before startup succeeds.
+
+An earlier staging token became visible during authenticated UI inspection.
+The owner revoked/rotated it and entered the replacement directly into Railway;
+the deployed identity check subsequently accepted the replacement. No token
+value is recorded here.
+
+A direct diagnostic proved Telegram rejects `https://staging.tsurfing.com` as
+the OIDC `origin` but accepts the registered Supabase callback origin. The
+fixed Supabase flow reached the real **Telegram Authorization** screen for
+`TStaging Bot`. No phone/login code was entered, no authorization approved, no
+identity linked, and no Bot or Mini App journey run. The old diagnostic URL and
+OAuth state must not be reused; the next test starts freshly from the deployed
+app. No live Telegram identity or five-surface claim is made.
 
 ## Synchronization matrix
 
@@ -346,7 +468,7 @@ has been requested or exposed and no live Telegram claim is made.
 | User A cannot inject/read user B | Hosted direct bypass and visibility both `DENIED`; account export isolated | PASS |
 | Web to native Android | Hosted production transport edited the browser-created record and a fresh browser verified it | PASS |
 | Web to native macOS | Hosted production transport advanced server version 508 to 511 and a fresh browser verified it | PASS |
-| Telegram Bot and Mini App | Adversarial implementation tests only; live credentials intentionally absent | DISABLED / NOT RUN |
+| Telegram Bot and Mini App | Bot identity/webhook/menu/commands configured and authorization screen reached; no owner approval, linked identity, Bot command, Mini App session, or five-surface matrix | CONFIGURED / LIVE JOURNEYS NOT RUN |
 
 Realtime wake-ups contain no task payload and only start the authoritative
 cursor pull. All active non-Telegram clients also pull on reconnect, focus or
@@ -404,10 +526,12 @@ production environment `02c29da8-5155-4768-8cf3-66da21d6d7e6` remains empty.
 No production service, variable, source or deployment has been created.
 
 Staging Web/API service `9e949038-a0e4-4aa2-925d-f746ae21ba25` deployed exact
-evidence checkpoint `942c7f7` as deployment
-`3531ad2a-6e00-49df-8e9d-ec438c686ab9`. `https://staging.tsurfing.com`,
-`/mini/` and `/api/v1/health/live` return 200 over valid TLS; readiness exposes
-exact revision `942c7f730e38cf09642d7a76bcb6d1768752b590`.
+runtime candidate `5b7485f` as deployment
+`71857011-70b7-4711-8c32-93a25df9e59a`, status `SUCCESS`.
+`https://staging.tsurfing.com/api/v1/health/ready` returned HTTP 200 on
+2026-09-05 with header
+`x-tsurfing-revision: 5b7485fd29d6e7c6a894cea272dcd0b435fc5f19`.
+The public app and `/mini/` remain on the same valid-TLS origin.
 
 Maintenance service `5691dbd1-eee6-4ec8-8733-1dec19680393` was used only for
 the bounded backup/restore drill. It was then returned to safe steady state:
@@ -438,7 +562,7 @@ explicit user UUID and pre-restore snapshot.
 | Encrypted backup and destructive restore | PASS | Owner-assisted post-restore client login remains a separate journey |
 | PostgreSQL 17 hosted migration gate | PASS | PostgreSQL 17.11, empty and supported-upgrade paths, exact digest-pinned image |
 | Turnstile | BLOCKED | Owner must enter retained site and secret values directly |
-| Telegram OIDC, Bot and Mini App five-surface matrix | BLOCKED | Retained staging credentials and live owner test, deliberately last |
+| Telegram OIDC, Bot and Mini App five-surface matrix | PARTIAL | Provider/bot/webhook/menu configured and authorization page reached; fresh owner authorization/linking, Bot/Mini App journeys, and five-surface proof remain |
 | Android internal-beta signing | BLOCKED | Protected environment and externally retained signer authorization |
 | macOS distributable signing | BLOCKED | Developer ID signing; notarization remains honestly deferred if chosen |
 | Isolated production Supabase | BLOCKED | Pause staging, reconfirm Free allowance, then explicitly confirm `$0` in `eu-west-1` |
@@ -459,8 +583,10 @@ explicit user UUID and pre-restore snapshot.
   release gate.
 - AI and voice are optional and remain disabled by default.
 
-After the autonomous PostgreSQL 17 CI checkpoint, the next owner action is one
-fresh post-restore typed-email-code plus TOTP sign-in while Web, TCL and macOS
-are available. Never send a code or secret in chat. Telegram and retained
-signing/Turnstile credentials are intentionally later. Movetrics remains an
-absolute exclusion.
+The next checkpoint is to finish the exact-head run and then initiate one fresh
+Telegram sign-in from the deployed staging app. The owner may approve the
+Telegram authorization screen locally; never send a phone number, login code,
+token, or session material in chat. After Telegram live proof, configure
+Turnstile and repeat the post-restore email-code plus TOTP journey on Web, TCL
+and macOS. Android and macOS release signing remain deferred for about one week.
+Movetrics remains an absolute exclusion.
