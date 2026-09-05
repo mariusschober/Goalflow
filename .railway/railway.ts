@@ -29,6 +29,9 @@ export default defineRailway(ctx => {
     build: {
       builder: 'RAILPACK',
       buildEnvironment: 'V3',
+      // Railway watch paths use gitignore syntax; `**` is the documented
+      // match-all rule. A leading slash caused valid source changes to skip.
+      watchPatterns: ['**'],
       // Railpack installs the locked dependencies before invoking this step.
       // Running npm ci again races its mounted node_modules cache on Railway.
       buildCommand: 'npm run build'
@@ -58,6 +61,7 @@ export default defineRailway(ctx => {
     build: {
       builder: 'RAILPACK',
       buildEnvironment: 'V3',
+      watchPatterns: ['/server/**', '/scripts/**', '/package.json', '/package-lock.json'],
       buildCommand: 'npm run build:server'
     },
     start: 'npm run maintenance',
