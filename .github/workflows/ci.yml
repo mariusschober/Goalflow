@@ -427,7 +427,8 @@ jobs:
             shasum -a 256 tsurfing-macos-ad-hoc-beta.zip > tsurfing-macos-ad-hoc-beta.zip.sha256
             shasum -a 256 --check tsurfing-macos-ad-hoc-beta.zip.sha256
           )
-          printf 'commit=%s\nsigning=ad-hoc\nnotarization=not-requested\n' "$GITHUB_SHA" \
+          checked_out_commit="$(git rev-parse HEAD)"
+          printf 'commit=%s\nsigning=ad-hoc\nnotarization=not-requested\n' "$checked_out_commit" \
             > "$RUNNER_TEMP/tsurfing-macos-ad-hoc-beta.provenance.txt"
       - name: Upload ad-hoc signed macOS beta candidate
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

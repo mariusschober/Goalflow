@@ -12,6 +12,10 @@ const sourceGate = readFileSync(
 
 describe('macOS beta artifact', () => {
   it('labels, verifies, fingerprints, and retains the ad-hoc candidate honestly', () => {
+    const buildStep = workflow.slice(
+      workflow.indexOf('Build ad-hoc signed macOS beta candidate'),
+      workflow.indexOf('Upload ad-hoc signed macOS beta candidate')
+    );
     expect(workflow).toContain('Build ad-hoc signed macOS beta candidate');
     expect(workflow).toContain('codesign --verify --deep --strict "$app"');
     expect(workflow).toContain('tsurfing-macos-ad-hoc-beta.zip');
@@ -20,6 +24,8 @@ describe('macOS beta artifact', () => {
     expect(workflow).toContain('notarization=not-requested');
     expect(workflow).toContain('name: tsurfing-macos-ad-hoc-beta');
     expect(workflow).toContain('if-no-files-found: error');
+    expect(buildStep).toContain('checked_out_commit="$(git rev-parse HEAD)"');
+    expect(buildStep).not.toContain('$GITHUB_SHA');
   });
 
   it('fails closed when Swift source discovery is empty or ambiguous', () => {
