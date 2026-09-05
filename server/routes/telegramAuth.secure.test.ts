@@ -66,7 +66,7 @@ const serve = async (activationResult = true) => {
 };
 
 describe("secure callback flow — telegramAuth", () => {
-  it("accepts only the exact configured provider identity and an all-numeric safe subject", () => {
+  it("accepts only the exact configured provider identity and an explicit numeric bot user ID", () => {
     expect(telegramIdentity(authUser, "custom:telegram")).toEqual({ id: 42, username: "linked" });
 
     const forgedMetadata = { user_metadata: { telegram_user_id: "42" }, identities: [] } as unknown as User;
@@ -79,6 +79,29 @@ describe("secure callback flow — telegramAuth", () => {
       identities: [{ id: "telegram-42", provider: "telegram", identity_data: { sub: "telegram-42" } }]
     } as unknown as User;
     expect(telegramIdentity(partialSubject, "custom:telegram")).toBeUndefined();
+  });
+
+  it("uses the allowlisted signed bot ID and preserves the distinct OIDC subject", () => {
+    const verified = {
+      identities: [{ id: "identity-uuid", provider: "custom:telegram", identity_data: {
+        sub: "1234123412341234123", preferred_username: "linked", custom_claims: { id: 42 }
+      } }]
+    } as unknown as User;
+    expect(telegramIdentity(verified, "custom:telegram")).toEqual({ id: 42, username: "linked" });
+  });
+
+  it.each(["42", "1234123412341234123"])("never substitutes an OIDC subject or identity key for bot ID (%s)", sub => {
+    const missingBotId = {
+      identities: [{ id: "42", provider: "custom:telegram", identity_data: { sub } }]
+    } as unknown as User;
+    expect(telegramIdentity(missingBotId, "custom:telegram")).toBeUndefined();
+  });
+
+  it.each([0, -42, 1.5, true, "42suffix", "9007199254740992", {}, null])("rejects malformed signed bot IDs (%j)", id => {
+    const malformed = {
+      identities: [{ provider: "custom:telegram", identity_data: { sub: "42", custom_claims: { id } } }]
+    } as unknown as User;
+    expect(telegramIdentity(malformed, "custom:telegram")).toBeUndefined();
   });
 
   it("stores only a hashed opaque invite attempt and never client OAuth state or PKCE material", async () => {

@@ -22,7 +22,12 @@ export const telegramIdentity = (user: User, providerId: string) => {
   const identity = user.identities?.find(item => acceptedProviderIds.has(item.provider));
   if (!identity) return undefined;
   const data = (identity.identity_data ?? {}) as Record<string, unknown>;
-  const rawId = data.telegram_user_id ?? data.id ?? data.sub ?? identity.id;
+  // OIDC sub is an opaque login subject, not the Telegram Bot API user ID.
+  // Supabase retains the signed profile id under custom_claims when allowlisted.
+  const customClaims = data.custom_claims && typeof data.custom_claims === "object"
+    && !Array.isArray(data.custom_claims) ? data.custom_claims as Record<string, unknown> : {};
+  const rawId = Object.hasOwn(customClaims, "id") ? customClaims.id : data.telegram_user_id ?? data.id;
+  if (typeof rawId !== "string" && typeof rawId !== "number") return undefined;
   const textId = String(rawId ?? "");
   if (!/^\d{1,16}$/.test(textId)) return undefined;
   const id = Number(textId);

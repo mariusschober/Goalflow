@@ -485,10 +485,16 @@ export const getTelegramBotStatus = async (): Promise<TelegramBotStatus> => {
   return { enabled: result.enabled === true, linked: result.linked === true, username: result.username ?? null };
 };
 
-export const enableTelegramBotAccess = async (): Promise<void> => {
+// false means a fresh provider authorization is in progress, not a completed link.
+export const enableTelegramBotAccess = async (): Promise<boolean> => {
   const response = await authenticatedFetch('/api/v1/account/telegram/link', { method: 'POST' });
-  const result = await response.json() as { error?: { message?: string } };
-  if (!response.ok) throw new Error(result.error?.message || 'Telegram could not be linked.');
+  const result = await response.json() as { linked?: boolean; error?: { code?: string; message?: string } };
+  if (response.status === 409 && result.error?.code === 'telegram_identity_missing') {
+    await beginTelegramLink();
+    return false;
+  }
+  if (!response.ok || result.linked !== true) throw new Error(result.error?.message || 'Telegram could not be linked.');
+  return true;
 };
 
 export const disableTelegramBotAccess = async (): Promise<void> => {

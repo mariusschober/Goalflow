@@ -106,3 +106,13 @@ callback from it. Runtime regression checks: Web 3 new behavior cases (red
 before fix, green after), Android auth 29/29, macOS auth 9/9; full npm check
 318 tests PASS. Java 21 is installed under Homebrew even though java_home
 listed only Java 18.
+
+## Owner-away checkpoint
+
+OIDC return now PASS on the existing owner UUID; bot binding remains BLOCKED
+on a fresh authorization after allowing the signed profile id through Supabase.
+The server consumes custom_claims.id and never substitutes the opaque subject.
+Full check 332 tests PASS. See the active readiness ledger for claim-loss,
+configuration and CI-overlap evidence. Owner left the desk and authorized all
+independent work, then a pause at the next owner-only dependency. Preserve the
+session and leave the next step ready; do not fabricate a binding.

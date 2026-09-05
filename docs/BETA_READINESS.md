@@ -4,12 +4,56 @@
 The implementation and isolated staging environment are substantially proven,
 including a destructive restore round-trip. The Telegram staging bot, webhook,
 Mini App menu, and Supabase custom provider are configured and the real
-Telegram authorization page is reachable, but no owner authorization/linking
-round-trip or live five-surface Telegram matrix has completed. Turnstile,
+Telegram OIDC authorization has returned successfully to the existing owner
+UUID, but bot binding and the live five-surface Telegram matrix remain unproven. Turnstile,
 owner-retained signing, production isolation, promotion, and final smoke tests
 also remain open. Do not move `integration/beta` or `main`, create
 `v0.4.0-beta.1`, or describe the product as ready while any required row below
 is not `PASS`.
+
+## Telegram signed bot-ID correction — 2026-09-05
+
+At deployed source `3ddd52d8c6ac7071e696ffca1f341c64eb3cf41f`, the owner
+completed fresh OIDC authorization after switching BotFather to OIDC, registering
+the exact Supabase callback and entering the OIDC-specific secret locally.
+The browser update was explicitly applied; the final authorization request had
+`response_type=code`, the exact `/auth/v1/callback`, and no legacy `origin`.
+Supabase now has one `custom:telegram` identity on unchanged owner UUID
+`330eea3c-3821-4f0b-a4af-a0bc751574eb`. No bot binding was created: the explicit
+link request correctly returned `telegram_identity_missing`.
+
+The verified identity contains a 19-digit opaque `sub`, not a Bot API user ID.
+Telegram documents the separate signed profile `id` claim; Supabase's default
+custom-provider allowlist was empty and dropped it. Updated only staging
+`custom:telegram` allowlist from `[]` to `["id"]`, leaving the subject,
+attribute mapping, credentials and other projects untouched. The server now
+reads `identity_data.custom_claims.id` (or explicit legacy bot-ID fields),
+never `sub` or the identity record key. Existing identities without that claim
+can request fresh authorization from Link Telegram. No identity was manually
+backfilled, guessed from a username, or copied from the old widget result.
+
+Validation: 12 new assertions failed before the correction; focused tests
+28/28 PASS after. Full `npm run check`: 59 files / 332 tests PASS; all builds,
+client-secret/artifact checks, server/maintenance checks, migration verification,
+18 migration hashes, 8 Room hashes and 20 durable identifiers PASS.
+
+Prior exact-source runs `33963575955` and `33963580317` overlapped. Push hosted
+job `101299700322` failed at 11:33:10 UTC deleting user B's fixture with HTTP401,
+after PR protocol testing completed its global user-B sign-out at 11:33:08 UTC.
+PR hosted job `101299693735` then failed browser convergence with HTTP429 pull
+diagnostics. Neither run is a passing gate. Publish the next checkpoint only
+to the existing finalization source branch so one PR run tests shared staging
+accounts; verify its exact revision and all outcomes independently.
+
+Next owner action when back: fresh Telegram authorization to populate the
+newly retained signed bot-ID claim. Then verify explicit bot binding and real
+Bot/Mini App journeys. Turnstile, physical TCL connection and post-restore
+OTP/TOTP journeys remain pending. The owner asked to pause when independent
+work is exhausted. No signing, production, main, integration/beta or tag work.
+
+Sources: [Telegram signed claims](https://core.telegram.org/bots/telegram-login),
+[Supabase claim capture](https://github.com/supabase/auth/blob/master/internal/api/provider/custom_oauth.go),
+[Supabase claim representation](https://github.com/supabase/auth/blob/master/internal/api/provider/provider.go).
 
 ## Continuation verification — 2026-09-05 11:07 UTC
 

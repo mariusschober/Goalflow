@@ -20,7 +20,7 @@ const user = (role: "owner" | "beta", aal: "aal1" | "aal2"): AuthenticatedUser =
 const authUser = {
   id: userId,
   user_metadata: { telegram_user_id: "999999" },
-  identities: [{ id: "42", provider: "telegram", identity_data: { id: "42", username: "linked" } }]
+  identities: [{ id: "identity-uuid", provider: "custom:telegram", identity_data: { sub: "1234123412341234123", custom_claims: { id: 42 }, preferred_username: "linked" } }]
 } as unknown as User;
 
 const serve = async (role: "owner" | "beta", aal: "aal1" | "aal2", rpc: ReturnType<typeof vi.fn>) => {

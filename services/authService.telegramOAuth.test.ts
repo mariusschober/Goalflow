@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const auth = vi.hoisted(() => ({ signInWithOAuth: vi.fn(), linkIdentity: vi.fn() }));
+const auth = vi.hoisted(() => ({ signInWithOAuth: vi.fn(), linkIdentity: vi.fn(), getSession: vi.fn() }));
 vi.mock('@supabase/supabase-js', () => ({ createClient: vi.fn(() => ({ auth })) }));
 
 beforeEach(() => {
@@ -12,6 +12,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_ENABLE_LOCAL_DEMO', 'false');
   auth.signInWithOAuth.mockReset().mockResolvedValue({ error: null });
   auth.linkIdentity.mockReset().mockResolvedValue({ error: null });
+  auth.getSession.mockReset().mockResolvedValue({ data: { session: { access_token: 'synthetic-session' } }, error: null });
   const values = new Map<string, string>();
   vi.stubGlobal('sessionStorage', {
     getItem: (key: string) => values.get(key) ?? null,
@@ -54,5 +55,29 @@ describe('Telegram OIDC protocol selection', () => {
     expect(auth.linkIdentity).toHaveBeenCalledExactlyOnceWith(options('telegram-link'));
     expect(auth.signInWithOAuth).not.toHaveBeenCalled();
     expect(sessionStorage.getItem('goalflow_owner_telegram_link')).toBe('pending');
+  });
+});
+
+describe('Telegram bot link recovery', () => {
+  it('reauthorizes an existing identity when its signed bot ID is missing', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { code: 'telegram_identity_missing' } }, { status: 409 })));
+    const { enableTelegramBotAccess } = await import('./authService');
+    expect(await enableTelegramBotAccess()).toBe(false);
+    expect(auth.linkIdentity).toHaveBeenCalledExactlyOnceWith(options('telegram-link'));
+    expect(auth.signInWithOAuth).not.toHaveBeenCalled();
+  });
+
+  it('reports a completed binding only after server acknowledgment', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ linked: true })));
+    const { enableTelegramBotAccess } = await import('./authService');
+    expect(await enableTelegramBotAccess()).toBe(true);
+    expect(auth.linkIdentity).not.toHaveBeenCalled();
+  });
+
+  it('retains collision rejection without starting another authorization', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => Response.json({ error: { code: 'telegram_identity_in_use', message: 'Identity already linked.' } }, { status: 409 })));
+    const { enableTelegramBotAccess } = await import('./authService');
+    await expect(enableTelegramBotAccess()).rejects.toThrow('Identity already linked.');
+    expect(auth.linkIdentity).not.toHaveBeenCalled();
   });
 });

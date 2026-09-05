@@ -105,7 +105,7 @@ export const AccountSecurity: React.FC<{ userEmail: string; isOwner: boolean }> 
     setMessage(null);
     try {
       if (telegramIdentityAvailable) {
-        await enableTelegramBotAccess();
+        if (!await enableTelegramBotAccess()) return;
         await refresh();
         setMessage('Telegram bot access is active.');
         setBusy(false);

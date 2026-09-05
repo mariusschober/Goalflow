@@ -652,3 +652,12 @@ Created fix/telegram-oidc-callback-20260905 from documentation checkpoint
 No integration or production branch has moved. The correction removes the
 incorrect client origin parameter; it preserves server-owned OIDC PKCE,
 native callback binding and the canonical Supabase account identity.
+
+On source 3ddd52d8c6ac7071e696ffca1f341c64eb3cf41f, fresh owner Telegram OIDC
+returned successfully but bot linking rejected the missing signed profile id.
+Follow-up correction on the same short-lived branch handles Supabase's nested
+custom_claims.id and removes OIDC subject/identity-key fallback. Staging-only
+provider allowlist changed from empty to ["id"]; auth identity subject and owner
+UUID were retained. Updated readiness records the observed CI overlap and
+required fresh authorization. Push this checkpoint only to the existing
+finalization branch to avoid duplicate shared-account hosted runs.
