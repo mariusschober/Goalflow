@@ -38,6 +38,9 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
   const speech = config.VOICE_ENABLED === "true" ? createOpenAiSpeechProvider(config) : undefined;
   const localOnly = config.NODE_ENV !== 'production' && config.ENABLE_LOCAL_DEMO === 'true';
   const publicOriginUsesTls = new URL(config.APP_ORIGIN).protocol === 'https:';
+  const supabaseRealtimeOrigin = config.SUPABASE_URL
+    ? config.SUPABASE_URL.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:')
+    : '';
   const readinessProbe = dependencies.readinessProbe ?? createReadinessProbe(
     config,
     () => checkSupabaseDependencies(config, admin)
@@ -95,7 +98,7 @@ export const createApp = async (config: AppConfig, dependencies: AppDependencies
       directives: {
         defaultSrc: ["'self'"], scriptSrc: ["'self'", ...(localOnly ? ["'unsafe-inline'"] : []), "https://challenges.cloudflare.com", "https://telegram.org"], styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", "data:", "blob:"],
-        connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL] : [])],
+        connectSrc: ["'self'", "https://api.telegram.org", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com", ...(config.SUPABASE_URL ? [config.SUPABASE_URL, supabaseRealtimeOrigin] : [])],
         mediaSrc: ["'self'", "blob:", "https://ice1.somafm.com", "https://ice2.somafm.com", "https://ice4.somafm.com"],
         fontSrc: ["'self'"], frameSrc: ["https://challenges.cloudflare.com"], objectSrc: ["'none'"], baseUri: ["'self'"], frameAncestors: ["'none'"],
         // WebKit upgrades every relative asset request when this directive is

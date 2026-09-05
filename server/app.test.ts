@@ -57,6 +57,15 @@ describe("public server boundary", () => {
     expect(await response.json()).toEqual({ status: "ready" });
   });
 
+  it("permits the configured Supabase HTTPS and secure Realtime origins", async () => {
+    const { origin } = await serve(true);
+    const response = await fetch(`${origin}/api/v1/health/live`);
+    const policy = response.headers.get("content-security-policy");
+    expect(policy).toContain("https://example.supabase.co");
+    expect(policy).toContain("wss://example.supabase.co");
+    expect(policy).not.toContain("ws://example.supabase.co");
+  });
+
   it("rejects untrusted browser origins before an API route can run", async () => {
     const { origin } = await serve(true);
     const response = await fetch(`${origin}/api/v1/health/live`, {
