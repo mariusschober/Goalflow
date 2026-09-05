@@ -88,6 +88,18 @@ jobs:
   migrations:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17@sha256:67f41722b7a8cbdb868a44a4995c846eddfdc2973bccb291ce937dce88ad5675
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     env:
       PGHOST: 127.0.0.1
       PGPORT: 5432
@@ -102,18 +114,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-      - name: Start runner PostgreSQL 16
+      - name: Verify PostgreSQL 17 service
         run: |
           set -euo pipefail
-          installed_major="$(psql --version | awk '{ split($3, version, "."); print version[1] }')"
-          [ "$installed_major" = "16" ] || {
-            echo "The migration gate requires PostgreSQL 16; runner provided major $installed_major." >&2
+          server_major="$(psql --tuples-only --no-align --command='show server_version_num' | cut -c1-2)"
+          [ "$server_major" = "17" ] || {
+            echo "The migration gate requires PostgreSQL 17; service reported major $server_major." >&2
             exit 1
           }
-          sudo systemctl start postgresql.service
-          sudo -u postgres env -u PGHOST -u PGPORT -u PGUSER -u PGPASSWORD \
-            psql --set=ON_ERROR_STOP=1 \
-            --command="ALTER USER postgres PASSWORD 'postgres'"
           pg_isready --host="$PGHOST" --port="$PGPORT" --username="$PGUSER"
       - run: npm ci
       - run: npm run verify:migrations
