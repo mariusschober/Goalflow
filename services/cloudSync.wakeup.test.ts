@@ -1,8 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createCoalescedSyncRunner,
+  createPeriodicSyncHealthCheck,
   createRetryableOneTimeInitializer,
   FOREGROUND_SYNC_INTERVAL_MS,
+  SYNC_HEALTH_INTERVAL_MS,
   subscribeToSyncWakeups,
   syncWakeupTopicForUser
 } from './cloudSync';
@@ -115,5 +117,23 @@ describe('Web Realtime sync wake-ups', () => {
 
   it('keeps the foreground safety pull bounded to thirty seconds', () => {
     expect(FOREGROUND_SYNC_INTERVAL_MS).toBe(30_000);
+  });
+
+  it('keeps the diagnostic health probe out of bursty durable sync traffic', async () => {
+    let now = 0;
+    const check = vi.fn()
+      .mockRejectedValueOnce(new Error('diagnostic unavailable'))
+      .mockResolvedValue(undefined);
+    const checkPeriodically = createPeriodicSyncHealthCheck(check, () => now);
+
+    await checkPeriodically();
+    await checkPeriodically();
+    now = SYNC_HEALTH_INTERVAL_MS - 1;
+    await checkPeriodically();
+    expect(check).toHaveBeenCalledTimes(1);
+
+    now = SYNC_HEALTH_INTERVAL_MS;
+    await checkPeriodically();
+    expect(check).toHaveBeenCalledTimes(2);
   });
 });

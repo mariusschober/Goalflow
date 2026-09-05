@@ -66,6 +66,7 @@ const dependenciesForUser = (userKey: string, signal?: AbortSignal): CloudSyncDe
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const RETRYABLE_STATUS = new Set([408, 425, 429]);
 export const FOREGROUND_SYNC_INTERVAL_MS = 30_000;
+export const SYNC_HEALTH_INTERVAL_MS = 30_000;
 
 export const syncWakeupTopicForUser = (userId: string): string | null =>
   UUID_PATTERN.test(userId) ? `tsurfing:user:${userId.toLowerCase()}` : null;
@@ -354,6 +355,20 @@ export const fetchSyncHealth = async (
   };
 };
 
+/** Keep the non-authoritative diagnostic probe out of bursty durable sync traffic. */
+export const createPeriodicSyncHealthCheck = (
+  check: () => Promise<unknown>,
+  now: () => number = () => Date.now()
+): (() => Promise<void>) => {
+  let nextAllowedAt = Number.NEGATIVE_INFINITY;
+  return async () => {
+    const observedAt = now();
+    if (observedAt < nextAllowedAt) return;
+    nextAllowedAt = observedAt + SYNC_HEALTH_INTERVAL_MS;
+    await check().catch(() => undefined);
+  };
+};
+
 /** Coalesces overlapping wake-ups without losing a request made during an active cycle. */
 export const createCoalescedSyncRunner = (
   canRun: () => boolean,
@@ -398,6 +413,9 @@ export const startCloudSync = (userKey: string): (() => void) => {
   let localChangeQueued = false;
   const lifecycleController = new AbortController();
   const lifecycleDependencies = dependenciesForUser(userKey, lifecycleController.signal);
+  const checkHealth = createPeriodicSyncHealthCheck(
+    () => fetchSyncHealth(userKey, lifecycleDependencies)
+  );
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(`goalflow-sync:${userKey}`);
   const ensureLocalDataSeeded = createRetryableOneTimeInitializer(
     () => seedUnsynchronizedLocalData(userKey)
@@ -429,12 +447,12 @@ export const startCloudSync = (userKey: string): (() => void) => {
           await navigator.locks.request(`goalflow-sync:${userKey}`, { ifAvailable: false }, async lock => {
             if (lock) {
               await syncMutex.acquire();
-              try { await run(); await fetchSyncHealth(userKey, lifecycleDependencies).catch(() => undefined); } finally { syncMutex.release(); }
+              try { await run(); await checkHealth(); } finally { syncMutex.release(); }
             }
           });
         } else {
           await syncMutex.acquire();
-          try { await run(); await fetchSyncHealth(userKey, lifecycleDependencies).catch(() => undefined); } finally { syncMutex.release(); }
+          try { await run(); await checkHealth(); } finally { syncMutex.release(); }
         }
       } catch (error) {
         if (stopped && (error instanceof DOMException || lifecycleController.signal.aborted)) return;
