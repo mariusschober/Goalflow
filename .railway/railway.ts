@@ -42,6 +42,10 @@ export default defineRailway(ctx => {
     replicas: 1,
     env: {
       ...commonServerEnvironment,
+      // Keep the application listener and the custom-domain target aligned.
+      // Railway otherwise injects 8080 while staging.tsurfing.com is pinned
+      // to port 3000.
+      PORT: '3000',
       BACKUPS_ENABLED: 'false',
       VITE_SUPABASE_URL: ctx.shared.SUPABASE_URL,
       VITE_SUPABASE_PUBLISHABLE_KEY: ctx.shared.SUPABASE_PUBLISHABLE_KEY,

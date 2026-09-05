@@ -56,6 +56,7 @@ describe('Railway beta infrastructure contract', () => {
     });
     expect(web.build).toMatchObject({ buildCommand: 'npm run build', watchPatterns: ['**'] });
     expect(web.build?.buildCommand).not.toContain('npm ci');
+    expect(web.variables?.PORT).toMatchObject({ type: 'literal', value: '3000' });
     expect(maintenance.kind).toBe('github');
     expect(maintenance.build).toMatchObject({
       buildCommand: 'npm run build:server',
