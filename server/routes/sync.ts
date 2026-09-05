@@ -32,6 +32,27 @@ const requireDatabase = (admin?: SupabaseClient): SupabaseClient => {
   return admin;
 };
 
+/** Readiness verifies the same immutable protocol; retain one retryable guard per process. */
+export const createSyncProtocolGuard = (database: SupabaseClient): (() => Promise<void>) => {
+  let verification: Promise<void> | undefined;
+  return async () => {
+    if (!verification) {
+      verification = (async () => {
+        const { data, error } = await database.rpc('goalflow_sync_protocol_version');
+        if (error || Number(data) !== 3) {
+          throw new Error('The hardened synchronization protocol is not installed. Local mutations remain pending.');
+        }
+      })();
+    }
+    try {
+      await verification;
+    } catch (error) {
+      verification = undefined;
+      throw error;
+    }
+  };
+};
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   Boolean(value && typeof value === 'object' && !Array.isArray(value));
 
@@ -164,6 +185,7 @@ const invalidRequest = (response: Response, error: unknown) => {
 
 export const createSyncRouter = (admin?: SupabaseClient) => {
   const router = Router();
+  const requireHardenedProtocol = admin ? createSyncProtocolGuard(admin) : undefined;
 
   router.post('/sync/push', async (request, response) => {
     try {
@@ -172,10 +194,8 @@ export const createSyncRouter = (admin?: SupabaseClient) => {
       // Never call the legacy RPC: it did not fingerprint requests and could
       // auto-resolve conflicts. Production rollout must apply the forward
       // migration before this server begins accepting mutations.
-      const { data: protocolVersion, error: protocolError } = await database.rpc('goalflow_sync_protocol_version');
-      if (protocolError || Number(protocolVersion) !== 3) {
-        throw new Error('The hardened synchronization protocol is not installed. Local mutations remain pending.');
-      }
+      if (!requireHardenedProtocol) throw new Error('Synchronization is not configured.');
+      await requireHardenedProtocol();
       const results = await applySyncMutationsSequentially(database, request.user!.id, body.mutations);
       response.json({ results });
     } catch (error) {

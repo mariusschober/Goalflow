@@ -4,6 +4,7 @@ import {
   applySyncMutationsSequentially,
   assertDurableReceipt,
   canonicalSyncTimestamp,
+  createSyncProtocolGuard,
   resolveCloudConflictRecord,
   syncMutationSchema
 } from './sync';
@@ -36,6 +37,18 @@ const receipt = () => ({
 });
 
 describe('sync API durable acceptance boundary', () => {
+  it('verifies the immutable protocol once and retries a failed first check', async () => {
+    const rpc = vi.fn()
+      .mockResolvedValueOnce({ data: null, error: new Error('temporarily unavailable') })
+      .mockResolvedValue({ data: 3, error: null });
+    const requireProtocol = createSyncProtocolGuard({ rpc } as unknown as SupabaseClient);
+
+    await expect(requireProtocol()).rejects.toThrow(/protocol is not installed/i);
+    await requireProtocol();
+    await requireProtocol();
+    expect(rpc).toHaveBeenCalledTimes(2);
+  });
+
   it('canonicalizes PostgREST UTC timestamps without losing fractional precision', () => {
     expect(canonicalSyncTimestamp('2026-09-05T00:25:06.813+00:00'))
       .toBe('2026-09-05T00:25:06.813Z');

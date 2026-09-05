@@ -64,10 +64,15 @@ export const createAuthMiddleware = (
     if (!claims.sessionId) {
       response.status(401).json({ error: { code: "unauthorized", message: "The session is invalid or expired." } }); return;
     }
-    const { data: activeSession, error: sessionError } = await admin.rpc("goalflow_session_is_active", {
-      target_user_id: data.user.id,
-      target_session_id: claims.sessionId
-    });
+    const [sessionResult, initialProfileResult] = await Promise.all([
+      admin.rpc("goalflow_session_is_active", {
+        target_user_id: data.user.id,
+        target_session_id: claims.sessionId
+      }),
+      admin.from("profiles").select("email,role,status")
+        .eq("user_id", data.user.id).maybeSingle()
+    ]);
+    const { data: activeSession, error: sessionError } = sessionResult;
     if (sessionError) {
       response.status(503).json({ error: { code: "session_check_unavailable", message: "Account access could not be verified." } }); return;
     }
@@ -75,8 +80,7 @@ export const createAuthMiddleware = (
       response.status(401).json({ error: { code: "session_revoked", message: "This session has been signed out." } }); return;
     }
     const authEmail = data.user.email?.toLowerCase() ?? "";
-    let { data: profile, error: profileError } = await admin.from("profiles").select("email,role,status")
-      .eq("user_id", data.user.id).maybeSingle();
+    let { data: profile, error: profileError } = initialProfileResult;
     if (!profile && !profileError && data.user.id === config.OWNER_USER_ID) {
       const bootstrap = await admin.rpc("bootstrap_goalflow_owner", {
         target_user_id: data.user.id,
