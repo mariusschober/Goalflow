@@ -12,6 +12,7 @@ import {
 import { installHostedTestSession } from './hosted-auth';
 
 const REALTIME_P95_BUDGET_MS = 2_000;
+const REALTIME_SAMPLE_COUNT = 20;
 const FOREGROUND_FALLBACK_BUDGET_MS = 30_500;
 
 const secretEnvironmentNames = [
@@ -267,7 +268,6 @@ test('real browsers converge within one account and isolate a second account', a
   diagnosticsByTest.set(testInfo.testId, []);
   const contexts: BrowserContext[] = [];
   const originalTitle = `Hosted browser ${Date.now()} ${randomUUID().slice(0, 8)}`;
-  const editedTitle = `${originalTitle} edited`;
   const fallbackTitle = `Hosted fallback ${Date.now()} ${randomUUID().slice(0, 8)}`;
   const realtimeLatenciesMs: number[] = [];
   let recoveredTrackingConflicts = 0;
@@ -332,27 +332,33 @@ test('real browsers converge within one account and isolate a second account', a
     await waitForFreshDurableSync(firstA.page);
     await waitForFreshDurableSync(secondA.page);
 
-    const card = taskCard(secondA.page, originalTitle);
-    await card.hover();
-    await card.getByTitle('Edit').click();
-    const editDialog = secondA.page.getByRole('dialog', { name: 'Edit Task' });
-    await editDialog.getByPlaceholder('What is the next action?').fill(editedTitle);
-    const editStartedAt = Date.now();
-    await editDialog.getByRole('button', { name: 'Save', exact: true }).click();
-    await expect(editDialog).toBeHidden();
-    await waitForAutomaticTaskCount(firstA.page, editedTitle, 1);
-    realtimeLatenciesMs.push(Date.now() - editStartedAt);
-    await expect(firstA.page.getByRole('heading', { name: originalTitle, exact: true })).toHaveCount(0);
+    let currentTitle = originalTitle;
+    for (let sample = 1; sample <= REALTIME_SAMPLE_COUNT - 2; sample += 1) {
+      const nextTitle = `${originalTitle} edit ${sample}`;
+      const card = taskCard(secondA.page, currentTitle);
+      await card.hover();
+      await card.getByTitle('Edit').click();
+      const editDialog = secondA.page.getByRole('dialog', { name: 'Edit Task' });
+      await editDialog.getByPlaceholder('What is the next action?').fill(nextTitle);
+      const editStartedAt = Date.now();
+      await editDialog.getByRole('button', { name: 'Save', exact: true }).click();
+      await expect(editDialog).toBeHidden();
+      await waitForAutomaticTaskCount(firstA.page, nextTitle, 1);
+      realtimeLatenciesMs.push(Date.now() - editStartedAt);
+      await expect(firstA.page.getByRole('heading', { name: currentTitle, exact: true })).toHaveCount(0);
+      currentTitle = nextTitle;
+    }
 
-    const editedCard = taskCard(secondA.page, editedTitle);
+    const editedCard = taskCard(secondA.page, currentTitle);
     await editedCard.hover();
     const deleteStartedAt = Date.now();
     await editedCard.getByTitle('Delete').click();
-    await expect(secondA.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
-    await waitForAutomaticTaskCount(firstA.page, editedTitle, 0);
+    await expect(secondA.page.getByRole('heading', { name: currentTitle, exact: true })).toHaveCount(0);
+    await waitForAutomaticTaskCount(firstA.page, currentTitle, 0);
     realtimeLatenciesMs.push(Date.now() - deleteStartedAt);
-    await expect(userB.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
+    await expect(userB.page.getByRole('heading', { name: currentTitle, exact: true })).toHaveCount(0);
 
+    expect(realtimeLatenciesMs).toHaveLength(REALTIME_SAMPLE_COUNT);
     const sortedLatencies = [...realtimeLatenciesMs].sort((left, right) => left - right);
     const realtimeP95Ms = sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1];
     expect(
