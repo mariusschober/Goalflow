@@ -37,7 +37,12 @@ const callTelegram = async <T>(
   }
 
   if (!response.ok) throw new Error(`Telegram ${method} was rejected.`);
-  const envelope = await response.json() as TelegramEnvelope<T>;
+  let envelope: TelegramEnvelope<T>;
+  try {
+    envelope = await response.json() as TelegramEnvelope<T>;
+  } catch {
+    throw new Error(`Telegram ${method} returned an unreadable acknowledgment.`);
+  }
   if (envelope.ok !== true || envelope.result === undefined) {
     throw new Error(`Telegram ${method} returned an unverified acknowledgment.`);
   }
@@ -76,20 +81,22 @@ export const configureTelegramDeployment = async (
   const miniAppUrl = new URL("/mini", config.APP_ORIGIN).toString();
   const allowedUpdates = ["message", "callback_query"];
 
-  await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setWebhook", {
+  const webhookAccepted = await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setWebhook", {
     url: webhookUrl,
     secret_token: config.TELEGRAM_WEBHOOK_SECRET,
     allowed_updates: allowedUpdates,
     drop_pending_updates: false
   }, fetchImpl);
-  await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setChatMenuButton", {
+  if (webhookAccepted !== true) throw new Error("Telegram setWebhook was not accepted.");
+  const menuAccepted = await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setChatMenuButton", {
     menu_button: {
       type: "web_app",
       text: "Open Tsurfing",
       web_app: { url: miniAppUrl }
     }
   }, fetchImpl);
-  await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setMyCommands", {
+  if (menuAccepted !== true) throw new Error("Telegram setChatMenuButton was not accepted.");
+  const commandsAccepted = await callTelegram<boolean>(config.TELEGRAM_BOT_TOKEN, "setMyCommands", {
     commands: [
       { command: "current", description: "Show the current task" },
       { command: "today", description: "Show today's queue" },
@@ -99,6 +106,7 @@ export const configureTelegramDeployment = async (
       { command: "help", description: "Show Tsurfing commands" }
     ]
   }, fetchImpl);
+  if (commandsAccepted !== true) throw new Error("Telegram setMyCommands was not accepted.");
 
   const webhook = await callTelegram<TelegramWebhookInfo>(
     config.TELEGRAM_BOT_TOKEN,

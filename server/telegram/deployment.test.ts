@@ -91,6 +91,15 @@ describe("Telegram deployment configuration", () => {
       .rejects.toThrow("Telegram webhook verification did not match this environment.");
   });
 
+  it("requires an explicit true result for every configuration mutation", async () => {
+    const request = vi.fn<typeof fetch>()
+      .mockResolvedValueOnce(response({ id: 7, is_bot: true, username: "tstagebot" }))
+      .mockResolvedValueOnce(response(false));
+    await expect(configureTelegramDeployment(enabledConfig(), request))
+      .rejects.toThrow("Telegram setWebhook was not accepted.");
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
   it("does not reflect Telegram error descriptions or token-bearing URLs", async () => {
     const request = vi.fn<typeof fetch>().mockResolvedValue(response(false, 401));
     await expect(configureTelegramDeployment(enabledConfig(), request))
