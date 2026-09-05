@@ -618,6 +618,10 @@ jobs:
           set -euo pipefail
           printf 'GOALFLOW_CROSS_CLIENT_STATE_FILE=%s\n' \
             "$RUNNER_TEMP/goalflow-cross-client-state.json" >> "$GITHUB_ENV"
+          printf 'GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE=%s\n' \
+            "$RUNNER_TEMP/goalflow-cross-client-macos-proof.json" >> "$GITHUB_ENV"
+          printf 'GOALFLOW_CROSS_CLIENT_MACOS_CONFIG_FILE=%s\n' \
+            "/tmp/tsurfing-hosted-cross-client-macos.json" >> "$GITHUB_ENV"
       - name: Install cross-client test dependencies
         if: steps.preflight.outputs.run == 'true'
         run: |
@@ -653,6 +657,34 @@ jobs:
           GOALFLOW_CROSS_CLIENT_PHASE: macos
         run: |
           set -euo pipefail
+          rm -f "$GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE"
+          rm -f "$GOALFLOW_CROSS_CLIENT_MACOS_CONFIG_FILE"
+          trap 'rm -f "$GOALFLOW_CROSS_CLIENT_MACOS_CONFIG_FILE"' EXIT
+          node --input-type=module -e '
+            import { writeFileSync } from "node:fs";
+            const names = [
+              "GOALFLOW_HOSTED_TEST_CONFIRM",
+              "GOALFLOW_CROSS_CLIENT_PHASE",
+              "GOALFLOW_CROSS_CLIENT_STATE_FILE",
+              "GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE",
+              "GOALFLOW_STAGING_APP_ORIGIN",
+              "GOALFLOW_STAGING_SUPABASE_URL",
+              "GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY",
+              "GOALFLOW_STAGING_USER_A_EMAIL",
+              "GOALFLOW_STAGING_USER_A_PASSWORD",
+              "GOALFLOW_STAGING_USER_A_ID"
+            ];
+            const environment = Object.fromEntries(names.map(name => {
+              const value = process.env[name]?.trim();
+              if (!value) throw new Error(`Missing macOS hosted setting: ${name}`);
+              return [name, value];
+            }));
+            writeFileSync(
+              process.env.GOALFLOW_CROSS_CLIENT_MACOS_CONFIG_FILE,
+              `${JSON.stringify({ schemaVersion: 1, environment })}\n`,
+              { encoding: "utf8", mode: 0o600, flag: "wx" }
+            );
+          '
           xcodebuild test \
             -project macos-native/GoalflowMac.xcodeproj \
             -scheme GoalflowMac \
@@ -661,6 +693,22 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/goalflow-hosted-cross-client" \
             -only-testing:GoalflowMacTests/HostedCrossClientSyncTests/testProductionTransportEditsAndroidRecord \
             CODE_SIGNING_ALLOWED=NO
+          test -s "$GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE"
+          PROOF_FILE="$GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE" \
+          STATE_FILE="$GOALFLOW_CROSS_CLIENT_STATE_FILE" \
+          node --input-type=module -e '
+            import { readFileSync } from "node:fs";
+            const proof = JSON.parse(readFileSync(process.env.PROOF_FILE, "utf8"));
+            const state = JSON.parse(readFileSync(process.env.STATE_FILE, "utf8"));
+            const valid = proof.schemaVersion === 1 &&
+              proof.taskId === state.taskId &&
+              proof.title === state.macosTitle &&
+              Number.isSafeInteger(proof.beforeServerVersion) &&
+              Number.isSafeInteger(proof.afterServerVersion) &&
+              proof.afterServerVersion > proof.beforeServerVersion;
+            if (!valid) throw new Error("macOS hosted proof did not demonstrate an authoritative server advancement.");
+            console.log(`macOS hosted proof: server version ${proof.beforeServerVersion} -> ${proof.afterServerVersion}`);
+          '
       - name: Verify the macOS edit through the hosted browser
         if: steps.preflight.outputs.run == 'true'
         env:

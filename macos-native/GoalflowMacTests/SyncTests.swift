@@ -825,19 +825,20 @@ final class TwoDeviceTests: XCTestCase {
 
 final class HostedCrossClientSyncTests: XCTestCase {
     func testProductionTransportEditsAndroidRecord() async throws {
-        guard ProcessInfo.processInfo.environment["GOALFLOW_HOSTED_TEST_CONFIRM"] == "staging",
-              ProcessInfo.processInfo.environment["GOALFLOW_CROSS_CLIENT_PHASE"] == "macos" else {
-            throw XCTSkip("The live transport proof runs only inside the explicit staging cross-client gate.")
+        let runtime = try hostedRuntime()
+        guard try hostedEnvironment("GOALFLOW_HOSTED_TEST_CONFIRM", from: runtime) == "staging",
+              try hostedEnvironment("GOALFLOW_CROSS_CLIENT_PHASE", from: runtime) == "macos" else {
+            throw SyncError.validation("The macOS hosted runtime is not the explicit staging cross-client gate.")
         }
-        let state = try hostedState()
+        let state = try hostedState(runtime: runtime)
         let taskId = try XCTUnwrap(state["taskId"] as? String)
         let androidTitle = try XCTUnwrap(state["androidTitle"] as? String)
         let macosTitle = try XCTUnwrap(state["macosTitle"] as? String)
         XCTAssertNotNil(UUID(uuidString: taskId))
 
-        let appOrigin = try hostedOrigin("GOALFLOW_STAGING_APP_ORIGIN")
-        let supabaseOrigin = try hostedOrigin("GOALFLOW_STAGING_SUPABASE_URL")
-        let publishableKey = try hostedEnvironment("GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY")
+        let appOrigin = try hostedOrigin("GOALFLOW_STAGING_APP_ORIGIN", from: runtime)
+        let supabaseOrigin = try hostedOrigin("GOALFLOW_STAGING_SUPABASE_URL", from: runtime)
+        let publishableKey = try hostedEnvironment("GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY", from: runtime)
         XCTAssertTrue(publishableKey.hasPrefix("sb_publishable_"), "A server credential must never enter the native gate.")
         let configuration = MacCloudConfiguration(
             apiOrigin: appOrigin,
@@ -851,12 +852,13 @@ final class HostedCrossClientSyncTests: XCTestCase {
         urlConfiguration.timeoutIntervalForRequest = 20
         urlConfiguration.timeoutIntervalForResource = 25
         let urlSession = URLSession(configuration: urlConfiguration)
-        let expectedUserId = try hostedEnvironment("GOALFLOW_STAGING_USER_A_ID").lowercased()
+        let expectedUserId = try hostedEnvironment("GOALFLOW_STAGING_USER_A_ID", from: runtime).lowercased()
         let session = try await hostedPasswordSession(
             configuration: configuration,
             publishableKey: publishableKey,
             expectedUserId: expectedUserId,
-            urlSession: urlSession
+            urlSession: urlSession,
+            runtime: runtime
         )
         XCTAssertEqual(session.userId, expectedUserId)
 
@@ -897,6 +899,14 @@ final class HostedCrossClientSyncTests: XCTestCase {
         try await engine.synchronize()
         var task = try XCTUnwrap(try taskStore.loadAll().first { $0.id == taskId })
         XCTAssertEqual(task.title, androidTitle)
+        let key = syncEntityKey("tasks", taskId)
+        let pulledMeta = try metaStore.load()
+        let beforeServerVersion = try XCTUnwrap(
+            pulledMeta.versions[key]?.server,
+            "The macOS gate must observe the Android server version before editing."
+        )
+        XCTAssertFalse(pulledMeta.outbox.contains { $0.entityType == "tasks" && $0.entityId == taskId })
+        XCTAssertFalse(pulledMeta.conflicts.contains { $0.entityType == "tasks" && $0.entityId == taskId })
 
         task.title = macosTitle
         task.updatedAt = ISO8601DateFormatter().string(from: Date())
@@ -907,16 +917,31 @@ final class HostedCrossClientSyncTests: XCTestCase {
         XCTAssertEqual((pending.first?.payload.value as? [String: Any])?["title"] as? String, macosTitle)
 
         try await engine.synchronize()
-        XCTAssertFalse(try metaStore.load().outbox.contains { $0.entityId == taskId })
+        let committedMeta = try metaStore.load()
+        XCTAssertFalse(committedMeta.outbox.contains { $0.entityType == "tasks" && $0.entityId == taskId })
+        XCTAssertFalse(committedMeta.conflicts.contains { $0.entityType == "tasks" && $0.entityId == taskId })
+        let afterServerVersion = try XCTUnwrap(
+            committedMeta.versions[key]?.server,
+            "The macOS mutation must receive an authoritative server version."
+        )
+        XCTAssertGreaterThan(afterServerVersion, beforeServerVersion)
         XCTAssertEqual(try taskStore.loadAll().first { $0.id == taskId }?.title, macosTitle)
-        XCTAssertNotNil(try metaStore.load().lastSuccessfulSync)
+        XCTAssertNotNil(committedMeta.lastSuccessfulSync)
+        try writeHostedProof(
+            taskId: taskId,
+            title: macosTitle,
+            beforeServerVersion: beforeServerVersion,
+            afterServerVersion: afterServerVersion,
+            runtime: runtime
+        )
     }
 
     private func hostedPasswordSession(
         configuration: MacCloudConfiguration,
         publishableKey: String,
         expectedUserId: String,
-        urlSession: URLSession
+        urlSession: URLSession,
+        runtime: [String: String]
     ) async throws -> NativeSession {
         let supabaseURL = try XCTUnwrap(configuration.supabaseURL)
         var components = try XCTUnwrap(URLComponents(url: supabaseURL, resolvingAgainstBaseURL: false))
@@ -929,8 +954,8 @@ final class HostedCrossClientSyncTests: XCTestCase {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "email": try hostedEnvironment("GOALFLOW_STAGING_USER_A_EMAIL"),
-            "password": try hostedEnvironment("GOALFLOW_STAGING_USER_A_PASSWORD")
+            "email": try hostedEnvironment("GOALFLOW_STAGING_USER_A_EMAIL", from: runtime),
+            "password": try hostedEnvironment("GOALFLOW_STAGING_USER_A_PASSWORD", from: runtime)
         ])
         let (data, response) = try await urlSession.data(for: request)
         let http = try XCTUnwrap(response as? HTTPURLResponse)
@@ -947,8 +972,23 @@ final class HostedCrossClientSyncTests: XCTestCase {
         )
     }
 
-    private func hostedState() throws -> [String: Any] {
-        let path = try hostedEnvironment("GOALFLOW_CROSS_CLIENT_STATE_FILE")
+    private func hostedRuntime() throws -> [String: String] {
+        let url = URL(fileURLWithPath: "/tmp/tsurfing-hosted-cross-client-macos.json")
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            throw XCTSkip("The live transport proof runs only inside the explicit staging cross-client gate.")
+        }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 64 * 1024,
+              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              object["schemaVersion"] as? Int == 1,
+              let runtime = object["environment"] as? [String: String] else {
+            throw SyncError.validation("The macOS hosted runtime configuration is invalid.")
+        }
+        return runtime
+    }
+
+    private func hostedState(runtime: [String: String]) throws -> [String: Any] {
+        let path = try hostedEnvironment("GOALFLOW_CROSS_CLIENT_STATE_FILE", from: runtime)
         let data = try Data(contentsOf: URL(fileURLWithPath: path))
         guard data.count <= 16 * 1024,
               let state = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -958,16 +998,16 @@ final class HostedCrossClientSyncTests: XCTestCase {
         return state
     }
 
-    private func hostedEnvironment(_ name: String) throws -> String {
-        guard let value = ProcessInfo.processInfo.environment[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
+    private func hostedEnvironment(_ name: String, from runtime: [String: String]) throws -> String {
+        guard let value = runtime[name]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !value.isEmpty else {
             throw SyncError.validation("Missing required hosted staging setting: \(name)")
         }
         return value
     }
 
-    private func hostedOrigin(_ name: String) throws -> String {
-        let value = try hostedEnvironment(name).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    private func hostedOrigin(_ name: String, from runtime: [String: String]) throws -> String {
+        let value = try hostedEnvironment(name, from: runtime).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
         guard let components = URLComponents(string: value),
               components.scheme == "https", components.host?.isEmpty == false,
               components.user == nil, components.password == nil,
@@ -975,5 +1015,24 @@ final class HostedCrossClientSyncTests: XCTestCase {
             throw SyncError.validation("Hosted staging setting \(name) must be a credential-free HTTPS origin.")
         }
         return value
+    }
+
+    private func writeHostedProof(
+        taskId: String,
+        title: String,
+        beforeServerVersion: Int,
+        afterServerVersion: Int,
+        runtime: [String: String]
+    ) throws {
+        let path = try hostedEnvironment("GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE", from: runtime)
+        let payload: [String: Any] = [
+            "schemaVersion": 1,
+            "taskId": taskId,
+            "title": title,
+            "beforeServerVersion": beforeServerVersion,
+            "afterServerVersion": afterServerVersion
+        ]
+        let data = try JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys])
+        try data.write(to: URL(fileURLWithPath: path), options: [.atomic])
     }
 }

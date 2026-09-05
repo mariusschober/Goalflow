@@ -37,6 +37,14 @@ describe('hosted cross-client release gate', () => {
     expect(androidTest).toContain('hostedBrowserRecordConvergesThroughProductionTransport');
     expect(macosTest).toContain('URLSessionSyncTransport(');
     expect(macosTest).toContain('testProductionTransportEditsAndroidRecord');
+    expect(macosTest).toContain('XCTAssertGreaterThan(afterServerVersion, beforeServerVersion)');
+    expect(macosTest).toContain('GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE');
+    expect(macosTest).toContain('/tmp/tsurfing-hosted-cross-client-macos.json');
+    expect(workflow).toContain('/tmp/tsurfing-hosted-cross-client-macos.json');
+    expect(workflow).toContain('{ encoding: "utf8", mode: 0o600, flag: "wx" }');
+    expect(workflow).toContain('trap \'rm -f "$GOALFLOW_CROSS_CLIENT_MACOS_CONFIG_FILE"\' EXIT');
+    expect(workflow).toContain('test -s "$GOALFLOW_CROSS_CLIENT_MACOS_PROOF_FILE"');
+    expect(workflow).toContain('proof.afterServerVersion > proof.beforeServerVersion');
     expect(browserJourney).toContain("phase === 'verify-android'");
     expect(browserJourney).toContain("phase === 'verify-macos'");
   });
