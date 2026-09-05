@@ -51,6 +51,7 @@ describe('hosted browser release gate', () => {
     expect(browser).toBeGreaterThan(protocol);
     expect(workflow).toContain('npx playwright install --with-deps chromium');
     expect(workflow).toContain('name: hosted-browser-diagnostics');
+    expect(workflow).toContain("if: failure() && steps.preflight.outputs.run == 'true'");
     expect(workflow).toContain('path: test-results');
     expect(workflow).toContain('if-no-files-found: error');
   });

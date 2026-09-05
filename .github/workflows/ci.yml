@@ -523,8 +523,8 @@ jobs:
       - name: Prove hosted browser convergence and account isolation
         if: steps.preflight.outputs.run == 'true'
         run: npm run test:hosted:browser
-      - name: Upload redacted hosted browser diagnostics
-        if: always() && steps.preflight.outputs.run == 'true'
+      - name: Upload redacted hosted browser diagnostics on failure
+        if: failure() && steps.preflight.outputs.run == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: hosted-browser-diagnostics
