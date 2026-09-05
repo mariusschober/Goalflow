@@ -64,7 +64,10 @@ await collectJavascript(clientRoot);
 await collectJavascript(miniRoot);
 
 const javascript = (await Promise.all(javascriptFiles.map(file => readFile(file, 'utf8')))).join('\n');
-for (const forbidden of ['__storageService', '__STORES', '123456']) {
+// Reject semantic test-access artifacts. A bare numeric OTP is not a safe
+// marker: Supabase's production client contains the standard digit alphabet
+// `0123456789`, which necessarily includes common six-digit substrings.
+for (const forbidden of ['__storageService', '__STORES', 'goalflow-test-access', 'Tsurfing Test']) {
   if (javascript.includes(forbidden)) {
     throw new Error(`Production client bundle contains forbidden test-only marker ${forbidden}.`);
   }

@@ -29,4 +29,14 @@ describe('production client secret build gate', () => {
     ]);
     expect(scanClientContent(`const key="${legacyKey('anon')}";`, 'bundle.js')).toEqual([]);
   });
+
+  it('rejects semantic test-access markers without treating library digit alphabets as backdoors', () => {
+    const artifactGate = fs.readFileSync('scripts/verify-client-artifacts.mjs', 'utf8');
+    const testGate = fs.readFileSync('scripts/verify-test-build.mjs', 'utf8');
+    expect(artifactGate).toContain("'goalflow-test-access'");
+    expect(artifactGate).toContain("'Tsurfing Test'");
+    expect(artifactGate).not.toContain("'123456'");
+    expect(testGate).toContain("bundle.includes('goalflow-test-access')");
+    expect(testGate).toContain("bundle.includes('123456')");
+  });
 });
