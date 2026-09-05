@@ -646,3 +646,9 @@ that same revision. Created local short-lived branch
 `codex/personal-beta-live-matrix-20260905` from that head for the remaining
 Telegram and five-surface staging gates. No merge, rewrite, promotion, tag
 creation or preserved-branch deletion was performed.
+
+Created fix/telegram-oidc-callback-20260905 from documentation checkpoint
+1126c1c to repair the owner-observed Telegram legacy-widget callback defect.
+No integration or production branch has moved. The correction removes the
+incorrect client origin parameter; it preserves server-owned OIDC PKCE,
+native callback binding and the canonical Supabase account identity.

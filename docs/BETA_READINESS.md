@@ -93,6 +93,42 @@ passed; the exact-head hosted evidence above belongs to `a9245b0`. No workflow
 filter, deployment, release branch or existing PR was changed to manufacture
 new green evidence.
 
+## Telegram callback defect and correction — 2026-09-05
+
+The owner completed the previously reachable Telegram authorization screen, but
+Telegram returned its legacy widget result in a URL fragment at the Supabase
+project root. Supabase correctly returned `requested path is invalid`; no OIDC
+code exchange or Tsurfing account link completed. The result payload is not
+retained here. The earlier claim that the extra `origin` parameter was required
+for OIDC is withdrawn: it selected a legacy widget flow and concealed missing
+Telegram-side OIDC configuration.
+
+Live inspection of Tsurfing Staging's custom provider confirms type `oidc`,
+identifier `custom:telegram`, public client ID `8300507048`, discovery from
+Telegram's official issuer, PKCE enabled, optional email enabled, nonce checking
+preserved, and no configured origin/bot_id overrides. The owner found BotFather
+still offered “Switch to OpenID Connect Login” and completed that switch. Its new
+settings screen showed an empty Redirect URIs list. The owner is adding the exact
+Supabase callback; the OIDC Client Secret must be entered directly into the
+Supabase provider form, never copied to this ledger or chat.
+
+On `fix/telegram-oidc-callback-20260905`, Web, native Android and native macOS now
+omit `origin` from Telegram authorization/link requests. Standard Supabase
+callbacks, PKCE, native callback state and immutable account binding remain.
+Three new Web behavioral tests failed against the old origin-bearing requests
+and pass with the correction; Android and macOS URL tests now reject legacy
+widget parameters. This changes the erroneous protocol expectation, not the
+security gate.
+
+Local validation: 59 Vitest files / 318 tests and production Web/Mini App/server
+builds PASS; native Android authentication 29/29 PASS with installed OpenJDK
+21.0.12.1 and signing skipped; native macOS authentication 9/9 PASS without
+release signing. Live corrected authorization/linking and exact-head CI remain
+pending. Reaching either provider screen does not by itself prove sign-in.
+
+Protocol references: [Telegram OIDC](https://core.telegram.org/bots/telegram-login#openid-connect)
+and [Supabase custom providers](https://supabase.com/docs/guides/auth/custom-oauth-providers).
+
 ## Candidate
 
 | Item | Current evidence | State |

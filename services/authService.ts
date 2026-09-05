@@ -8,12 +8,6 @@ const configuredTelegramProvider = import.meta.env.VITE_TELEGRAM_OIDC_PROVIDER_I
 export const telegramProvider = (configuredTelegramProvider.startsWith('custom:')
   ? configuredTelegramProvider
   : `custom:${configuredTelegramProvider}`) as `custom:${string}`;
-// Telegram currently requires the registered OAuth client origin even though
-// it is not listed in the standard OIDC request example. Bind it to the
-// Supabase callback host rather than the mutable page origin.
-const telegramAuthorizationParams = supabaseUrl
-  ? { origin: new URL(supabaseUrl).origin }
-  : undefined;
 const localDemo = import.meta.env.DEV && import.meta.env.VITE_ENABLE_LOCAL_DEMO === 'true';
 const testBuild = import.meta.env.VITE_TEST_MODE === 'true';
 const testCode = import.meta.env.VITE_TEST_CODE || '';
@@ -430,8 +424,7 @@ const startTelegramOAuth = async (callback: 'telegram' | 'telegram-sign-in'): Pr
     provider: telegramProvider,
     options: {
       redirectTo: `${window.location.origin}/?auth=${callback}`,
-      scopes: 'openid profile telegram:bot_access',
-      queryParams: telegramAuthorizationParams
+      scopes: 'openid profile telegram:bot_access'
     }
   });
   if (error) throw error;
@@ -470,8 +463,7 @@ export const beginTelegramLink = async (): Promise<void> => {
     provider: telegramProvider,
     options: {
       redirectTo: `${window.location.origin}/?auth=telegram-link`,
-      scopes: 'openid profile telegram:bot_access',
-      queryParams: telegramAuthorizationParams
+      scopes: 'openid profile telegram:bot_access'
     }
   });
   if (error) {

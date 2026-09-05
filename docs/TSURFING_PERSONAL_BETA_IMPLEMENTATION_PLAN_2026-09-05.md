@@ -92,3 +92,17 @@ this staging checkpoint. No staging pass by itself authorizes release.
   unchanged; no credentials or consent were supplied by the agent.
 - Documentation-only continuation branch pushes do not trigger CI under current
   workflow filters. Do not confuse their local checks with a new hosted run.
+
+## Corrected Telegram execution path
+
+The first owner authorization proved a real defect: legacy widget result at the
+Supabase root, not an OIDC code at /auth/v1/callback. The origin workaround is
+invalid and is removed on fix/telegram-oidc-callback-20260905. BotFather was still
+in legacy mode; owner has switched staging bot to OIDC. Register the exact
+Supabase Redirect URI, enter the OIDC-specific secret directly into Supabase,
+then publish the corrected exact source to staging and start fresh linking.
+Never accept the old widget result as an account identity or fabricate a
+callback from it. Runtime regression checks: Web 3 new behavior cases (red
+before fix, green after), Android auth 29/29, macOS auth 9/9; full npm check
+318 tests PASS. Java 21 is installed under Homebrew even though java_home
+listed only Java 18.

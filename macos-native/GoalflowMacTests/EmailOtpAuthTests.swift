@@ -193,7 +193,7 @@ final class EmailOtpAuthTests: XCTestCase {
         XCTAssertEqual(paths, ["/auth/v1/verify", "/api/v1/auth/email/activate", "/api/v1/session"])
     }
 
-    func test_telegram_sign_in_uses_supabase_pkce_with_only_the_registered_provider_origin() throws {
+    func test_telegram_sign_in_uses_supabase_pkce_without_legacy_widget_parameters() throws {
         let store = makeStore()
         defer { clear(store) }
         let service = makeService(store: store, telegramEnabled: true)
@@ -205,10 +205,11 @@ final class EmailOtpAuthTests: XCTestCase {
         let pending = try XCTUnwrap(store.readPendingRequest())
 
         XCTAssertEqual(components.path, "/auth/v1/authorize")
-        XCTAssertEqual(Set(values.keys), Set(["provider", "redirect_to", "scopes", "origin", "code_challenge", "code_challenge_method"]))
+        XCTAssertEqual(Set(values.keys), Set(["provider", "redirect_to", "scopes", "code_challenge", "code_challenge_method"]))
         XCTAssertEqual(values["provider"], "custom:telegram")
         XCTAssertEqual(values["scopes"], "openid profile telegram:bot_access")
-        XCTAssertEqual(values["origin"], "https://project.supabase.co")
+        XCTAssertNil(values["origin"])
+        XCTAssertNil(values["bot_id"])
         XCTAssertEqual(values["code_challenge_method"], "s256")
         XCTAssertEqual(values["code_challenge"], pkceChallenge(pending.verifier))
         XCTAssertEqual(pending.flow, .telegramSignIn)
@@ -372,7 +373,8 @@ final class EmailOtpAuthTests: XCTestCase {
         XCTAssertEqual(values["provider"], "custom:telegram")
         XCTAssertEqual(values["skip_http_redirect"], "true")
         XCTAssertEqual(values["code_challenge_method"], "s256")
-        XCTAssertEqual(values["origin"], "https://project.supabase.co")
+        XCTAssertNil(values["origin"])
+        XCTAssertNil(values["bot_id"])
         XCTAssertEqual(pending.flow, .telegramLink)
         XCTAssertEqual(pending.expectedUserId, userId)
         XCTAssertEqual(try store.read(), existing)
