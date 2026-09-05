@@ -108,6 +108,20 @@ digest-pinned PostgreSQL 17 service plus a live server-version check.
 
 ## Exact-head CI and hosted proof
 
+### Rejected documentation-only checkpoint
+
+[GitHub Actions run 33958354320](https://github.com/mariusschober/Tsurfing/actions/runs/33958354320)
+at documentation-only head `ab62ac9fcd2f37634c1c570d6f6bc2337164cb71`
+is rejected evidence. `verify` failed because the newly shortened local start
+prompt omitted four exact, case-sensitive safety anchors enforced by
+`tests/active-handover.test.ts`; 57 other test files and 313 tests passed while
+that file had two failures. Dependency audit, secrets, migrations, macOS, and
+hosted staging passed; Android/Web downstream work skipped and the dependent
+cross-client/aggregate result was therefore not eligible. The concise prompt
+was corrected to retain the reviewed SHA/branch, autonomous-execution wording,
+and explicit `main` prohibition. Its focused contract test then passed 4/4
+locally before the correction commit. No gate or assertion was weakened.
+
 ### Current Telegram-origin checkpoint
 
 [GitHub Actions run 33957017550](https://github.com/mariusschober/Tsurfing/actions/runs/33957017550)
