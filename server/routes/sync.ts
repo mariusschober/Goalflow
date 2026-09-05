@@ -51,16 +51,20 @@ const sameInstant = (left: unknown, right: string | null): boolean => {
 };
 
 /**
- * PostgREST serializes UTC timestamptz values with a `+00:00` suffix. Sync
- * clients submit canonical UTC (`Z`) values, so normalize only that suffix at
- * the API boundary. This preserves all fractional-second precision instead of
- * round-tripping through JavaScript's millisecond-limited Date serializer.
+ * PostgREST serializes UTC timestamptz values with a `+00:00` suffix and trims
+ * insignificant trailing fractional zeroes. Sync clients use at least
+ * millisecond precision, so restore that minimum width at the API boundary.
+ * Fractions longer than three digits remain lossless; do not round-trip through
+ * JavaScript's millisecond-limited Date serializer.
  */
 export const canonicalSyncTimestamp = (value: unknown): string => {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value))) {
     throw new Error('Synchronization record contains an invalid timestamp.');
   }
-  return value.endsWith('+00:00') ? `${value.slice(0, -6)}Z` : value;
+  const utc = value.endsWith('+00:00') ? `${value.slice(0, -6)}Z` : value;
+  const parts = /^(.*T\d{2}:\d{2}:\d{2})(?:\.(\d+))?Z$/.exec(utc);
+  if (!parts) return utc;
+  return `${parts[1]}.${(parts[2] ?? '').padEnd(3, '0')}Z`;
 };
 
 export const assertDurableReceipt = (mutation: z.infer<typeof syncMutationSchema>, value: unknown): Record<string, unknown> => {

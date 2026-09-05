@@ -41,6 +41,10 @@ describe('sync API durable acceptance boundary', () => {
       .toBe('2026-09-05T00:25:06.813Z');
     expect(canonicalSyncTimestamp('2026-09-05T00:25:06.813456+00:00'))
       .toBe('2026-09-05T00:25:06.813456Z');
+    expect(canonicalSyncTimestamp('2026-09-05T00:25:06.42+00:00'))
+      .toBe('2026-09-05T00:25:06.420Z');
+    expect(canonicalSyncTimestamp('2026-09-05T00:25:06+00:00'))
+      .toBe('2026-09-05T00:25:06.000Z');
     expect(() => canonicalSyncTimestamp('not-a-timestamp')).toThrow(/invalid timestamp/i);
   });
 
