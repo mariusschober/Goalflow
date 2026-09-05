@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createCoalescedSyncRunner,
+  createRetryableOneTimeInitializer,
   FOREGROUND_SYNC_INTERVAL_MS,
   subscribeToSyncWakeups,
   syncWakeupTopicForUser
@@ -29,6 +30,18 @@ class FakeRealtimeChannel {
 }
 
 describe('Web Realtime sync wake-ups', () => {
+  it('runs legacy local-data initialization once and retries a failed first attempt', async () => {
+    const initialize = vi.fn()
+      .mockRejectedValueOnce(new Error('storage temporarily unavailable'))
+      .mockResolvedValue(undefined);
+    const ensureInitialized = createRetryableOneTimeInitializer(initialize);
+
+    await expect(ensureInitialized()).rejects.toThrow('storage temporarily unavailable');
+    await ensureInitialized();
+    await ensureInitialized();
+    expect(initialize).toHaveBeenCalledTimes(2);
+  });
+
   it('runs one follow-up cycle when changes arrive during an active sync', async () => {
     let releaseFirst: () => void = () => undefined;
     const firstCycle = new Promise<void>(resolve => { releaseFirst = resolve; });

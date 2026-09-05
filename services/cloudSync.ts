@@ -37,6 +37,10 @@ export interface CloudSyncDependencies {
   signal?: AbortSignal;
 }
 
+interface CloudSyncOptions {
+  seedLocalData?: boolean;
+}
+
 const persistentDeviceId = (): string => {
   const key = 'goalflow-device-id';
   const existing = localStorage.getItem(key);
@@ -252,9 +256,10 @@ const seedUnsynchronizedLocalData = async (userKey: string): Promise<void> => {
 /** One crash-safe, retry-safe synchronization cycle. Exported for adversarial tests. */
 export const synchronizeCloudOnce = async (
   userKey: string,
-  dependencies: CloudSyncDependencies = dependenciesForUser(userKey)
+  dependencies: CloudSyncDependencies = dependenciesForUser(userKey),
+  options: CloudSyncOptions = {}
 ): Promise<SyncMeta> => {
-  await seedUnsynchronizedLocalData(userKey);
+  if (options.seedLocalData !== false) await seedUnsynchronizedLocalData(userKey);
   let meta = normalizeSyncMeta(await storageService.get(STORES.SYNC, userKey));
   if (!dependencies.isOnline()) return meta;
   const ownDeviceId = dependencies.deviceId();
@@ -374,6 +379,18 @@ export const createCoalescedSyncRunner = (
   return request;
 };
 
+/** Completes a migration-style initializer once, while leaving failures retryable. */
+export const createRetryableOneTimeInitializer = (
+  initialize: () => Promise<void>
+): (() => Promise<void>) => {
+  let initialized = false;
+  return async () => {
+    if (initialized) return;
+    await initialize();
+    initialized = true;
+  };
+};
+
 export const startCloudSync = (userKey: string): (() => void) => {
   if (!supabase) return () => undefined;
   let stopped = false;
@@ -382,6 +399,9 @@ export const startCloudSync = (userKey: string): (() => void) => {
   const lifecycleController = new AbortController();
   const lifecycleDependencies = dependenciesForUser(userKey, lifecycleController.signal);
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(`goalflow-sync:${userKey}`);
+  const ensureLocalDataSeeded = createRetryableOneTimeInitializer(
+    () => seedUnsynchronizedLocalData(userKey)
+  );
 
   const synchronize = createCoalescedSyncRunner(
     () => !stopped && !blockedByPermanentError,
@@ -395,7 +415,8 @@ export const startCloudSync = (userKey: string): (() => void) => {
         emit('syncing', before);
         const run = async () => {
           if (stopped) return;
-          const meta = await synchronizeCloudOnce(userKey, lifecycleDependencies);
+          await ensureLocalDataSeeded();
+          const meta = await synchronizeCloudOnce(userKey, lifecycleDependencies, { seedLocalData: false });
           const state: SyncState = meta.conflicts.length ? 'conflict' : 'synced';
           emit(state, meta);
           channel?.postMessage({
