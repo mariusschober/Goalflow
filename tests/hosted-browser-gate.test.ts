@@ -32,13 +32,23 @@ describe('hosted browser release gate', () => {
     expect(hostedAuth).toContain('window.localStorage.setItem(key, value)');
   });
 
-  it('proves two browsers converge while a distinct account remains isolated', () => {
+  it('proves automatic warm convergence, foreground fallback, and account isolation', () => {
     expect(journey).toContain("'user-a-browser-1'");
     expect(journey).toContain("'user-a-browser-2'");
     expect(journey).toContain("'user-b-browser'");
+    expect(journey).toContain("'user-a-browser-fallback'");
     expect(journey).toContain("getByRole('button', { name: 'Create Task'");
     expect(journey).toContain("getByRole('button', { name: 'Save'");
     expect(journey).toContain("getByTitle('Delete')");
+    expect(journey).toContain('REALTIME_P95_BUDGET_MS = 2_000');
+    expect(journey).toContain('FOREGROUND_FALLBACK_BUDGET_MS = 30_500');
+    expect(journey).toContain('waitForAutomaticTaskCount');
+    expect(journey).toContain('observeSyncPullDeliveringTitle');
+    expect(journey).toContain('page.routeWebSocket');
+    expect(journey).toContain('realtimeWakeupLatenciesMs');
+    expect(journey).toContain('foregroundFallbackPullStartMs');
+    expect(journey).toContain("getByRole('dialog', { name: 'Decision Fatigue Warning', exact: true })");
+    expect(journey).toContain("getByRole('button', { name: 'Close dialog', exact: true })");
     expect(journey).toContain('await signOutLocally(firstA.page)');
     expect(journey).toContain("await expect(secondA.page.locator('header')).toBeVisible()");
     expect(journey).toContain("window.dispatchEvent(new Event('goalflow:sync-retry'))");

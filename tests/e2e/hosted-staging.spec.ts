@@ -1,6 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { expect, test, type Browser, type BrowserContext, type Page, type TestInfo } from '@playwright/test';
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+  type Page,
+  type Request,
+  type Response,
+  type TestInfo
+} from '@playwright/test';
 import { installHostedTestSession } from './hosted-auth';
+
+const REALTIME_P95_BUDGET_MS = 2_000;
+const FOREGROUND_FALLBACK_BUDGET_MS = 30_500;
 
 const secretEnvironmentNames = [
   'GOALFLOW_STAGING_SUPABASE_PUBLISHABLE_KEY',
@@ -61,8 +73,9 @@ const createAccountPage = async (
   label: string,
   email: string,
   password: string,
-  expectedUserId: string
-): Promise<{ context: BrowserContext; page: Page }> => {
+  expectedUserId: string,
+  options: { blockRealtime?: boolean } = {}
+): Promise<{ context: BrowserContext; page: Page; blockedRealtimeAttempts: () => number }> => {
   const context = await browser.newContext();
   await installHostedTestSession(
     context,
@@ -73,10 +86,17 @@ const createAccountPage = async (
     expectedUserId
   );
   const page = await context.newPage();
+  let blockedRealtimeAttempts = 0;
+  if (options.blockRealtime) {
+    await page.routeWebSocket(/\/realtime\/v1\/websocket/, socket => {
+      blockedRealtimeAttempts += 1;
+      socket.close({ code: 1008, reason: 'Hosted fallback gate intentionally blocks Realtime.' });
+    });
+  }
   observePage(page, testInfo, label);
   await page.goto('/', { waitUntil: 'domcontentloaded' });
   await expect(page.locator('header')).toBeVisible();
-  return { context, page };
+  return { context, page, blockedRealtimeAttempts: () => blockedRealtimeAttempts };
 };
 
 const waitForFreshDurableSync = async (page: Page) => {
@@ -106,26 +126,95 @@ const waitForFreshDurableSync = async (page: Page) => {
   await expect(page.getByRole('button', { name: 'Synced', exact: true })).toBeVisible();
 };
 
-const captureTodayTask = async (page: Page, title: string) => {
+const captureTodayTask = async (page: Page, title: string): Promise<number> => {
   await page.goto(`/?capture=task&title=${encodeURIComponent(title)}`, { waitUntil: 'domcontentloaded' });
   await expect(page.locator('header')).toBeVisible();
   const dialog = page.getByRole('dialog', { name: 'New Task' });
   await expect(dialog).toBeVisible();
   await expect(dialog.getByPlaceholder('What is the next action?')).toHaveValue(title);
   await dialog.locator('[aria-label="Task schedule"]').getByRole('button', { name: 'Today', exact: true }).click();
+  const mutationStartedAt = Date.now();
   await dialog.getByRole('button', { name: 'Create Task', exact: true }).click();
   await expect(dialog).toBeHidden();
+  return mutationStartedAt;
+};
+
+const dismissDecisionFatigueWarning = async (page: Page) => {
+  const warning = page.getByRole('dialog', { name: 'Decision Fatigue Warning', exact: true });
+  if (!(await warning.isVisible())) return;
+  await warning.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await expect(warning).toBeHidden();
 };
 
 const openPlan = async (page: Page) => {
   await page.getByRole('button', { name: 'Plan', exact: true }).click();
   await expect(page.getByRole('heading', { name: "Today's Flow", exact: true })).toBeVisible();
+  await dismissDecisionFatigueWarning(page);
 };
 
 const taskCard = (page: Page, title: string) =>
   page.locator('[data-rfd-draggable-id]').filter({ has: page.getByRole('heading', { name: title, exact: true }) });
 
+const waitForAutomaticTaskCount = async (
+  page: Page,
+  title: string,
+  expectedCount: number,
+  timeout = 10_000
+): Promise<void> => {
+  await expect.poll(
+    () => taskCard(page, title).count(),
+    { timeout, intervals: [50, 100, 100, 100] }
+  ).toBe(expectedCount);
+};
+
+const isSyncPull = (url: string): boolean => {
+  try {
+    return new URL(url).pathname === '/api/v1/sync/pull';
+  } catch {
+    return false;
+  }
+};
+
+/** Observe the exact cursor pull that delivered a named record without retaining credentials or payloads. */
+const observeSyncPullDeliveringTitle = (
+  page: Page,
+  title: string
+): { delivered: Promise<number>; stop: () => void } => {
+  const requestStartedAt = new WeakMap<Request, number>();
+  let resolveDelivered: (startedAt: number) => void = () => undefined;
+  const delivered = new Promise<number>(resolve => { resolveDelivered = resolve; });
+  let stopped = false;
+
+  const onRequest = (request: Request) => {
+    if (request.method() === 'GET' && isSyncPull(request.url())) requestStartedAt.set(request, Date.now());
+  };
+  const onResponse = async (response: Response) => {
+    if (stopped || response.request().method() !== 'GET' || !isSyncPull(response.url()) || !response.ok()) return;
+    try {
+      const body = await response.json() as { records?: Array<{ payload?: { title?: unknown } }> };
+      if (!body.records?.some(record => record.payload?.title === title)) return;
+      stopped = true;
+      resolveDelivered(requestStartedAt.get(response.request()) ?? Date.now());
+    } catch {
+      // A malformed response is already a synchronization failure; let the
+      // visible-state assertion time out with the retained redacted diagnostics.
+    }
+  };
+
+  page.on('request', onRequest);
+  page.on('response', onResponse);
+  return {
+    delivered,
+    stop: () => {
+      stopped = true;
+      page.off('request', onRequest);
+      page.off('response', onResponse);
+    }
+  };
+};
+
 const signOutLocally = async (page: Page) => {
+  await dismissDecisionFatigueWarning(page);
   await page.getByRole('button', { name: 'Open account menu', exact: true }).click();
   await page.getByRole('button', { name: 'Logout', exact: true }).click();
   await expect(page.getByLabel('Email')).toBeVisible();
@@ -145,6 +234,9 @@ test('real browsers converge within one account and isolate a second account', a
   const contexts: BrowserContext[] = [];
   const originalTitle = `Hosted browser ${Date.now()} ${randomUUID().slice(0, 8)}`;
   const editedTitle = `${originalTitle} edited`;
+  const fallbackTitle = `Hosted fallback ${Date.now()} ${randomUUID().slice(0, 8)}`;
+  const realtimeLatenciesMs: number[] = [];
+  let fallbackPullObservation: ReturnType<typeof observeSyncPullDeliveringTitle> | undefined;
 
   try {
     const firstA = await createAccountPage(
@@ -153,9 +245,6 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(firstA.context);
-    await waitForFreshDurableSync(firstA.page);
-    await captureTodayTask(firstA.page, originalTitle);
-    await waitForFreshDurableSync(firstA.page);
 
     const secondA = await createAccountPage(
       browser, testInfo, 'user-a-browser-2',
@@ -163,9 +252,6 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_A_ID!
     );
     contexts.push(secondA.context);
-    await waitForFreshDurableSync(secondA.page);
-    await openPlan(secondA.page);
-    await expect(taskCard(secondA.page, originalTitle)).toHaveCount(1);
 
     const userB = await createAccountPage(
       browser, testInfo, 'user-b-browser',
@@ -173,43 +259,89 @@ test('real browsers converge within one account and isolate a second account', a
       process.env.GOALFLOW_STAGING_USER_B_ID!
     );
     contexts.push(userB.context);
-    await waitForFreshDurableSync(userB.page);
-    await openPlan(userB.page);
+
+    const fallbackA = await createAccountPage(
+      browser, testInfo, 'user-a-browser-fallback',
+      setting('GOALFLOW_STAGING_USER_A_EMAIL'), setting('GOALFLOW_STAGING_USER_A_PASSWORD'),
+      process.env.GOALFLOW_STAGING_USER_A_ID!,
+      { blockRealtime: true }
+    );
+    contexts.push(fallbackA.context);
+
+    await Promise.all([
+      waitForFreshDurableSync(firstA.page),
+      waitForFreshDurableSync(secondA.page),
+      waitForFreshDurableSync(userB.page),
+      waitForFreshDurableSync(fallbackA.page)
+    ]);
+    await Promise.all([openPlan(secondA.page), openPlan(userB.page), openPlan(fallbackA.page)]);
+    await expect.poll(fallbackA.blockedRealtimeAttempts).toBeGreaterThan(0);
+
+    const createStartedAt = await captureTodayTask(firstA.page, originalTitle);
+    await waitForAutomaticTaskCount(secondA.page, originalTitle, 1);
+    realtimeLatenciesMs.push(Date.now() - createStartedAt);
     await expect(userB.page.getByRole('heading', { name: originalTitle, exact: true })).toHaveCount(0);
+    await openPlan(firstA.page);
 
     const card = taskCard(secondA.page, originalTitle);
     await card.hover();
     await card.getByTitle('Edit').click();
     const editDialog = secondA.page.getByRole('dialog', { name: 'Edit Task' });
     await editDialog.getByPlaceholder('What is the next action?').fill(editedTitle);
+    const editStartedAt = Date.now();
     await editDialog.getByRole('button', { name: 'Save', exact: true }).click();
     await expect(editDialog).toBeHidden();
-    await waitForFreshDurableSync(secondA.page);
-
-    await firstA.page.reload({ waitUntil: 'domcontentloaded' });
-    await expect(firstA.page.locator('header')).toBeVisible();
-    await waitForFreshDurableSync(firstA.page);
-    await openPlan(firstA.page);
-    await expect(taskCard(firstA.page, editedTitle)).toHaveCount(1);
+    await waitForAutomaticTaskCount(firstA.page, editedTitle, 1);
+    realtimeLatenciesMs.push(Date.now() - editStartedAt);
     await expect(firstA.page.getByRole('heading', { name: originalTitle, exact: true })).toHaveCount(0);
 
     const editedCard = taskCard(secondA.page, editedTitle);
     await editedCard.hover();
+    const deleteStartedAt = Date.now();
     await editedCard.getByTitle('Delete').click();
     await expect(secondA.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
-    await waitForFreshDurableSync(secondA.page);
-
-    await waitForFreshDurableSync(firstA.page);
-    await expect(firstA.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
-    await waitForFreshDurableSync(userB.page);
+    await waitForAutomaticTaskCount(firstA.page, editedTitle, 0);
+    realtimeLatenciesMs.push(Date.now() - deleteStartedAt);
     await expect(userB.page.getByRole('heading', { name: editedTitle, exact: true })).toHaveCount(0);
+
+    const sortedLatencies = [...realtimeLatenciesMs].sort((left, right) => left - right);
+    const realtimeP95Ms = sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1];
+    expect(realtimeP95Ms, `Warm Realtime p95 exceeded ${REALTIME_P95_BUDGET_MS} ms`).toBeLessThan(REALTIME_P95_BUDGET_MS);
+
+    fallbackPullObservation = observeSyncPullDeliveringTitle(fallbackA.page, fallbackTitle);
+    const fallbackMutationStartedAt = await captureTodayTask(firstA.page, fallbackTitle);
+    const [fallbackPullStartedAt] = await Promise.all([
+      fallbackPullObservation.delivered,
+      waitForAutomaticTaskCount(fallbackA.page, fallbackTitle, 1, FOREGROUND_FALLBACK_BUDGET_MS + 5_000)
+    ]);
+    const fallbackPullStartMs = fallbackPullStartedAt - fallbackMutationStartedAt;
+    expect(
+      fallbackPullStartMs,
+      `Foreground fallback pull began after ${FOREGROUND_FALLBACK_BUDGET_MS} ms`
+    ).toBeLessThanOrEqual(FOREGROUND_FALLBACK_BUDGET_MS);
+    await expect(userB.page.getByRole('heading', { name: fallbackTitle, exact: true })).toHaveCount(0);
+
+    const fallbackCard = taskCard(fallbackA.page, fallbackTitle);
+    await fallbackCard.hover();
+    await fallbackCard.getByTitle('Delete').click();
+    await waitForFreshDurableSync(fallbackA.page);
+
+    console.log(JSON.stringify({
+      status: 'PASS',
+      realtimeWakeupLatenciesMs: realtimeLatenciesMs,
+      realtimeP95Ms,
+      foregroundFallbackPullStartMs: fallbackPullStartMs,
+      crossUserVisibility: 'DENIED'
+    }));
 
     await signOutLocally(firstA.page);
     await expect(secondA.page.locator('header')).toBeVisible();
     await waitForFreshDurableSync(secondA.page);
     await signOutLocally(secondA.page);
     await signOutLocally(userB.page);
+    await signOutLocally(fallbackA.page);
   } finally {
+    fallbackPullObservation?.stop();
     await Promise.all(contexts.map(context => context.close()));
   }
 });
