@@ -66,6 +66,33 @@ left intact. This is not yet Telegram linking or five-surface proof.
 The active implementation sequence is in
 `docs/TSURFING_PERSONAL_BETA_IMPLEMENTATION_PLAN_2026-09-05.md`.
 
+### Live unauthenticated Telegram boundaries — 2026-09-05 11:15 UTC
+
+Six empty requests to the deployed staging service produced the expected
+rejections and none set a session cookie:
+
+| Request | Status | Error code |
+| --- | ---: | --- |
+| POST Telegram webhook without secret | 401 | invalid_webhook_secret |
+| POST Mini App session with exact origin but no initData | 401 | init_data_missing |
+| GET Mini App current without session | 401 | mini_session_required |
+| GET Mini App today without session | 401 | mini_session_required |
+| POST Mini App events without session | 401 | mini_session_required |
+| POST Mini App capture with empty body and no session | 401 | mini_session_required |
+
+Immediately following the checks, readiness was HTTP 200 at
+2026-09-05T11:15:25Z with revision `a9245b03733334b8be5f5420999862ca32bbdf5f`.
+The rejection responses do not themselves carry a revision header. These are
+live unauthenticated-boundary checks only: they do not prove authorized Bot
+processing, authentic Mini App launch, replay handling, or five-surface sync.
+Telegram authorization remains on the provider page awaiting the owner.
+
+The continuation documentation checkpoint `cc7aba6` has no Actions run:
+`codex/**` pushes are outside the workflow's branch filters. Its local checks
+passed; the exact-head hosted evidence above belongs to `a9245b0`. No workflow
+filter, deployment, release branch or existing PR was changed to manufacture
+new green evidence.
+
 ## Candidate
 
 | Item | Current evidence | State |

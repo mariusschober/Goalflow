@@ -84,3 +84,11 @@ this staging checkpoint. No staging pass by itself authorizes release.
   migration static verification PASS; all 18 migration and 8 Room hashes PASS;
   all 20 durable identifier checks PASS. These complement the successful
   npm run check and do not replace the exact-head hosted/native evidence.
+
+- 11:15 UTC: six live unauthenticated Bot/Mini App rejection cases PASS, each
+  HTTP 401 with the expected error and no session cookie. Readiness immediately
+  afterward remained HTTP 200 at a9245b0. Authorized journeys remain NOT RUN.
+- Telegram remains on its provider authorization page. The owner checkpoint is
+  unchanged; no credentials or consent were supplied by the agent.
+- Documentation-only continuation branch pushes do not trigger CI under current
+  workflow filters. Do not confuse their local checks with a new hosted run.
