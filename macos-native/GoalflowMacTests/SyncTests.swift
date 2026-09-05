@@ -862,12 +862,23 @@ final class HostedCrossClientSyncTests: XCTestCase {
         )
         XCTAssertEqual(session.userId, expectedUserId)
 
+        // This transport gate is intentionally unsigned in CI, so macOS will reject the
+        // Data Protection Keychain with errSecMissingEntitlement. Share only the injected
+        // test backend across fresh store instances here; signed-artifact Keychain proof
+        // remains a separate release gate.
+        let keychainBackend = KeychainMemoryBackend()
+        let keychainService = "tsurfing.hosted-test.\(UUID().uuidString.lowercased())"
         let keychain = KeychainSessionStore(
-            service: "tsurfing.hosted-test.\(UUID().uuidString.lowercased())"
+            service: keychainService,
+            memoryBackend: keychainBackend
         )
         defer { try? keychain.clear() }
         try keychain.save(session)
-        XCTAssertEqual(try keychain.read(), session)
+        let restartedKeychain = KeychainSessionStore(
+            service: keychainService,
+            memoryBackend: keychainBackend
+        )
+        XCTAssertEqual(try restartedKeychain.read(), session)
 
         let suite = "goalflow.hosted-cross-client.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -889,7 +900,7 @@ final class HostedCrossClientSyncTests: XCTestCase {
             deviceIdStore: deviceIdStore,
             transport: URLSessionSyncTransport(
                 configuration: configuration,
-                keychain: keychain,
+                keychain: restartedKeychain,
                 urlSession: urlSession
             ),
             storeBridge: bridge
