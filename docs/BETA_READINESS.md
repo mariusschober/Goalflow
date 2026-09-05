@@ -11,6 +11,61 @@ also remain open. Do not move `integration/beta` or `main`, create
 `v0.4.0-beta.1`, or describe the product as ready while any required row below
 is not `PASS`.
 
+## Continuation verification — 2026-09-05 11:07 UTC
+
+Fetched all branches and tags without rewriting history. The clean local and
+remote finalization head both equal `a9245b03733334b8be5f5420999862ca32bbdf5f`.
+Original evidence `01f864720df7acfa211745e64edec8b5163ab612` remains an ancestor;
+the delta from runtime `5b7485f` is documentation only. Continued work uses
+`codex/personal-beta-live-matrix-20260905` from that exact head.
+
+[Exact-head run 33958551509](https://github.com/mariusschober/Tsurfing/actions/runs/33958551509)
+completed success. All required non-signing jobs passed:
+
+| Job | Job ID | Result |
+| --- | ---: | --- |
+| migrations | 101286201877 | PASS |
+| macos | 101286201992 | PASS |
+| dependency-audit | 101286202032 | PASS |
+| verify | 101286202053 | PASS |
+| secrets | 101286202079 | PASS |
+| native-android | 101286273979 | PASS |
+| android | 101286274025 | PASS |
+| hosted-staging | 101286275811 | PASS |
+| web-release | 101286275861 | PASS |
+| hosted-cross-client | 101289455020 | PASS |
+| beta-gate | 101290231834 | PASS |
+| android-internal-beta | 101290232360 | Expected skip; signing deferred |
+
+Cross-client step metadata confirms browser seeding, production Android edit,
+browser verification, production macOS edit, browser verification, and fixture
+cleanup actually ran successfully; this was not a configuration-only preflight.
+Staging readiness returned HTTP 200 with `x-tsurfing-revision` equal to
+`a9245b03733334b8be5f5420999862ca32bbdf5f`. The older deployment IDs below remain
+historical evidence; the new Railway deployment ID has not yet been queried.
+
+Retained artifact metadata (archive digests, not inner APK digests):
+
+| Artifact | ID | SHA-256 |
+| --- | ---: | --- |
+| Native sandbox debug, TEST-ONLY | 9967540819 | 693611e341538a9cd222ba79a0753b38412f82979bc83805dee87b1716aba958 |
+| Native production debug, TEST-ONLY | 9967540373 | 022adbbdaa8f3657cf44428378670a8235fa497a9bd02d4393de4925b3c25f1a |
+| Room schemas | 9967303725 | d41a5ce621c419d046511f0da839ad37b7e026f1dbaadda2ad0d0b9f40b9dc2b |
+| Legacy production debug, TEST-ONLY | 9967214424 | d6ae6a51a4a686a24878b24c496d33844df6fdab2ba1dfca29f42f6e1ab1b4f5 |
+| macOS ad-hoc | 9967193830 | 76afd695168bf3e2efd3469ecf9bf3ce32948a42b55681fbe7c8d943ae2aebee |
+| Gitleaks SARIF | 9967163024 | 3201f407df33e41025e74d807c7f8aec176ce2ac6c4993adbd0b92a7590b9764 |
+
+Fresh browser observations: the existing owner session loaded authenticator
+`Active (aal2)` and Telegram `Not linked`. A cached app with a pending update
+first reached Telegram `origin required`; after returning to staging, the update
+banner disappeared and a new link attempt reached Telegram Authorization for
+TStaging Bot. Owner phone entry/authorization remains pending. No credentials
+or authorization URLs were retained. An existing sync conflict indicator was
+left intact. This is not yet Telegram linking or five-surface proof.
+
+The active implementation sequence is in
+`docs/TSURFING_PERSONAL_BETA_IMPLEMENTATION_PLAN_2026-09-05.md`.
+
 ## Candidate
 
 | Item | Current evidence | State |

@@ -636,3 +636,13 @@ No historical remote branch has been deleted.
   webhook/replay/linking/cross-user matrix.
 - No staging backup upload and destructive restore drill has run. Synthetic
   crypto and PostgreSQL migration tests are not represented as that proof.
+
+## Personal-beta live continuation — 2026-09-05
+
+After a non-forced full branch/tag fetch, the clean local finalization branch
+and its remote both pointed to `a9245b03733334b8be5f5420999862ca32bbdf5f`.
+Exact-head run `33958551509` completed success and staging readiness returned
+that same revision. Created local short-lived branch
+`codex/personal-beta-live-matrix-20260905` from that head for the remaining
+Telegram and five-surface staging gates. No merge, rewrite, promotion, tag
+creation or preserved-branch deletion was performed.
