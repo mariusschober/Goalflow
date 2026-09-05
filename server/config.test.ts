@@ -47,6 +47,16 @@ describe("production environment contract", () => {
     expect(() => readConfig({ TELEGRAM_MINI_SESSION_TTL_SECONDS: "601" })).toThrow();
   });
 
+  it("accepts only Telegram usernames and webhook secrets supported by Bot API", () => {
+    expect(readConfig({
+      TELEGRAM_BOT_USERNAME: "@tstagebot",
+      TELEGRAM_WEBHOOK_SECRET: "A_secure-webhook_secret_123456789"
+    }).TELEGRAM_BOT_USERNAME).toBe("@tstagebot");
+    expect(() => readConfig({ TELEGRAM_BOT_USERNAME: "https://t.me/tstagebot" })).toThrow();
+    expect(() => readConfig({ TELEGRAM_WEBHOOK_SECRET: "short" })).toThrow();
+    expect(() => readConfig({ TELEGRAM_WEBHOOK_SECRET: "A".repeat(257) })).toThrow();
+  });
+
   it("accepts only an exact full release revision when Railway provides one", () => {
     expect(readConfig({ RAILWAY_GIT_COMMIT_SHA: "a".repeat(40) }).RAILWAY_GIT_COMMIT_SHA)
       .toBe("a".repeat(40));
