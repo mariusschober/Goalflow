@@ -351,7 +351,10 @@ test('real browsers converge within one account and isolate a second account', a
 
     const sortedLatencies = [...realtimeLatenciesMs].sort((left, right) => left - right);
     const realtimeP95Ms = sortedLatencies[Math.ceil(sortedLatencies.length * 0.95) - 1];
-    expect(realtimeP95Ms, `Warm Realtime p95 exceeded ${REALTIME_P95_BUDGET_MS} ms`).toBeLessThan(REALTIME_P95_BUDGET_MS);
+    expect(
+      realtimeP95Ms,
+      `Warm Realtime p95 exceeded ${REALTIME_P95_BUDGET_MS} ms; observed ${realtimeLatenciesMs.join(', ')} ms`
+    ).toBeLessThan(REALTIME_P95_BUDGET_MS);
 
     fallbackPullObservation = observeSyncPullDeliveringTitle(fallbackA.page, fallbackTitle);
     const fallbackMutationStartedAt = await captureTodayTask(firstA.page, fallbackTitle);

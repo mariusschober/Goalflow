@@ -378,7 +378,7 @@ export const startCloudSync = (userKey: string): (() => void) => {
   if (!supabase) return () => undefined;
   let stopped = false;
   let blockedByPermanentError = false;
-  let timer: number | undefined;
+  let localChangeQueued = false;
   const lifecycleController = new AbortController();
   const lifecycleDependencies = dependenciesForUser(userKey, lifecycleController.signal);
   const channel = typeof BroadcastChannel === 'undefined' ? undefined : new BroadcastChannel(`goalflow-sync:${userKey}`);
@@ -439,8 +439,12 @@ export const startCloudSync = (userKey: string): (() => void) => {
   const onLocalChange = (event: Event) => {
     const detail = (event as CustomEvent<{ storeName: string; key: string }>).detail;
     if (detail.key !== userKey || !SYNCED_STORES.includes(detail.storeName)) return;
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => void synchronize(), 500);
+    if (localChangeQueued) return;
+    localChangeQueued = true;
+    window.queueMicrotask(() => {
+      localChangeQueued = false;
+      void synchronize();
+    });
   };
   const onOnline = () => void synchronize();
   const onRetry = () => { blockedByPermanentError = false; void synchronize(); };
@@ -464,7 +468,6 @@ export const startCloudSync = (userKey: string): (() => void) => {
   return () => {
     stopped = true;
     lifecycleController.abort(new DOMException('Synchronization stopped.', 'AbortError'));
-    window.clearTimeout(timer);
     window.clearInterval(interval);
     window.removeEventListener('goalflow:local-change', onLocalChange);
     window.removeEventListener('online', onOnline);
