@@ -218,11 +218,48 @@ const canonicalJson = (value: unknown): string => {
 
 const comparableRestoreRow = (
   collection: keyof typeof COLLECTION_IDENTITIES,
-  row: Record<string, unknown>
+  row: Record<string, unknown>,
+  canonicalProjection = false
 ): Record<string, unknown> => {
   const mutable = RESTORE_MUTABLE_FIELDS[collection];
-  if (!mutable) return row;
-  return Object.fromEntries(Object.entries(row).filter(([field]) => !mutable.has(field)));
+  if (!mutable && !canonicalProjection) return row;
+  return Object.fromEntries(Object.entries(row).filter(([field]) => {
+    if (mutable?.has(field)) return false;
+    // The restore RPC intentionally reprojects canonical tasks and daily plans
+    // after rebasing their revisions. Their exact source rows are verified in
+    // the replace-restored collections above, so comparing the stale transport
+    // payload or tombstone timestamp would turn a safe rebase into a false
+    // failure. Non-canonical sync payloads remain byte-strict.
+    return !canonicalProjection || (field !== 'payload' && field !== 'deleted_at');
+  }));
+};
+
+const canonicalProjectionIdentities = (collections: Record<string, unknown>): Set<string> => {
+  const identities = new Set<string>();
+  const tasks = collections.tasks;
+  if (Array.isArray(tasks)) {
+    for (const value of tasks) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const task = value as Record<string, unknown>;
+      const entityId = typeof task.legacy_entity_id === 'string' && task.legacy_entity_id.length > 0
+        ? task.legacy_entity_id
+        : task.id;
+      if (typeof entityId === 'string' && entityId.length > 0) {
+        identities.add(JSON.stringify(['tasks', entityId]));
+      }
+    }
+  }
+  const plans = collections.daily_plans;
+  if (Array.isArray(plans)) {
+    for (const value of plans) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+      const localDate = (value as Record<string, unknown>).local_date;
+      if (typeof localDate === 'string' && localDate.length > 0) {
+        identities.add(JSON.stringify(['daily_plans', localDate]));
+      }
+    }
+  }
+  return identities;
 };
 
 /**
@@ -237,6 +274,7 @@ export const verifyRestoredBackupCollections = (
   const expectedCounts: Record<string, number> = {};
   const actualCounts: Record<string, number> = {};
   const additionalSafetyRows: Record<string, number> = {};
+  const projectedIdentities = canonicalProjectionIdentities(expectedCollections);
   for (const collection of Object.keys(COLLECTION_IDENTITIES) as (keyof typeof COLLECTION_IDENTITIES)[]) {
     const expected = collectionIdentitySet(expectedCollections, collection);
     const actual = collectionIdentitySet(actualCollections, collection);
@@ -248,8 +286,9 @@ export const verifyRestoredBackupCollections = (
       }
       const expectedRow = expected.rowsByIdentity.get(identity)!;
       const actualRow = actual.rowsByIdentity.get(identity)!;
-      if (canonicalJson(comparableRestoreRow(collection, expectedRow))
-        !== canonicalJson(comparableRestoreRow(collection, actualRow))) {
+      const canonicalProjection = collection === 'sync_records' && projectedIdentities.has(identity);
+      if (canonicalJson(comparableRestoreRow(collection, expectedRow, canonicalProjection))
+        !== canonicalJson(comparableRestoreRow(collection, actualRow, canonicalProjection))) {
         throw new Error(`Restore verification found changed ${collection} content for a durable identity.`);
       }
       if (collection === 'ai_usage') {

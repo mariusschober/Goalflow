@@ -329,7 +329,7 @@ describe('server backup restore boundary', () => {
     })).toThrow('unexpected tasks row count');
   });
 
-  it('rejects changed content under a preserved durable identity', () => {
+  it('allows canonical projection rebasing while rejecting changed source content', () => {
     const base = {
       profiles: [{ user_id: 'user-a', timezone: 'UTC' }],
       tasks: [{ id: 'task-a', title: 'Keep me', revision: 4, sync_server_version: 10 }],
@@ -348,7 +348,9 @@ describe('server backup restore boundary', () => {
       tasks: [{ ...base.tasks[0], revision: 20, sync_server_version: 30 }],
       sync_records: [{
         ...base.sync_records[0], version: 20, server_version: 30,
-        device_id: 'server-restore', updated_at: '2026-09-03T01:00:00Z'
+        device_id: 'server-restore', updated_at: '2026-09-03T01:00:00Z',
+        payload: { title: 'Canonical projection after rebase' },
+        deleted_at: '2026-09-03T01:00:00Z'
       }]
     };
     expect(() => verifyRestoredBackupCollections(base, rebased)).not.toThrow();
@@ -356,9 +358,27 @@ describe('server backup restore boundary', () => {
       ...rebased,
       tasks: [{ ...rebased.tasks[0], title: 'Silently changed' }]
     })).toThrow('changed tasks content');
+  });
+
+  it('keeps non-canonical sync payloads byte-strict', () => {
+    const base = {
+      profiles: [{ user_id: 'user-a' }], tasks: [], daily_plans: [], task_events: [],
+      telegram_identities: [], telegram_captures: [], telegram_updates: [],
+      sync_records: [{
+        entity_type: 'goals', entity_id: 'goal-a', version: 1, server_version: 10,
+        device_id: 'before-restore', updated_at: '2026-09-03T00:00:00Z',
+        payload: { title: 'Keep me' }, deleted_at: null
+      }],
+      sync_mutations: [], sync_conflicts: [], api_mutation_receipts: [],
+      entitlements: [{ user_id: 'user-a' }], ai_usage: []
+    };
     expect(() => verifyRestoredBackupCollections(base, {
-      ...rebased,
-      sync_records: [{ ...rebased.sync_records[0], payload: { title: 'Silently changed' } }]
+      ...base,
+      sync_records: [{
+        ...base.sync_records[0], version: 20, server_version: 30,
+        device_id: 'server-restore', updated_at: '2026-09-03T01:00:00Z',
+        payload: { title: 'Silently changed' }
+      }]
     })).toThrow('changed sync_records content');
   });
 
